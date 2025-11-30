@@ -1,5 +1,7 @@
 # MR Physics Simulator
 
+**[Live Demo](https://znee.github.io/MRphysics_simulation/)**
+
 An interactive web-based educational tool for understanding MRI physics fundamentals. This simulator demonstrates how Spin Echo (SE), Gradient Echo (GRE), and Inversion Recovery (IR) sequences produce different tissue contrasts based on T1, T2, and proton density.
 
 ## Features
@@ -30,7 +32,7 @@ An interactive web-based educational tool for understanding MRI physics fundamen
 
 ## How to Use
 
-1. **Open `index.html`** in a modern web browser (Chrome, Firefox, Safari, Edge)
+1. **Visit the [Live Demo](https://znee.github.io/MRphysics_simulation/)** or open `index.html` locally in a modern browser
 2. **Select a sequence** (SE, GRE, or IR) from the dropdown
 3. **Adjust parameters** using the sliders:
    - TR (Repetition Time)
