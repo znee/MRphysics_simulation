@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MR Physics Simulation</title>
+    <link rel="stylesheet" href="style.css">
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+
+<body>
+    <div class="app-container">
+        <header class="main-header">
+            <h1>MR Physics <span class="highlight">Simulation</span></h1>
+            <p class="subtitle">Interactive educational tool for MRI signal processing and contrast mechanisms</p>
+        </header>
+
+        <main class="main-content">
+            <aside class="sidebar">
+                <div class="control-group">
+                    <h2>Presets</h2>
+                    <div class="preset-buttons">
+                        <button class="btn secondary" id="preset-t1">T1-Weighted</button>
+                        <button class="btn secondary" id="preset-t2">T2-Weighted</button>
+                        <button class="btn secondary" id="preset-t2star">T2*-Weighted</button>
+                        <button class="btn secondary" id="preset-flair">FLAIR</button>
+                        <button class="btn secondary" id="preset-stir">STIR</button>
+                    </div>
+                </div>
+
+                <div class="control-group">
+                    <h2>Global Settings</h2>
+                    <label for="sequenceType">Sequence Type</label>
+                    <select id="sequenceType">
+                        <option value="SE">Spin Echo (SE)</option>
+                        <option value="GRE">Gradient Echo (GRE)</option>
+                        <option value="IR">Inversion Recovery (IR)</option>
+                    </select>
+
+                    <label for="b0Field">B0 Field Strength (T)</label>
+                    <input type="range" id="b0Field" min="0.5" max="7.0" step="0.5" value="1.5">
+                    <span id="b0Value">1.5 T</span>
+
+                    <div id="inhomogeneity-control" style="display: none;">
+                        <label for="inhomogeneity">Field Inhomogeneity (Hz)</label>
+                        <input type="range" id="inhomogeneity" min="0" max="100" step="5" value="0">
+                        <span id="inhomogeneityValue">0 Hz</span>
+                    </div>
+                </div>
+
+                <div class="control-group">
+                    <h2>Sequence Parameters</h2>
+                    <div id="params-container">
+                        <!-- Dynamic parameters injected here -->
+                    </div>
+                </div>
+
+
+
+                <div class="control-group">
+                    <button id="helpBtn" class="btn primary">How to Read Charts?</button>
+                </div>
+            </aside>
+
+            <section class="visualization-area">
+                <div class="first-row-container">
+                    <div id="brain-phantom-container">
+                        <svg id="brain-svg" viewBox="0 0 500 500" xmlns="http://www.w3.org/2000/svg">
+                            <!-- Black background -->
+                            <rect width="500" height="500" fill="#000" />
+
+                            <!-- Fat/Scalp - outer ring -->
+                            <circle id="region-fat" cx="250" cy="250" r="200" fill="#444" />
+
+                            <!-- Gray Matter - cortex -->
+                            <circle id="region-gm" cx="250" cy="250" r="165" fill="#666" />
+
+                            <!-- White Matter - deep brain -->
+                            <circle id="region-wm" cx="250" cy="250" r="120" fill="#888" />
+
+                            <!-- CSF - ventricles (simplified) -->
+                            <g id="region-csf">
+                                <ellipse cx="220" cy="235" rx="18" ry="35" fill="#0a0a0a" />
+                                <ellipse cx="280" cy="235" rx="18" ry="35" fill="#0a0a0a" />
+                                <rect x="245" y="245" width="10" height="40" rx="5" fill="#0a0a0a" />
+                            </g>
+                        </svg>
+                        <div id="equation-overlay"></div>
+                    </div>
+
+                    <div class="tissue-table-container">
+                        <table class="tissue-table">
+                            <thead>
+                                <tr>
+                                    <th>Tissue</th>
+                                    <th>T1 (ms)</th>
+                                    <th>T2 (ms)</th>
+                                    <th>PD</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td><span class="color-box" style="background-color: #e2e8f0;"></span>White Matter
+                                    </td>
+                                    <td>600</td>
+                                    <td>80</td>
+                                    <td>0.7</td>
+                                </tr>
+                                <tr>
+                                    <td><span class="color-box" style="background-color: #94a3b8;"></span>Gray Matter
+                                    </td>
+                                    <td>950</td>
+                                    <td>100</td>
+                                    <td>0.8</td>
+                                </tr>
+                                <tr>
+                                    <td><span class="color-box" style="background-color: #38bdf8;"></span>CSF</td>
+                                    <td>4500</td>
+                                    <td>2200</td>
+                                    <td>1.0</td>
+                                </tr>
+                                <tr>
+                                    <td><span class="color-box" style="background-color: #fbbf24;"></span>Fat</td>
+                                    <td>250</td>
+                                    <td>60</td>
+                                    <td>0.9</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div class="parameter-dependency-grid">
+                    <div class="chart-container" id="container-tr">
+                        <h3>Signal vs TR</h3>
+                        <canvas id="chartTR"></canvas>
+                    </div>
+                    <div class="chart-container" id="container-te">
+                        <h3>Signal vs TE</h3>
+                        <canvas id="chartTE"></canvas>
+                    </div>
+                    <div class="chart-container" id="container-ti">
+                        <h3>Signal vs TI</h3>
+                        <canvas id="chartTI"></canvas>
+                    </div>
+                    <div class="chart-container" id="container-fa">
+                        <h3>Signal vs Flip Angle</h3>
+                        <canvas id="chartFA"></canvas>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <!-- Help Modal -->
+    <div id="helpModal" class="modal">
+        <div class="modal-content">
+            <span class="close-modal">&times;</span>
+            <h2>Understanding the Charts</h2>
+            <div class="modal-body">
+                <img src="schematic.png" alt="Signal vs Contrast Schematic" class="schematic-img">
+                <div class="modal-text">
+                    <p><strong>1. Signal Evolution (Left Charts):</strong> These charts visualize the magnetization
+                        dynamics <em>within</em> a single TR period.
+                    <ul>
+                        <li><strong>Mz Recovery:</strong> Shows longitudinal magnetization recovering due to T1
+                            relaxation.</li>
+                        <li><strong>Mxy Decay:</strong> Shows transverse magnetization decaying due to T2 relaxation.
+                        </li>
+                    </ul>
+                    This helps you understand the underlying physics of signal generation.
+                    </p>
+                    <p><strong>2. Contrast Simulation (Right Charts):</strong> These charts simulate the <em>final
+                            signal intensity</em> across different tissues as you vary a parameter (TR, TE, TI, or Flip
+                        Angle).
+                    <ul>
+                        <li><strong>X-axis:</strong> The parameter you are varying (e.g., TR).</li>
+                        <li><strong>Y-axis:</strong> The resulting signal intensity.</li>
+                        <li><strong>Vertical Line:</strong> Indicates your current parameter setting.</li>
+                    </ul>
+                    Use these to find the optimal settings for maximizing contrast between tissues (e.g., maximizing the
+                    distance between the curves).
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
+    <!-- Footer -->
+    <footer
+        style="text-align: center; padding: 2rem; color: var(--text-secondary); font-size: 0.9rem; margin-top: 2rem; border-top: 1px solid var(--border-color);">
+        <p>Jinhee Jang, MD, PhD, Department of Radiology, Seoul St. Mary's Hospital</p>
+    </footer>
+    <script src="script.js"></script>
+</body>
+
+</html>
