@@ -616,8 +616,6 @@ canvas {
     grid-template-columns: 1fr 1fr;
     gap: 1rem;
     margin-bottom: 1.5rem;
-    max-height: 450px;
-    /* Prevent excessive vertical growth */
 }
 
 @media (max-width: 768px) {
@@ -633,11 +631,15 @@ canvas {
     backdrop-filter: blur(12px);
     -webkit-backdrop-filter: blur(12px);
     padding: 1.25rem;
+    padding-bottom: 1rem;
     border-radius: 16px;
     border: 1px solid rgba(148, 163, 184, 0.15);
     box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.05);
     display: flex;
     flex-direction: column;
+    overflow: visible;
+    position: relative;
+    z-index: 1;
 }
 
 .phase-wheel-panel h3,
@@ -670,12 +672,10 @@ canvas {
     width: 100%;
     max-width: 280px;
     height: 300px;
-    max-height: 300px;
     margin: 0 auto;
     display: block;
     border-radius: 12px;
     flex-shrink: 0;
-    overflow: hidden;
 }
 
 .phase-wheel-controls {
