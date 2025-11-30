@@ -545,3 +545,241 @@ canvas {
     padding: 0.25rem;
     font-size: 0.8rem;
 }
+
+/* Tab Navigation */
+.tab-navigation {
+    display: flex;
+    gap: 0.5rem;
+    margin-bottom: 1.5rem;
+    border-bottom: 2px solid #e2e8f0;
+    padding-bottom: 0;
+}
+
+.tab-btn {
+    padding: 0.75rem 1.5rem;
+    background: none;
+    border: none;
+    border-bottom: 3px solid transparent;
+    font-size: 1rem;
+    font-weight: 500;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: all 0.2s ease;
+    position: relative;
+    bottom: -2px;
+}
+
+.tab-btn:hover {
+    color: var(--text-primary);
+    background: rgba(59, 130, 246, 0.05);
+}
+
+.tab-btn.active {
+    color: #3b82f6;
+    border-bottom-color: #3b82f6;
+    font-weight: 600;
+}
+
+.tab-content {
+    display: none;
+    animation: fadeIn 0.3s ease;
+}
+
+.tab-content.active {
+    display: block;
+}
+
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(10px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+/* Sequence Mechanics Section */
+.section-title {
+    font-size: 1.5rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 1rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 2px solid rgba(59, 130, 246, 0.3);
+}
+
+.mechanics-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+    max-height: 450px;
+    /* Prevent excessive vertical growth */
+}
+
+@media (max-width: 768px) {
+    .mechanics-grid {
+        grid-template-columns: 1fr;
+        max-height: none;
+    }
+}
+
+/* Phase Wheel Panel */
+.phase-wheel-panel {
+    background: rgba(30, 41, 59, 0.6);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    padding: 1.5rem;
+    border-radius: 12px;
+    border: 1px solid rgba(148, 163, 184, 0.2);
+    box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+    display: flex;
+    flex-direction: column;
+}
+
+.phase-wheel-panel h3,
+.r2-comparison-panel h3,
+.timeline-panel h3 {
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: #e2e8f0;
+    margin-bottom: 1rem;
+    flex-shrink: 0;
+    padding-bottom: 0.5rem;
+    border-bottom: 2px solid rgba(148, 163, 184, 0.2);
+}
+
+/* Sequence-specific title colors */
+.phase-wheel-panel h3::before,
+.r2-comparison-panel h3::before,
+.timeline-panel h3::before {
+    content: '■';
+    margin-right: 0.5rem;
+    font-size: 1.2rem;
+}
+
+/* Default to blue (SE) - will be updated dynamically */
+.phase-wheel-panel h3::before {
+    color: #3b82f6;
+}
+
+.r2-comparison-panel h3::before,
+.timeline-panel h3::before {
+    content: '■';
+    margin-right: 0.5rem;
+    font-size: 1.2rem;
+    color: var(--seq-color, #3b82f6);
+    /* Dynamic color based on sequence */
+}
+
+#phase-wheel {
+    width: 100%;
+    max-width: 300px;
+    height: 300px;
+    max-height: 300px;
+    /* Prevent SVG from expanding */
+    margin: 0 auto;
+    display: block;
+    background: #f8fafc;
+    border-radius: 8px;
+    flex-shrink: 0;
+}
+
+.phase-wheel-controls {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.75rem;
+    margin-top: 1rem;
+}
+
+.phase-wheel-controls button {
+    padding: 0.5rem 1rem;
+    font-size: 0.9rem;
+}
+
+#frame-label {
+    font-weight: 500;
+    color: var(--text-secondary);
+    min-width: 80px;
+    text-align: center;
+}
+
+/* R2 Comparison Panel */
+.r2-comparison-panel {
+    background: rgba(30, 41, 59, 0.6);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    padding: 1.5rem;
+    border-radius: 12px;
+    border: 1px solid rgba(148, 163, 184, 0.2);
+    box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+    display: flex;
+    flex-direction: column;
+}
+
+#r2Chart {
+    width: 100%;
+    height: 200px;
+    max-height: 200px;
+    /* Prevent chart from expanding */
+    margin-bottom: 1rem;
+    flex-shrink: 0;
+}
+
+.r2-annotations {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    flex-shrink: 0;
+}
+
+.annotation {
+    font-size: 0.85rem;
+    color: #cbd5e1;
+    margin: 0;
+    padding: 0.5rem;
+    background: rgba(15, 23, 42, 0.5);
+    border-radius: 6px;
+    border-left: 3px solid #3b82f6;
+}
+
+#gre-annotation {
+    border-left-color: #10b981;
+}
+
+/* Timeline Panel */
+.timeline-panel {
+    background: rgba(30, 41, 59, 0.6);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    padding: 1.5rem;
+    border-radius: 12px;
+    border: 1px solid rgba(148, 163, 184, 0.2);
+    box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+    max-height: 300px;
+    /* Prevent timeline from growing excessively */
+}
+
+#rf-gradient-timeline {
+    width: 100%;
+    height: 200px;
+    max-height: 200px;
+    /* Prevent SVG from expanding */
+    background: rgba(15, 23, 42, 0.4);
+    border-radius: 8px;
+}
+/* Parameter Badge */
+.param-badge {
+    margin-top: 0.75rem;
+    padding: 0.5rem 0.75rem;
+    background: rgba(59, 130, 246, 0.1);
+    border-left: 3px solid var(--seq-color, #3b82f6);
+    border-radius: 4px;
+    font-size: 0.8rem;
+    color: #cbd5e1;
+    font-family: "Courier New", monospace;
+}
