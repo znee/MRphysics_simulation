@@ -28,6 +28,9 @@ class MRPhysics {
         this.phaseWheelFrame = 0;
         this.phaseWheelPlaying = false;
         this.phaseWheelInterval = null;
+
+        // Chart State
+        this.showSigned = false;
     }
 
     init() {
@@ -171,6 +174,15 @@ class MRPhysics {
             if (event.target == modal) {
                 modal.style.display = 'none';
             }
+        }
+
+        // Signed Signal Toggle
+        const signedToggle = document.getElementById('signedSignalToggle');
+        if (signedToggle) {
+            signedToggle.addEventListener('change', (e) => {
+                this.showSigned = e.target.checked;
+                this.updateContrastCharts();
+            });
         }
 
         this.renderParams();
@@ -401,7 +413,8 @@ class MRPhysics {
         // M(TI) = M0*(1 - E_ti) - M_ss_start * E_ti
         const mz_ti = (1 - e_ti) - m_ss_start * e_ti;
 
-        return b0Factor * pd * Math.abs(mz_ti) * Math.sin(fa) * Math.exp(-te / t2);
+        // Return SIGNED value (caller handles magnitude if needed)
+        return b0Factor * pd * mz_ti * Math.sin(fa) * Math.exp(-te / t2);
     }
 
     updatePhantom() {
@@ -464,6 +477,12 @@ class MRPhysics {
                     } else if (p.sequence === 'IR') {
                         s = this.getSignalIR(tissue.t1, tissue.t2, tissue.pd, p.tr, p.te, p.ti, p.fa);
                     }
+
+                    // Apply magnitude unless "Show Signed" is enabled (only relevant for IR)
+                    if (!this.showSigned) {
+                        s = Math.abs(s);
+                    }
+
                     data.push({ x: x, y: s });
                 }
                 return {
