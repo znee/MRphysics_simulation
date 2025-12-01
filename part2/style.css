@@ -36,39 +36,49 @@ body {
 
 header {
     margin-bottom: 20px;
-    text-align: center;
-    position: relative;
+}
+
+.header-row {
+    display: flex;
+    align-items: center;
+    gap: 1.5rem;
 }
 
 .back-link {
-    position: absolute;
-    left: 0;
-    top: 50%;
-    transform: translateY(-50%);
     color: var(--text-secondary);
     text-decoration: none;
-    font-size: 0.9rem;
-    padding: 0.4rem 0.8rem;
-    border-radius: 6px;
+    font-size: 0.85rem;
+    font-weight: 500;
+    padding: 0.5rem 1rem;
+    border-radius: 8px;
+    background: rgba(148, 163, 184, 0.1);
     border: 1px solid var(--border-color);
     transition: all 0.2s ease;
+    white-space: nowrap;
+    flex-shrink: 0;
 }
 
 .back-link:hover {
     color: var(--accent-color);
     border-color: var(--accent-color);
-    background: rgba(56, 189, 248, 0.1);
+    background: rgba(56, 189, 248, 0.15);
+}
+
+.header-titles {
+    text-align: center;
+    flex: 1;
 }
 
 h1 {
     font-weight: 600;
-    font-size: 1.8rem;
-    margin-bottom: 0.5rem;
+    font-size: 1.6rem;
+    margin-bottom: 0.3rem;
 }
 
 .subtitle {
     color: var(--text-secondary);
     font-weight: 300;
+    font-size: 0.95rem;
 }
 
 .visualization-grid {
