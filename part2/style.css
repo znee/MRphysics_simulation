@@ -1,0 +1,270 @@
+:root {
+    --bg-color: #0f172a;
+    --panel-bg: #1e293b;
+    --text-primary: #f8fafc;
+    --text-secondary: #94a3b8;
+    --accent-color: #38bdf8;
+    --accent-hover: #0ea5e9;
+    --border-color: #334155;
+    --font-family: 'Inter', sans-serif;
+}
+
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+body {
+    font-family: var(--font-family);
+    background-color: var(--bg-color);
+    color: var(--text-primary);
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+}
+
+.app-container {
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 20px;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+}
+
+header {
+    margin-bottom: 20px;
+    text-align: center;
+}
+
+h1 {
+    font-weight: 600;
+    font-size: 1.8rem;
+    margin-bottom: 0.5rem;
+}
+
+.subtitle {
+    color: var(--text-secondary);
+    font-weight: 300;
+}
+
+.visualization-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr 300px;
+    gap: 20px;
+    flex: 1;
+    min-height: 0;
+    /* Prevent overflow issues */
+}
+
+.column-group {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+}
+
+.column-group .panel {
+    flex: 1;
+    min-height: 0;
+    /* Allow shrinking */
+}
+
+.panel {
+    background-color: var(--panel-bg);
+    border-radius: 12px;
+    padding: 20px;
+    border: 1px solid var(--border-color);
+    display: flex;
+    flex-direction: column;
+}
+
+.panel-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 15px;
+}
+
+h2 {
+    font-size: 1.2rem;
+    font-weight: 500;
+    color: var(--accent-color);
+}
+
+.canvas-container {
+    flex: 1;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    background-color: #000;
+    border-radius: 8px;
+    position: relative;
+    overflow: hidden;
+    min-height: 300px;
+}
+
+canvas {
+    image-rendering: pixelated;
+    /* Keep pixels sharp */
+    max-width: 100%;
+    max-height: 100%;
+}
+
+.panel-info {
+    margin-top: 10px;
+    text-align: center;
+    color: var(--text-secondary);
+    font-size: 0.9rem;
+}
+
+.controls-mini {
+    display: flex;
+    background-color: var(--bg-color);
+    padding: 3px;
+    border-radius: 6px;
+    border: 1px solid var(--border-color);
+}
+
+.controls-mini label {
+    cursor: pointer;
+    padding: 4px 12px;
+    border-radius: 4px;
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    transition: all 0.2s;
+    user-select: none;
+    display: flex;
+    align-items: center;
+}
+
+.controls-mini label:hover {
+    color: var(--text-primary);
+}
+
+/* Style for the selected state using :has if supported, or fallback to default radio behavior if not (though we hide input) */
+.controls-mini label:has(input:checked) {
+    background-color: var(--accent-color);
+    color: #0f172a;
+    font-weight: 600;
+}
+
+/* Fallback for browsers without :has support - we might need to change HTML structure for perfect fallback, 
+   but for now we will keep the radio visible but small if :has fails? 
+   Actually, let's just hide the input and trust :has or add a specific class via JS if needed. 
+   Given the user context (Mac), :has is likely supported. */
+
+.controls-mini input[type="radio"] {
+    display: none;
+}
+
+.control-group {
+    margin-bottom: 20px;
+    padding-bottom: 15px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.control-group:last-child {
+    border-bottom: none;
+}
+
+.control-group h3 {
+    font-size: 0.9rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-secondary);
+    margin-bottom: 10px;
+}
+
+button {
+    display: block;
+    width: 100%;
+    padding: 10px;
+    margin-bottom: 8px;
+    background-color: var(--accent-color);
+    color: #0f172a;
+    border: none;
+    border-radius: 6px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background-color 0.2s;
+}
+
+button:hover {
+    background-color: var(--accent-hover);
+}
+
+select {
+    width: 100%;
+    padding: 8px;
+    background-color: var(--bg-color);
+    color: var(--text-primary);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+}
+
+input[type="range"] {
+    width: 100%;
+    margin-top: 5px;
+}
+
+.info-box {
+    background-color: rgba(56, 189, 248, 0.1);
+    padding: 10px;
+    border-radius: 6px;
+    border-left: 3px solid var(--accent-color);
+}
+
+.info-box h3 {
+    color: var(--accent-color);
+    margin-bottom: 5px;
+}
+
+/* Encoding Guides */
+.encoding-guide {
+    position: absolute;
+    color: rgba(255, 255, 255, 0.8);
+    font-size: 12px;
+    font-weight: bold;
+    pointer-events: none;
+    /* Let clicks pass through */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-shadow: 1px 1px 2px black;
+}
+
+.phase-guide {
+    top: 10px;
+    left: 10px;
+    height: 80%;
+    flex-direction: column;
+    border-left: 2px dashed rgba(255, 255, 255, 0.5);
+    padding-left: 5px;
+}
+
+.phase-guide .arrow {
+    font-size: 18px;
+    margin-bottom: 5px;
+}
+
+.phase-guide .label {
+    writing-mode: vertical-rl;
+    transform: rotate(180deg);
+}
+
+.freq-guide {
+    bottom: 10px;
+    left: 10px;
+    width: 80%;
+    flex-direction: row;
+    border-bottom: 2px dashed rgba(255, 255, 255, 0.5);
+    padding-bottom: 5px;
+}
+
+.freq-guide .arrow {
+    font-size: 18px;
+    margin-left: auto;
+    /* Push arrow to the right */
+}

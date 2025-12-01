@@ -1,65 +1,60 @@
-# MR Physics Simulator
+# MR Physics Educational Tools
 
 **[Live Demo](https://znee.github.io/MRphysics_simulation/)**
 
-An interactive web-based educational tool for understanding MRI physics fundamentals. This simulator demonstrates how Spin Echo (SE), Gradient Echo (GRE), and Inversion Recovery (IR) sequences produce different tissue contrasts based on T1, T2, and proton density.
+Interactive web-based educational tools for understanding MRI physics fundamentals, from signal generation to image reconstruction.
 
-## Features
+---
 
-### Interactive Simulation
-- Real-time brain phantom visualization with anatomically accurate tissue segmentation
-- Dynamic signal calculations based on Bloch equations
-- Live parameter adjustments with instant visual feedback
+## Part 1: MR Signal & Contrast Simulator
 
-### Three MRI Sequences
-- **Spin Echo (SE)**: Classic 90°/180° refocused sequence
-- **Gradient Echo (GRE)**: Fast imaging with T2* weighting  
-- **Inversion Recovery (IR)**: Null-point imaging (FLAIR, STIR)
+**[Launch Part 1](https://znee.github.io/MRphysics_simulation/part1/)**
 
-### Educational Visualizations
+Demonstrates how MRI sequences produce different tissue contrasts based on T1, T2, and proton density.
+
+### Features
+- **Three MRI Sequences**: Spin Echo (SE), Gradient Echo (GRE), Inversion Recovery (IR)
+- **Real-time Visualization**: Brain phantom with dynamic signal calculations
 - **Signal vs Parameter Charts**: Explore how TR, TE, TI affect tissue contrast
-- **Sequence Mechanics Tab**: Understand the physics behind each sequence
-  - Phase wheel showing dephasing/rephasing mechanisms
-  - R2/R2* decay rate comparison
-  - RF/gradient pulse sequence timeline
+- **Sequence Mechanics Tab**: Phase wheel, T2/T2* decay curves, RF timeline
+- **Clinical Presets**: T1W, T2W, T2*W, FLAIR, STIR
 
-### Clinical Presets
-- T1-Weighted (SE)
-- T2-Weighted (SE)
-- T2*-Weighted (GRE)
-- FLAIR (IR) - CSF suppression
-- STIR (IR) - Fat suppression
+### Physics Model
+- **SE**: S = PD · (1 - e^(-TR/T1)) · e^(-TE/T2)
+- **GRE**: Ernst angle steady-state with T2* effects
+- **IR**: Steady-state inversion recovery
+
+---
+
+## Part 2: K-Space & Image Reconstruction
+
+**[Launch Part 2](https://znee.github.io/MRphysics_simulation/part2/)**
+
+Visualizes the relationship between spatial frequency domain (k-space) and image domain.
+
+### Features
+- **K-Space Visualization**: See how spatial frequencies combine to form images
+- **Fourier Transform**: Interactive demonstration of 2D FFT
+- **Sampling Patterns**: Explore different k-space trajectories
+- **Artifact Demonstration**: Understand common MRI artifacts
+
+---
 
 ## How to Use
 
-1. **Visit the [Live Demo](https://znee.github.io/MRphysics_simulation/)** or open `index.html` locally in a modern browser
-2. **Select a sequence** (SE, GRE, or IR) from the dropdown
-3. **Adjust parameters** using the sliders:
-   - TR (Repetition Time)
-   - TE (Echo Time)
-   - TI (Inversion Time, for IR)
-   - FA (Flip Angle, for GRE/IR)
-   - B0 (Field Strength)
-   - Field Inhomogeneity (for GRE)
-4. **Try presets** to see common clinical weightings
-5. **Explore the Sequence Mechanics tab** to understand the underlying physics
+### Online
+Visit the [Live Demo](https://znee.github.io/MRphysics_simulation/) and select Part 1 or Part 2.
 
-## Physics Model
-
-- **SE**: S = PD · (1 - e^(-TR/T1)) · e^(-TE/T2)
-- **GRE**: Ernst angle steady-state with T2* = T2 + ΔB0 effects
-- **IR**: Steady-state inversion recovery with variable readout
-
-Tissue properties (T1, T2, PD) are based on 1.5T field strength values for:
-- White Matter
-- Gray Matter  
-- CSF
-- Fat/Scalp
+### Local
+1. Clone this repository
+2. Open `index.html` in a modern browser, or
+3. Navigate directly to `part1/index.html` or `part2/index.html`
 
 ## Technologies
 
 - Pure HTML/CSS/JavaScript (no frameworks)
 - [Chart.js](https://www.chartjs.org/) for interactive plotting
+- Canvas API for image processing
 - SVG for anatomical visualization
 
 ## Browser Compatibility
@@ -76,4 +71,5 @@ Educational use permitted. Created for medical physics teaching.
 
 ## Author
 
-Jinhee Jang
+Jinhee Jang, MD, PhD
+Department of Radiology, Seoul St. Mary's Hospital
