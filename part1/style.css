@@ -473,14 +473,34 @@ canvas {
 
 .modal-content {
     background-color: var(--card-bg);
-    margin: 10% auto;
+    margin: 5% auto;
     padding: 2rem;
     border: 1px solid var(--border-color);
-    width: 80%;
-    max-width: 800px;
+    width: 90%;
+    max-width: 600px;
+    max-height: 85vh;
+    overflow-y: auto;
     border-radius: 12px;
     position: relative;
     box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+}
+
+.modal-body {
+    margin-top: 1rem;
+}
+
+.modal-text p {
+    margin-bottom: 0.75rem;
+    line-height: 1.5;
+}
+
+.modal-text ul {
+    margin: 0.5rem 0 0.75rem 1.25rem;
+    line-height: 1.5;
+}
+
+.modal-text li {
+    margin-bottom: 0.3rem;
 }
 
 .close-modal {
