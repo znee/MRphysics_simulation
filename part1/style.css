@@ -35,9 +35,29 @@ body {
     padding: 1rem 2rem;
     background-color: var(--sidebar-bg);
     border-bottom: 1px solid var(--border-color);
+}
+
+.header-content {
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    gap: 1.5rem;
+}
+
+.back-link {
+    color: var(--text-secondary);
+    text-decoration: none;
+    font-size: 0.9rem;
+    padding: 0.4rem 0.8rem;
+    border-radius: 6px;
+    border: 1px solid var(--border-color);
+    transition: all 0.2s ease;
+    white-space: nowrap;
+}
+
+.back-link:hover {
+    color: var(--accent-color);
+    border-color: var(--accent-color);
+    background: rgba(56, 189, 248, 0.1);
 }
 
 .main-header h1 {
