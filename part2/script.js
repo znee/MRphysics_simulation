@@ -73,17 +73,14 @@ function initApp() {
     // Initialize data structures
     initDataStructures();
 
-    // Generate initial phantom
-    generatePhantom(phantomType);
-
     // Initialize resolution info display
     updateResolutionInfo();
 
-    // Initial render
-    renderAll();
-
-    // Bind events
+    // Bind events first (so UI is responsive during image load)
     bindEvents();
+
+    // Generate initial phantom (will call renderAll when ready)
+    generatePhantom(phantomType);
 }
 
 function initDataStructures() {
@@ -101,6 +98,7 @@ function generatePhantom(type) {
     if (type === 'brain-real') {
         const img = new Image();
         img.onload = () => {
+            console.log('Brain image loaded successfully');
             const tempCanvas = document.createElement('canvas');
             tempCanvas.width = N;
             tempCanvas.height = N;
@@ -117,15 +115,15 @@ function generatePhantom(type) {
                 }
             }
             computeFullKSpace();
-            // Auto-acquire removed for initial empty state
-            // acquireAllLines(); 
             renderAll();
             updateStatus('Brain image loaded. Ready to acquire.');
         };
-        img.onerror = () => {
-            console.error("Failed to load brain image");
-            updateStatus('Error loading brain image.');
+        img.onerror = (e) => {
+            console.error("Failed to load brain image:", e);
+            updateStatus('Error loading brain image. Try another phantom.');
         };
+        // Set crossOrigin before src for CORS compatibility
+        img.crossOrigin = 'anonymous';
         img.src = brainBase64;
         return; // Async update will trigger render
     }
