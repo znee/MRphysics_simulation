@@ -1293,6 +1293,7 @@ function updateModuleC(dt) {
 
     // Update visualization
     updateEnsembleArrows();
+    updateVectorDisplay({ Mx: sum.Mx, My: sum.My, Mz: sum.Mz });
     document.getElementById('coherent-count').textContent = ensemble.getPhaseCoherence().toFixed(0) + '%';
     updateCharts();
 
