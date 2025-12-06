@@ -173,7 +173,7 @@ function resetAcquisition() {
     acquiredKSpace = new Array(N).fill(0).map(() => new Array(N).fill(0).map(() => new Complex(0, 0)));
     reconstructedImage = new Array(N).fill(0).map(() => new Array(N).fill(0).map(() => new Complex(0, 0)));
     currentLine = 0;
-    updateStatus(`Ready. Lines acquired: 0/${N}`);
+    updateStatus(`Ready. Lines acquired: 0/${matrixSize}`);
 }
 
 function computeFullKSpace() {
@@ -1036,8 +1036,10 @@ function bindEvents() {
                 spikeY = Math.floor(centerY - halfRes + Math.random() * matrixSize);
             }
         }
-        // Re-acquire with new resolution if any data was acquired
+        // Clear and re-acquire with new resolution if any data was acquired
         if (!isAnimating && currentLine > 0) {
+            // Clear acquired k-space to remove data outside new boundary
+            resetAcquisition();
             acquireAllLines();
             renderAll();
         }
