@@ -39,8 +39,8 @@ const CONFIG = {
 
     // Module C: Echo
     echoType: 'spin',     // 'spin' or 'gradient'
-    TE: 50,               // ms
-    T2echo: 100,          // ms
+    TE: 80,               // ms (increased for longer observation)
+    T2echo: 150,          // ms (increased)
     T2starEcho: 30,       // ms
 
     // Current module
@@ -335,6 +335,9 @@ let signalImData = [];
 let echoSequenceState = 'idle'; // 'idle', 'dephasing', 'refocusing', 'echo', 'done'
 let echoSequenceTime = 0;
 let gradientFlipped = false; // Track if gradient has been flipped
+
+// Event markers for chart annotations (RF pulses, gradients)
+let eventMarkers = []; // Array of { time, type, label }
 
 // Three.js globals
 let scene, camera, renderer;
@@ -759,18 +762,24 @@ function initCharts() {
 }
 
 function updateCharts() {
-    // Update Mxy chart
+    // Get annotations for Module C
+    const annotations = CONFIG.currentModule === 'C' ? getChartAnnotations() : {};
+
+    // Update Mxy chart with annotations
     chartMxy.data.datasets[0].data = timeData.map((t, i) => ({ x: t, y: mxyData[i] }));
+    chartMxy.options.plugins.annotation = { annotations };
     chartMxy.update('none');
 
-    // Update Mz chart
+    // Update Mz chart with annotations
     chartMz.data.datasets[0].data = timeData.map((t, i) => ({ x: t, y: mzData[i] }));
+    chartMz.options.plugins.annotation = { annotations };
     chartMz.update('none');
 
-    // Update Signal chart
+    // Update Signal chart with annotations
     chartSignal.data.datasets[0].data = timeData.map((t, i) => ({ x: t, y: signalReData[i] }));
     chartSignal.data.datasets[1].data = timeData.map((t, i) => ({ x: t, y: signalImData[i] }));
     chartSignal.data.datasets[2].data = timeData.map((t, i) => ({ x: t, y: mxyData[i] }));
+    chartSignal.options.plugins.annotation = { annotations };
     chartSignal.update('none');
 }
 
@@ -780,7 +789,75 @@ function clearChartData() {
     mzData = [];
     signalReData = [];
     signalImData = [];
+    eventMarkers = [];
     updateCharts();
+}
+
+/**
+ * Add an event marker for chart annotations
+ * @param {number} time - Time in ms when event occurs
+ * @param {string} type - 'rf90', 'rf180', 'gradient_flip', 'gradient_restore', 'echo'
+ * @param {string} label - Label to show on chart
+ */
+function addEventMarker(time, type, label) {
+    eventMarkers.push({ time, type, label });
+}
+
+/**
+ * Generate Chart.js annotation config from event markers
+ */
+function getChartAnnotations() {
+    const annotations = {};
+
+    eventMarkers.forEach((event, i) => {
+        let color, borderDash;
+
+        switch (event.type) {
+            case 'rf90':
+                color = '#f59e0b'; // amber
+                borderDash = [];
+                break;
+            case 'rf180':
+                color = '#ef4444'; // red
+                borderDash = [];
+                break;
+            case 'gradient_flip':
+                color = '#8b5cf6'; // purple
+                borderDash = [5, 5];
+                break;
+            case 'gradient_restore':
+                color = '#8b5cf6'; // purple
+                borderDash = [2, 2];
+                break;
+            case 'echo':
+                color = '#22c55e'; // green
+                borderDash = [];
+                break;
+            default:
+                color = '#94a3b8';
+                borderDash = [];
+        }
+
+        annotations[`event${i}`] = {
+            type: 'line',
+            xMin: event.time,
+            xMax: event.time,
+            borderColor: color,
+            borderWidth: 2,
+            borderDash: borderDash,
+            label: {
+                display: true,
+                content: event.label,
+                position: 'start',
+                backgroundColor: 'rgba(0,0,0,0.7)',
+                color: color,
+                font: { size: 10, weight: 'bold' },
+                padding: 3
+            }
+        };
+    });
+
+    return annotations;
 }
 
 // ============================================================================
@@ -871,6 +948,8 @@ function updateModuleC(dt) {
             ensemble.spins.forEach(spin => {
                 spin.applyRFPulse(180, 0);
             });
+            // Add event marker for 180° pulse
+            addEventMarker(CONFIG.currentTime, 'rf180', '180°');
             echoSequenceState = 'refocusing';
         }
     } else {
@@ -879,6 +958,8 @@ function updateModuleC(dt) {
             // Toggle gradient direction
             ensemble.toggleGradient();
             gradientFlipped = true;
+            // Add event marker for gradient flip
+            addEventMarker(CONFIG.currentTime, 'gradient_flip', 'G flip');
             echoSequenceState = 'refocusing';
         }
         // Restore gradient after echo (at TE)
@@ -1158,16 +1239,22 @@ function runEchoSequence() {
     ensemble = new SpinEnsemble(CONFIG.numSpins, CONFIG.T1, CONFIG.T2echo, freqSpread, CONFIG.B0);
     createEnsembleArrows();
 
-    // Apply initial 90° pulse
+    // Apply initial 90° pulse and add marker
     ensemble.applyRFPulse(90, 0);
+    addEventMarker(0, 'rf90', '90°');
+
+    // Add echo marker at TE
+    addEventMarker(CONFIG.TE, 'echo', 'Echo');
 
     // Start sequence
     echoSequenceState = 'dephasing';
     echoSequenceTime = 0;
     gradientFlipped = false;
     CONFIG.isPlaying = true;
-    // Set maxTime to show echo and some time after
-    CONFIG.maxTime = CONFIG.TE * 2.5;
+
+    // Set maxTime to show echo and more time after for longer observation
+    // At least 3x TE or 300ms, whichever is larger
+    CONFIG.maxTime = Math.max(CONFIG.TE * 3, 300);
 }
 
 // ============================================================================

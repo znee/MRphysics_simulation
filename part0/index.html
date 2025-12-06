@@ -14,6 +14,8 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <!-- Chart.js -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- Chart.js Annotation Plugin -->
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation"></script>
     <!-- MathJax -->
     <script src="https://polyfill.io/v3/polyfill.min.js?features=es6"></script>
     <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
@@ -139,12 +141,12 @@
                     </select>
 
                     <label for="TE-val">Echo Time TE (ms)</label>
-                    <input type="range" id="TE-val" min="10" max="200" step="5" value="50">
-                    <span id="TE-display">50 ms</span>
+                    <input type="range" id="TE-val" min="20" max="300" step="10" value="80">
+                    <span id="TE-display">80 ms</span>
 
                     <label for="T2-echo">T2 (ms)</label>
-                    <input type="range" id="T2-echo" min="50" max="300" step="10" value="100">
-                    <span id="T2-echo-val">100 ms</span>
+                    <input type="range" id="T2-echo" min="50" max="500" step="10" value="150">
+                    <span id="T2-echo-val">150 ms</span>
 
                     <label for="T2star-echo">T2* (ms)</label>
                     <input type="range" id="T2star-echo" min="10" max="100" step="5" value="30">
@@ -156,12 +158,20 @@
 
                     <div class="legend">
                         <div class="legend-item">
+                            <span class="legend-color" style="background: #f59e0b;"></span>
+                            <span>90° RF</span>
+                        </div>
+                        <div class="legend-item">
                             <span class="legend-color" style="background: #ef4444;"></span>
-                            <span>T2* decay</span>
+                            <span>180° RF</span>
+                        </div>
+                        <div class="legend-item">
+                            <span class="legend-color" style="background: #8b5cf6;"></span>
+                            <span>Gradient</span>
                         </div>
                         <div class="legend-item">
                             <span class="legend-color" style="background: #22c55e;"></span>
-                            <span>T2 envelope</span>
+                            <span>Echo</span>
                         </div>
                     </div>
                 </div>
