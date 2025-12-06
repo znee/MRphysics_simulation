@@ -69,12 +69,25 @@ Visualizes the relationship between spatial frequency domain (k-space) and image
   - Motion artifacts (respiratory simulation)
   - Spike noise (bad pixel artifacts)
   - Undersampling (aliasing/ghosting)
+- **Acceleration Techniques**:
+  - Partial Fourier (6/8, 5/8) with zero-fill or conjugate synthesis reconstruction
+  - Parallel Imaging demo (SENSE R=2, R=4) with g-factor SNR penalty
 - **Multiple Phantoms**: Circle, Square, Simulated Brain, Real Brain MRI
 
 ### Physics Model
 - 2D FFT/IFFT for image ↔ k-space transformation
 - SNR ∝ (voxel size)² - quadratic relationship with pixel area
 - K-space coverage scales as (matrix/N)² for area-based truncation
+- Partial Fourier: Exploits conjugate symmetry S(-k) = S*(k) for real images
+- Parallel Imaging SNR: SNR_PI = SNR_full / (g · √R) where g is geometry factor
+
+### Simplifications (Parallel Imaging)
+The parallel imaging demo uses k-space interpolation to fill skipped phase-encoding lines, demonstrating the SNR penalty (g-factor noise) but not true wrap-around aliasing artifacts. In real SENSE/GRAPPA:
+1. Undersampled k-space is reconstructed directly, producing aliased (wrapped) images
+2. Multiple coil sensitivity maps identify which pixels are superimposed
+3. Linear algebra unfolding separates the overlapped signals
+
+This simplified demo shows the **concept** that parallel imaging can recover missing k-space data at the cost of SNR, but omits the coil sensitivity encoding that enables true alias unfolding. Without actual coil sensitivity maps, the demo cannot produce or unwrap the characteristic N/R-fold image wrap-around.
 
 ---
 

@@ -34,6 +34,9 @@ let partialFourierRecon = 'zerofill'; // 'zerofill' or 'conjugate'
 // Parallel Imaging settings (simplified demo)
 let numCoils = 1; // 1 = no parallel imaging, 2 or 4 coils
 let parallelAcceleration = 1; // R factor (1, 2, or 4)
+
+// Displayed k-space (after PF/PI processing) for visualization
+let displayedKSpace = null;
 let globalMaxMag = 0;
 let spikeX = 0;
 let spikeY = 0;
@@ -471,6 +474,13 @@ function reconstructImage() {
             temp = applyParallelImagingRecon(temp, N);
         }
 
+        // Store displayed k-space (after PF/PI processing) for visualization
+        displayedKSpace = new Array(N).fill(0).map((_, y) =>
+            new Array(N).fill(0).map((_, x) =>
+                new Complex(temp[y][x].re, temp[y][x].im)
+            )
+        );
+
         // 2. IFFT Shift (undo centering)
         const unshifted = ifftShift(temp);
 
@@ -500,6 +510,13 @@ function reconstructImage() {
                 );
             }
         }
+
+        // Store displayedKSpace for visualization (use acquiredKSpace for N×N display)
+        displayedKSpace = new Array(N).fill(0).map((_, y) =>
+            new Array(N).fill(0).map((_, x) =>
+                new Complex(acquiredKSpace[y][x].re, acquiredKSpace[y][x].im)
+            )
+        );
 
         // IFFT Shift on padded data
         const unshifted = ifftShiftVariable(padded, fftSize);
@@ -1006,11 +1023,14 @@ function renderKSpace() {
     const phaseCtx = phaseCanvas.getContext('2d');
     const phaseImgData = phaseCtx.createImageData(N, N);
 
-    // Calculate max from ACQUIRED k-space only (not ground truth)
+    // Use displayedKSpace if available (shows PF/PI processing), otherwise acquiredKSpace
+    const kspaceToShow = displayedKSpace || acquiredKSpace;
+
+    // Calculate max from displayed k-space
     let maxMag = 0;
     for (let y = 0; y < N; y++) {
         for (let x = 0; x < N; x++) {
-            const mag = acquiredKSpace[y][x].magnitude;
+            const mag = kspaceToShow[y][x].magnitude;
             if (mag > maxMag) maxMag = mag;
         }
     }
@@ -1027,22 +1047,59 @@ function renderKSpace() {
             // Check if this point is within the acquired region
             const inAcquiredRegion = Math.abs(x - centerX) < halfRes && Math.abs(y - centerY) < halfRes;
 
+            // Check if this line was actually acquired (for undersampling visualization)
+            const lineAcquired = (y % skipY === 0);
+            // When PI is on and can recover, show interpolated lines differently
+            const lineRecovered = (numCoils > 1 && skipY > 1 && numCoils >= skipY);
+
             if (inAcquiredRegion && maxMag > 0) {
                 // Magnitude (Log scaled)
-                const magVal = acquiredKSpace[y][x].magnitude;
+                const magVal = kspaceToShow[y][x].magnitude;
                 const magNorm = (Math.log(1 + magVal) / Math.log(1 + maxMag)) * 255;
-                magImgData.data[idx] = magNorm;
-                magImgData.data[idx + 1] = magNorm;
-                magImgData.data[idx + 2] = magNorm;
-                magImgData.data[idx + 3] = 255;
 
-                // Phase
-                const phaseVal = acquiredKSpace[y][x].phase;
-                const phaseNorm = ((phaseVal + Math.PI) / (2 * Math.PI)) * 255;
-                phaseImgData.data[idx] = phaseNorm;
-                phaseImgData.data[idx + 1] = phaseNorm;
-                phaseImgData.data[idx + 2] = phaseNorm;
-                phaseImgData.data[idx + 3] = 255;
+                // Color coding for k-space visualization:
+                // - White: directly acquired lines
+                // - Cyan: PI-interpolated lines (recovered by parallel imaging)
+                // - Dark: skipped lines (when PI is off or can't recover)
+                if (!lineAcquired && !lineRecovered) {
+                    // Skipped line without PI recovery - show as dark/zero
+                    magImgData.data[idx] = 0;
+                    magImgData.data[idx + 1] = 0;
+                    magImgData.data[idx + 2] = 0;
+                    magImgData.data[idx + 3] = 255;
+
+                    phaseImgData.data[idx] = 0;
+                    phaseImgData.data[idx + 1] = 0;
+                    phaseImgData.data[idx + 2] = 0;
+                    phaseImgData.data[idx + 3] = 255;
+                } else if (!lineAcquired && lineRecovered) {
+                    // PI-interpolated line - show in cyan tint
+                    magImgData.data[idx] = magNorm * 0.3;      // Less red
+                    magImgData.data[idx + 1] = magNorm * 0.8;  // Moderate green
+                    magImgData.data[idx + 2] = magNorm;        // Full blue (cyan tint)
+                    magImgData.data[idx + 3] = 255;
+
+                    const phaseVal = kspaceToShow[y][x].phase;
+                    const phaseNorm = ((phaseVal + Math.PI) / (2 * Math.PI)) * 255;
+                    phaseImgData.data[idx] = phaseNorm * 0.3;
+                    phaseImgData.data[idx + 1] = phaseNorm * 0.8;
+                    phaseImgData.data[idx + 2] = phaseNorm;
+                    phaseImgData.data[idx + 3] = 255;
+                } else {
+                    // Directly acquired line - show in white/gray
+                    magImgData.data[idx] = magNorm;
+                    magImgData.data[idx + 1] = magNorm;
+                    magImgData.data[idx + 2] = magNorm;
+                    magImgData.data[idx + 3] = 255;
+
+                    // Phase
+                    const phaseVal = kspaceToShow[y][x].phase;
+                    const phaseNorm = ((phaseVal + Math.PI) / (2 * Math.PI)) * 255;
+                    phaseImgData.data[idx] = phaseNorm;
+                    phaseImgData.data[idx + 1] = phaseNorm;
+                    phaseImgData.data[idx + 2] = phaseNorm;
+                    phaseImgData.data[idx + 3] = 255;
+                }
             } else {
                 // Outside acquired region - pure black
                 magImgData.data[idx] = 0;
