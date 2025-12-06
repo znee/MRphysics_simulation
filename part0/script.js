@@ -15,7 +15,7 @@
 // ============================================================================
 
 const GAMMA = 42.577; // Gyromagnetic ratio for 1H (MHz/T)
-const DEFAULT_MAX_TIME = 500; // Default simulation duration (ms)
+const DEFAULT_MAX_TIME = 1500; // Default simulation duration (ms) - long enough to see T1 recovery
 
 const CONFIG = {
     // Animation
@@ -26,21 +26,23 @@ const CONFIG = {
     dt: 0.5,              // Time step (ms)
 
     // Module A: Single Spin
+    // T1 = 500ms for educational demo (faster to observe recovery)
+    // Real brain tissue: WM ~600-800ms, GM ~900-1200ms at 1.5T
     flipAngle: 90,        // degrees
-    T1: 1000,             // ms
-    T2: 100,              // ms
+    T1: 500,              // ms (shorter for faster demo)
+    T2: 80,               // ms
     B0: 1.5,              // Tesla
 
     // Module B: Ensemble
     numSpins: 50,
     freqSpread: 30,       // Hz (determines T2*)
-    T2ensemble: 150,      // ms (intrinsic T2)
+    T2ensemble: 100,      // ms (intrinsic T2)
     showIndividual: true,
 
     // Module C: Echo
     echoType: 'spin',     // 'spin' or 'gradient'
-    TE: 80,               // ms (increased for longer observation)
-    T2echo: 150,          // ms (increased)
+    TE: 80,               // ms
+    T2echo: 120,          // ms
     T2starEcho: 30,       // ms
 
     // Current module
@@ -125,8 +127,12 @@ class Spin {
         const dtSec = dt / 1000;
 
         // Precession due to frequency offset (in rotating frame)
-        // deltaOmega includes field inhomogeneity effects
-        const dPhi = 2 * Math.PI * this.deltaOmega * dtSec;
+        // deltaOmega represents field inhomogeneity in Hz at reference B0 (1.5T)
+        // Scale with B0: higher field = larger frequency spread (linear with B0)
+        // This simulates how field inhomogeneity effects scale with main field
+        const B0scale = this.B0 / 1.5; // Scale relative to 1.5T reference
+        const effectiveDeltaOmega = this.deltaOmega * B0scale;
+        const dPhi = 2 * Math.PI * effectiveDeltaOmega * dtSec;
         this.phase += dPhi;
 
         // Rotation due to off-resonance
@@ -260,6 +266,16 @@ class SpinEnsemble {
         this.T1 = newT1;
         this.spins.forEach(spin => {
             spin.T1 = newT1;
+        });
+    }
+
+    /**
+     * Update B0 for all spins (affects precession rate scaling)
+     */
+    setB0(newB0) {
+        this.B0 = newB0;
+        this.spins.forEach(spin => {
+            spin.B0 = newB0;
         });
     }
 
@@ -1120,8 +1136,9 @@ function setupEventListeners() {
         CONFIG.B0 = parseFloat(e.target.value);
         const freq = (GAMMA * CONFIG.B0).toFixed(1);
         document.getElementById('B0-display').textContent = `${CONFIG.B0} T (${freq} MHz)`;
-        // Update B0 for single spin (affects any off-resonance behavior)
+        // Update B0 for single spin and ensemble (affects precession rate scaling)
         singleSpin.B0 = CONFIG.B0;
+        ensemble.setB0(CONFIG.B0);
     });
 
     document.getElementById('btn-rf-pulse').addEventListener('click', () => {
