@@ -8,6 +8,7 @@
  * A - B0 Alignment (spin alignment with magnetic field)
  * B - FID Formation (RF excitation & dephasing)
  * C - Echo Formation (Spin Echo, Gradient Echo)
+ * D - GRE Variants (Spoiled GRE vs SSFP, multi-TR steady-state)
  */
 
 // ============================================================================
@@ -54,6 +55,15 @@ const CONFIG = {
     T2starEcho: 30,       // ms (short T2* - shows GRE vs SE difference)
     T2starEchoSE: 30,     // Saved T2* for Spin Echo
     T2starEchoGRE: 100,   // Saved T2* for Gradient Echo (longer for visible echo)
+
+    // Module D: GRE Variants (Spoiled vs SSFP)
+    // Multi-TR simulation to show steady-state magnetization
+    greType: 'spoiled',   // 'spoiled' or 'ssfp'
+    flipAngleD: 30,       // degrees
+    TR: 25,               // ms (short TR typical for GRE)
+    T1D: 600,             // ms (typical tissue T1)
+    T2D: 80,              // ms (typical tissue T2)
+    numTR: 8,             // Number of TR cycles to simulate
 
     // Current module
     currentModule: 'A'
@@ -446,6 +456,14 @@ let signalImData = [];
 let echoSequenceState = 'idle'; // 'idle', 'dephasing', 'refocusing', 'echo', 'done'
 let echoSequenceTime = 0;
 let gradientFlipped = false; // Track if gradient has been flipped
+
+// Module D: GRE multi-TR state
+let greSequenceState = 'idle'; // 'idle', 'running', 'done'
+let currentTRIndex = 0;        // Which TR we're in (0 to numTR-1)
+let timeInTR = 0;              // Time within current TR
+let rfPhase = 0;               // RF phase for spoiling (changes each TR)
+let steadyStateMxy = [];       // Store Mxy at each TR for plotting approach to steady-state
+let steadyStateMz = [];        // Store Mz at each TR
 
 // Event markers for chart annotations (RF pulses, gradients)
 let eventMarkers = []; // Array of { time, type, label }
@@ -1135,6 +1153,9 @@ function animate(timestamp) {
             case 'C':
                 updateModuleC(simDt);
                 break;
+            case 'D':
+                updateModuleD(simDt);
+                break;
         }
 
         // Update time display
@@ -1280,6 +1301,170 @@ function updateModuleC(dt) {
     updateSignalPanelGlow(mxy, dt);
 }
 
+/**
+ * Module D: GRE Variants - Multi-TR steady-state simulation
+ * Shows how magnetization evolves over repeated excitations
+ * Spoiled GRE: RF spoiling destroys Mxy → T1-weighted
+ * SSFP: Balanced gradients preserve Mxy → T2/T1-weighted
+ */
+function updateModuleD(dt) {
+    if (greSequenceState !== 'running') return;
+
+    timeInTR += dt;
+
+    // Check if we've completed a TR
+    if (timeInTR >= CONFIG.TR) {
+        // End of TR: record steady-state signal and prepare for next TR
+        const sum = ensemble.getSumMagnetization();
+        const mxy = Math.sqrt(sum.Mx * sum.Mx + sum.My * sum.My);
+
+        // Store signal at end of TR (just before next RF pulse)
+        steadyStateMxy.push(mxy);
+        steadyStateMz.push(sum.Mz);
+
+        currentTRIndex++;
+
+        // Check if we've done all TRs
+        if (currentTRIndex >= CONFIG.numTR) {
+            greSequenceState = 'done';
+            updateSteadyStateDisplay();
+            return;
+        }
+
+        // Prepare for next TR
+        timeInTR = 0;
+
+        // Apply RF pulse at start of new TR
+        if (CONFIG.greType === 'spoiled') {
+            // Spoiled GRE: Apply spoiler gradient to destroy Mxy before RF
+            // Then apply RF with incrementing phase (RF spoiling)
+            // Simplified: just zero out Mxy (perfect spoiling)
+            ensemble.spins.forEach(spin => {
+                spin.Mx = 0;
+                spin.My = 0;
+            });
+            // Apply RF pulse
+            ensemble.applyRFPulse(CONFIG.flipAngleD, 0);
+        } else {
+            // SSFP: Balanced gradients mean Mxy is preserved
+            // Alternate RF phase by 180° each TR (typical bSSFP)
+            const phase = (currentTRIndex % 2) * 180;
+            ensemble.applyRFPulse(CONFIG.flipAngleD, phase);
+        }
+
+        // Add RF marker
+        addEventMarker(CONFIG.currentTime, 'rf90', `α${currentTRIndex + 1}`);
+    }
+
+    // Evolve ensemble (T1 recovery, T2 decay, precession)
+    ensemble.evolve(dt);
+
+    // Get sum magnetization
+    const sum = ensemble.getSumMagnetization();
+
+    // Record data for continuous plotting
+    timeData.push(CONFIG.currentTime);
+    mxyData.push(Math.sqrt(sum.Mx * sum.Mx + sum.My * sum.My));
+    mzData.push(sum.Mz);
+    signalReData.push(sum.Mx);
+    signalImData.push(sum.My);
+
+    // Update visualization
+    updateEnsembleArrows();
+    updateCharts();
+
+    // Update signal glow
+    const mxy = Math.sqrt(sum.Mx * sum.Mx + sum.My * sum.My);
+    updateSignalPanelGlow(mxy, dt);
+}
+
+/**
+ * Calculate Ernst angle: optimal flip angle for maximum signal in spoiled GRE
+ * α_Ernst = arccos(exp(-TR/T1))
+ */
+function calculateErnstAngle(TR, T1) {
+    const E1 = Math.exp(-TR / T1);
+    const ernstRad = Math.acos(E1);
+    return ernstRad * 180 / Math.PI;
+}
+
+/**
+ * Calculate theoretical steady-state signal for spoiled GRE
+ * S = M0 * sin(α) * (1 - E1) / (1 - cos(α) * E1)
+ * where E1 = exp(-TR/T1)
+ */
+function calculateSpoiledGRESignal(flipAngleDeg, TR, T1) {
+    const alpha = flipAngleDeg * Math.PI / 180;
+    const E1 = Math.exp(-TR / T1);
+    const signal = Math.sin(alpha) * (1 - E1) / (1 - Math.cos(alpha) * E1);
+    return signal;
+}
+
+/**
+ * Calculate theoretical steady-state signal for SSFP (bSSFP)
+ * S = M0 * sin(α) / (1 + cos(α) + (1 - cos(α)) * T1/T2)
+ * This is a simplified on-resonance formula
+ */
+function calculateSSFPSignal(flipAngleDeg, T1, T2) {
+    const alpha = flipAngleDeg * Math.PI / 180;
+    const ratio = T1 / T2;
+    const signal = Math.sin(alpha) / (1 + Math.cos(alpha) + (1 - Math.cos(alpha)) * ratio);
+    return signal;
+}
+
+/**
+ * Update the Ernst angle and steady-state signal displays
+ */
+function updateErnstAngleDisplay() {
+    const ernst = calculateErnstAngle(CONFIG.TR, CONFIG.T1D);
+    document.getElementById('ernst-angle-val').textContent = ernst.toFixed(1) + '°';
+}
+
+/**
+ * Update steady-state signal display after sequence completes
+ */
+function updateSteadyStateDisplay() {
+    let signal;
+    if (CONFIG.greType === 'spoiled') {
+        signal = calculateSpoiledGRESignal(CONFIG.flipAngleD, CONFIG.TR, CONFIG.T1D);
+    } else {
+        signal = calculateSSFPSignal(CONFIG.flipAngleD, CONFIG.T1D, CONFIG.T2D);
+    }
+    document.getElementById('steady-state-val').textContent = (signal * 100).toFixed(1) + '%';
+}
+
+/**
+ * Run the GRE multi-TR sequence
+ */
+function runGRESequence() {
+    resetSimulation();
+
+    // Create ensemble with minimal frequency spread (on-resonance for SSFP)
+    // Use small spread for spoiled GRE to show T2* effects
+    const freqSpread = CONFIG.greType === 'ssfp' ? 5 : 20;
+    ensemble = new SpinEnsemble(CONFIG.numSpins, CONFIG.T1D, CONFIG.T2D, freqSpread, CONFIG.B0);
+    createEnsembleArrows();
+
+    // Initialize state
+    greSequenceState = 'running';
+    currentTRIndex = 0;
+    timeInTR = 0;
+    steadyStateMxy = [];
+    steadyStateMz = [];
+
+    // Apply initial RF pulse
+    ensemble.applyRFPulse(CONFIG.flipAngleD, 0);
+    addEventMarker(0, 'rf90', 'α1');
+
+    // Set max time based on number of TRs
+    CONFIG.maxTime = CONFIG.TR * CONFIG.numTR + 50;
+
+    // Update displays
+    updateErnstAngleDisplay();
+
+    CONFIG.isPlaying = true;
+}
+
 function updateVectorDisplay(spin) {
     document.getElementById('Mx-val').textContent = spin.Mx.toFixed(2);
     document.getElementById('My-val').textContent = spin.My.toFixed(2);
@@ -1314,7 +1499,7 @@ function switchModule(module) {
     if (module === 'A') {
         // Initialize Module A alignment ensemble
         initModuleA();
-        // Hide Module B/C ensemble arrows
+        // Hide Module B/C/D ensemble arrows
         spinArrows.forEach(a => a.visible = false);
         if (sumArrow) sumArrow.visible = false;
         if (mxyArrow) mxyArrow.visible = false;
@@ -1325,10 +1510,16 @@ function switchModule(module) {
         if (netMagArrowA) netMagArrowA.visible = false;
         // Show ensemble with component arrows
         createEnsembleArrows();
+
+        // Module D specific initialization
+        if (module === 'D') {
+            updateErnstAngleDisplay();
+            document.getElementById('steady-state-val').textContent = '--';
+        }
     }
 
-    // Update signal panel glow for Module B/C
-    updateSignalPanelGlow(0);
+    // Update signal panel glow for Module B/C/D
+    updateSignalPanelGlow(0, 0.5);
 }
 
 /**
@@ -1398,6 +1589,15 @@ function updateInfoPanel(module) {
                 <strong>Gradient Echo:</strong> Gradient reversal → rephasing → echo. Does NOT refocus B₀ (T2* weighting).<br>
                 <strong>Signal:</strong> Watch the Signal/FID panel glow brighten at echo!<br>
                 <em style="color: #f59e0b;">Note: 3D shows rotating frame. Net M ~1/√N, shown normalized.</em>
+            `;
+            break;
+        case 'D':
+            infoTitle.textContent = 'Module D: GRE Variants';
+            infoText.innerHTML = `
+                <strong>Spoiled GRE (SPGR/FLASH):</strong> Mxy destroyed each TR → only T1 recovery matters → <strong>T1-weighted</strong>.<br>
+                <strong>SSFP (bSSFP/TrueFISP):</strong> Mxy preserved → builds to steady-state → <strong>T2/T1-weighted</strong> (bright fluid).<br>
+                <strong>Ernst Angle:</strong> α<sub>E</sub> = arccos(e<sup>-TR/T1</sup>) gives maximum signal for spoiled GRE.<br>
+                <em style="color: #f59e0b;">Watch Mxy and Mz approach steady-state over multiple TRs.</em>
             `;
             break;
     }
@@ -1599,6 +1799,46 @@ function setupEventListeners() {
         CONFIG.showIndividual = e.target.checked;
         spinArrows.forEach(a => a.visible = CONFIG.showIndividual);
     });
+
+    // Module D controls
+    document.getElementById('gre-type').addEventListener('change', (e) => {
+        CONFIG.greType = e.target.value;
+        updateErnstAngleDisplay();
+    });
+
+    document.getElementById('flip-angle-D').addEventListener('input', (e) => {
+        CONFIG.flipAngleD = parseInt(e.target.value);
+        document.getElementById('flip-angle-D-val').textContent = CONFIG.flipAngleD + '°';
+    });
+
+    document.getElementById('TR-val').addEventListener('input', (e) => {
+        CONFIG.TR = parseInt(e.target.value);
+        document.getElementById('TR-display').textContent = CONFIG.TR + ' ms';
+        updateErnstAngleDisplay();
+    });
+
+    document.getElementById('T1-D').addEventListener('input', (e) => {
+        CONFIG.T1D = parseInt(e.target.value);
+        document.getElementById('T1-D-val').textContent = CONFIG.T1D + ' ms';
+        updateErnstAngleDisplay();
+    });
+
+    document.getElementById('T2-D').addEventListener('input', (e) => {
+        CONFIG.T2D = parseInt(e.target.value);
+        document.getElementById('T2-D-val').textContent = CONFIG.T2D + ' ms';
+    });
+
+    document.getElementById('num-TR').addEventListener('input', (e) => {
+        CONFIG.numTR = parseInt(e.target.value);
+        document.getElementById('num-TR-val').textContent = CONFIG.numTR + ' TRs';
+    });
+
+    document.getElementById('btn-run-gre').addEventListener('click', runGRESequence);
+
+    document.getElementById('show-individual-D').addEventListener('change', (e) => {
+        CONFIG.showIndividual = e.target.checked;
+        spinArrows.forEach(a => a.visible = CONFIG.showIndividual);
+    });
 }
 
 /**
@@ -1647,6 +1887,14 @@ function resetSimulation() {
     echoSequenceState = 'idle';
     echoSequenceTime = 0;
     gradientFlipped = false;
+
+    // Reset GRE multi-TR state
+    greSequenceState = 'idle';
+    currentTRIndex = 0;
+    timeInTR = 0;
+    rfPhase = 0;
+    steadyStateMxy = [];
+    steadyStateMz = [];
 
     // Reset signal detection state
     previousMxy = 0;

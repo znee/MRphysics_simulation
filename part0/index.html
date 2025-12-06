@@ -38,6 +38,7 @@
                     <button class="module-tab active" data-module="A">A: Spin</button>
                     <button class="module-tab" data-module="B">B: FID</button>
                     <button class="module-tab" data-module="C">C: Echo</button>
+                    <button class="module-tab" data-module="D">D: GRE</button>
                 </div>
 
                 <!-- Animation Controls -->
@@ -191,6 +192,72 @@
                         <div class="legend-item">
                             <span class="legend-color" style="background: #22c55e;"></span>
                             <span>Echo</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Module D: GRE Variants - Spoiled vs SSFP -->
+                <div class="control-group module-controls" id="controls-D" style="display: none;">
+                    <h2>GRE Variants (Multi-TR)</h2>
+
+                    <label for="gre-type">Sequence Type</label>
+                    <select id="gre-type">
+                        <option value="spoiled">Spoiled GRE (SPGR/FLASH)</option>
+                        <option value="ssfp">SSFP (bSSFP/TrueFISP)</option>
+                    </select>
+
+                    <label for="flip-angle-D">Flip Angle (α)</label>
+                    <input type="range" id="flip-angle-D" min="5" max="90" step="5" value="30">
+                    <span id="flip-angle-D-val">30°</span>
+
+                    <label for="TR-val">TR (ms)</label>
+                    <input type="range" id="TR-val" min="5" max="100" step="5" value="25">
+                    <span id="TR-display">25 ms</span>
+
+                    <label for="T1-D">T1 (ms)</label>
+                    <input type="range" id="T1-D" min="100" max="2000" step="50" value="600">
+                    <span id="T1-D-val">600 ms</span>
+
+                    <label for="T2-D">T2 (ms)</label>
+                    <input type="range" id="T2-D" min="20" max="500" step="10" value="80">
+                    <span id="T2-D-val">80 ms</span>
+
+                    <label for="num-TR">Number of TRs</label>
+                    <input type="range" id="num-TR" min="3" max="20" step="1" value="8">
+                    <span id="num-TR-val">8 TRs</span>
+
+                    <button class="btn primary" id="btn-run-gre" style="width: 100%; margin-top: 15px;">
+                        Run Sequence
+                    </button>
+
+                    <div class="ernst-angle-display" style="margin-top: 15px; padding: 10px; background: rgba(0,0,0,0.2); border-radius: 6px;">
+                        <div style="font-size: 0.75rem; color: var(--text-secondary); margin-bottom: 4px;">Ernst Angle (optimal α)</div>
+                        <div style="font-size: 1.1rem; font-weight: 600; color: var(--accent-color);" id="ernst-angle-val">--°</div>
+                        <div style="font-size: 0.7rem; color: var(--text-secondary); margin-top: 4px;">α<sub>E</sub> = arccos(e<sup>-TR/T1</sup>)</div>
+                    </div>
+
+                    <div class="steady-state-display" style="margin-top: 10px; padding: 10px; background: rgba(0,0,0,0.2); border-radius: 6px;">
+                        <div style="font-size: 0.75rem; color: var(--text-secondary); margin-bottom: 4px;">Steady-State Signal</div>
+                        <div style="font-size: 1.1rem; font-weight: 600; color: #22c55e;" id="steady-state-val">--</div>
+                    </div>
+
+                    <label style="margin-top: 15px;">
+                        <input type="checkbox" id="show-individual-D" checked>
+                        Show Individual Spins
+                    </label>
+
+                    <div class="legend" style="margin-top: 10px;">
+                        <div class="legend-item">
+                            <span class="legend-color" style="background: #f59e0b;"></span>
+                            <span>RF pulse</span>
+                        </div>
+                        <div class="legend-item">
+                            <span class="legend-color" style="background: #8b5cf6;"></span>
+                            <span>Spoiler</span>
+                        </div>
+                        <div class="legend-item">
+                            <span class="legend-color" style="background: #22c55e;"></span>
+                            <span>Signal</span>
                         </div>
                     </div>
                 </div>
