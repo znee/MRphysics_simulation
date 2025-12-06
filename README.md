@@ -16,6 +16,7 @@ Watch how spinning protons create the MR signal. Visualize magnetization dynamic
 - **Module A - Spin Alignment**: Watch random spins align with B₀ through T1 relaxation
 - **Module B - FID Formation**: See RF excitation tip magnetization and progressive dephasing create the FID
 - **Module C - Echo Formation**: Compare Spin Echo (180° refocusing) vs Gradient Echo (gradient reversal)
+- **Module D - GRE Variants**: Multi-TR steady-state visualization of Spoiled GRE vs SSFP
 - **3D Visualization**: Individual spins + net magnetization vector + Mxy/Mz component arrows
 - **Real-time Charts**: Mxy decay, Mz recovery, and complex signal (Re, Im, magnitude)
 - **Signal Detection**: Panel glow based on dMxy/dt (Faraday's law)
@@ -24,6 +25,8 @@ Watch how spinning protons create the MR signal. Visualize magnetization dynamic
 - **Bloch Equations**: Full magnetization evolution with T1/T2 relaxation
 - **Spin Echo**: 180° pulse inverts phases → echo at T2 envelope (refocuses B₀ inhomogeneity)
 - **Gradient Echo**: Gradient reversal → echo at T2* envelope (does NOT refocus B₀)
+- **Spoiled GRE**: S = sin(α)(1-E1)/(1-cos(α)E1) with Ernst angle optimization
+- **SSFP (bSSFP)**: S = sin(α)/(1+cos(α)+(1-cos(α))T1/T2) for T2/T1-weighted contrast
 - **Rotating Frame**: Visualization at Larmor frequency ω₀ = γB₀
 
 ---
