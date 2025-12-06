@@ -343,6 +343,21 @@ input[type="range"] {
     color: var(--text-primary);
 }
 
+/* Sidebar Footer */
+.sidebar-footer {
+    margin-top: auto;
+    padding-top: 10px;
+    border-top: 1px solid var(--border-color);
+    text-align: center;
+    color: var(--text-secondary);
+    font-size: 0.7rem;
+    line-height: 1.4;
+}
+
+.sidebar-footer p {
+    margin: 0;
+}
+
 /* Encoding Guides */
 .encoding-guide {
     position: absolute;
