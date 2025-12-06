@@ -1028,8 +1028,8 @@ function initCharts() {
 }
 
 function updateCharts() {
-    // Get annotations for Module C
-    const annotations = CONFIG.currentModule === 'C' ? getChartAnnotations() : {};
+    // Get annotations for Module C and D (both use event markers)
+    const annotations = (CONFIG.currentModule === 'C' || CONFIG.currentModule === 'D') ? getChartAnnotations() : {};
 
     // Update Mxy chart with annotations
     chartMxy.data.datasets[0].data = timeData.map((t, i) => ({ x: t, y: mxyData[i] }));
@@ -1371,7 +1371,14 @@ function updateModuleD(dt) {
 
     // Update visualization
     updateEnsembleArrows();
+    updateVectorDisplay({ Mx: sum.Mx, My: sum.My, Mz: sum.Mz });
     updateCharts();
+
+    // Update phase coherence display (reuse from Module B/C)
+    const coherentEl = document.getElementById('coherent-count');
+    if (coherentEl) {
+        coherentEl.textContent = ensemble.getPhaseCoherence().toFixed(0) + '%';
+    }
 
     // Update signal glow
     const mxy = Math.sqrt(sum.Mx * sum.Mx + sum.My * sum.My);
@@ -1488,6 +1495,14 @@ function switchModule(module) {
         ctrl.style.display = 'none';
     });
     document.getElementById(`controls-${module}`).style.display = 'block';
+
+    // Sync checkbox states across modules
+    const showIndividualB = document.getElementById('show-individual');
+    const showIndividualC = document.getElementById('show-individual-C');
+    const showIndividualD = document.getElementById('show-individual-D');
+    if (showIndividualB) showIndividualB.checked = CONFIG.showIndividual;
+    if (showIndividualC) showIndividualC.checked = CONFIG.showIndividual;
+    if (showIndividualD) showIndividualD.checked = CONFIG.showIndividual;
 
     // Update info panel
     updateInfoPanel(module);
