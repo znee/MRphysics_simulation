@@ -5,8 +5,8 @@
  * Based on the Bloch equations and fundamental NMR physics.
  *
  * Modules:
- * A - Single Spin Dynamics (Bloch equations)
- * B - Multi-Spin Ensemble (FID formation) - CENTRAL MODULE
+ * A - B0 Alignment (spin alignment with magnetic field)
+ * B - FID Formation (RF excitation & dephasing)
  * C - Echo Formation (Spin Echo, Gradient Echo)
  */
 
@@ -25,28 +25,33 @@ const CONFIG = {
     maxTime: DEFAULT_MAX_TIME,
     dt: 0.5,              // Time step (ms)
 
-    // Module A: Single Spin
+    // Module A: B0 Alignment
     // T1 = 500ms for educational demo (faster to observe recovery)
     // Real brain tissue: WM ~600-800ms, GM ~900-1200ms at 1.5T
-    flipAngle: 90,        // degrees
     T1: 500,              // ms (shorter for faster demo)
-    T2: 80,               // ms
+    T2: 80,               // ms (used for transverse decay during alignment)
     B0: 1.5,              // Tesla
-    // Off-resonance frequency for Module A to show precession in rotating frame
-    // Set to small value (Hz) so users can see the spin rotate after RF pulse
-    singleSpinFreq: 5,    // Hz - visible precession in rotating frame
+
+    // Module B: FID
+    flipAngle: 90,        // degrees (moved from Module A)
 
     // Module B: Ensemble
-    numSpins: 50,
+    numSpins: 100,
     freqSpread: 30,       // Hz (determines T2*)
     T2ensemble: 100,      // ms (intrinsic T2)
     showIndividual: true,
 
     // Module C: Echo
+    // Defaults for visible echo formation:
+    // Spin Echo: 180° refocuses B0 inhomogeneity → echo at T2 envelope
+    // Gradient Echo: gradient reversal does NOT refocus B0 → echo at T2* envelope
+    // - TE = 60ms gives enough time to see dephasing and rephasing
+    // - T2 = 200ms (long) so SE echo amplitude is high
+    // - T2* = 30ms (short) so GRE echo is visibly lower than SE (T2* weighting)
     echoType: 'spin',     // 'spin' or 'gradient'
-    TE: 80,               // ms
-    T2echo: 120,          // ms
-    T2starEcho: 30,       // ms
+    TE: 60,               // ms
+    T2echo: 200,          // ms (long T2 for strong SE echo)
+    T2starEcho: 30,       // ms (short T2* - shows GRE vs SE difference)
 
     // Current module
     currentModule: 'A'
@@ -297,15 +302,18 @@ class SpinEnsemble {
 
     /**
      * Apply gradient to all spins
-     * Uses each spin's B0 offset as a proxy for spatial position
-     * Gradient adds additional frequency offset proportional to "position"
-     * @param {number} gradientStrength - Multiplier for gradient effect
+     * Gradient creates spatial-dependent frequency offset (independent of B0 inhomogeneity)
+     * For simulation, we create a separate gradient offset distribution
+     * @param {number} gradientStrength - Frequency spread for gradient (Hz)
      */
     applyGradient(gradientStrength = 1.0) {
-        this.spins.forEach(spin => {
-            // Use B0 inhomogeneity offset as proxy for spatial position
-            // Gradient adds additional dephasing proportional to this
-            spin.setGradient(spin.deltaOmegaB0 * gradientStrength);
+        this.spins.forEach((spin, i) => {
+            // Create gradient offset INDEPENDENT of B0 inhomogeneity
+            // Use spin index to create a spread of gradient-induced offsets
+            // This simulates spatial position along the gradient direction
+            const normalizedPos = (i / (this.numSpins - 1)) * 2 - 1; // Range: -1 to +1
+            const gradOffset = normalizedPos * this.freqSpread * gradientStrength;
+            spin.setGradient(gradOffset);
         });
     }
 
@@ -329,6 +337,20 @@ class SpinEnsemble {
      */
     clearGradient() {
         this.spins.forEach(spin => spin.setGradient(0));
+    }
+
+    /**
+     * Apply gradient with fixed frequency spread (Hz)
+     * Independent of B0 inhomogeneity settings
+     * @param {number} freqSpreadHz - Total frequency spread in Hz
+     */
+    applyGradientFixed(freqSpreadHz) {
+        this.spins.forEach((spin, i) => {
+            // Create linear gradient offset based on position
+            const normalizedPos = (i / (this.numSpins - 1)) * 2 - 1; // Range: -1 to +1
+            const gradOffset = normalizedPos * freqSpreadHz / 2; // ±freqSpreadHz/2
+            spin.setGradient(gradOffset);
+        });
     }
 
     /**
@@ -369,14 +391,46 @@ class SpinEnsemble {
     invertPhases() {
         this.spins.forEach(spin => spin.invertPhase());
     }
+
+    /**
+     * Randomize all spin orientations (B0 OFF state)
+     * Each spin points in a random direction on the unit sphere
+     */
+    randomizeOrientations() {
+        this.spins.forEach(spin => {
+            // Random point on unit sphere using spherical coordinates
+            const theta = Math.random() * 2 * Math.PI;  // azimuthal angle
+            const phi = Math.acos(2 * Math.random() - 1);  // polar angle (uniform on sphere)
+
+            spin.Mx = Math.sin(phi) * Math.cos(theta);
+            spin.My = Math.sin(phi) * Math.sin(theta);
+            spin.Mz = Math.cos(phi);
+            spin.phase = theta;
+        });
+    }
+
+    /**
+     * Get average Mz (for alignment visualization)
+     */
+    getAverageMz() {
+        let sumMz = 0;
+        this.spins.forEach(spin => {
+            sumMz += spin.Mz;
+        });
+        return sumMz / this.numSpins;
+    }
 }
 
 // ============================================================================
 // GLOBAL STATE
 // ============================================================================
 
-// Single spin with small off-resonance to show precession in rotating frame
-let singleSpin = new Spin(CONFIG.T1, CONFIG.T2, CONFIG.singleSpinFreq, CONFIG.B0);
+// Module A: Ensemble for B0 alignment animation
+let alignmentEnsemble = null;  // Created when Module A loads
+let b0IsOn = false;            // Track B0 state
+let alignmentArrows = [];      // Arrows for alignment visualization
+
+// Module B/C: Ensemble for FID and Echo simulations
 let ensemble = new SpinEnsemble(CONFIG.numSpins, CONFIG.T1, CONFIG.T2ensemble, CONFIG.freqSpread, CONFIG.B0);
 
 // Data arrays for plotting
@@ -396,15 +450,11 @@ let eventMarkers = []; // Array of { time, type, label }
 
 // Three.js globals
 let scene, camera, renderer;
-let spinArrows = [];        // Individual spin arrows (ensemble)
+let spinArrows = [];        // Individual spin arrows (ensemble for Module B/C)
 let sumArrow = null;        // Sum magnetization arrow
-let singleSpinArrow = null; // Single spin arrow (main, white)
-let helperSpinArrows = [];  // Helper spin arrows for Module A (green, following main spin)
 let b0Arrow = null;         // B0 field indicator
 let xyPlane = null;         // XY plane visualization
-
-// Number of helper spins to show in Module A
-const NUM_HELPER_SPINS = 8;
+let netMagArrowA = null;    // Net magnetization arrow for Module A
 
 // Chart.js instances
 let chartMxy, chartMz, chartSignal;
@@ -494,9 +544,6 @@ function init3D() {
     // Create axis labels
     createAxisLabels();
 
-    // Single spin arrow (for Module A)
-    createSingleSpinArrow();
-
     // Orbit controls (simple mouse drag)
     setupOrbitControls(container);
 
@@ -536,40 +583,93 @@ function createAxisLabels() {
     scene.add(createLabel("B₀", new THREE.Vector3(0, 0, 1.7), '#6666ff'));
 }
 
-function createSingleSpinArrow() {
-    // Remove existing if any
-    if (singleSpinArrow) {
-        scene.remove(singleSpinArrow);
+/**
+ * Create arrows for Module A alignment visualization
+ * Shows individual spins aligning with B0 when turned on
+ */
+function createAlignmentArrows(numSpins) {
+    // Remove existing arrows
+    alignmentArrows.forEach(arrow => scene.remove(arrow));
+    alignmentArrows = [];
+
+    if (netMagArrowA) {
+        scene.remove(netMagArrowA);
+        netMagArrowA = null;
     }
-    helperSpinArrows.forEach(arrow => scene.remove(arrow));
-    helperSpinArrows = [];
 
-    // Main spin arrow (white, larger) - represents the net magnetization
-    // ArrowHelper params: (dir, origin, length, color, headLength, headRadius)
-    const dir = new THREE.Vector3(0, 0, 1);
-    singleSpinArrow = new THREE.ArrowHelper(dir, new THREE.Vector3(0, 0, 0), 1, 0xffffff, 0.12, 0.06);
-    singleSpinArrow.name = 'singleSpin';
-    // NOTE: linewidth > 1 is not supported in WebGL on most platforms (Windows, macOS).
-    // This is a known Three.js/WebGL limitation. The line will appear thin regardless.
-    // To get thicker lines, would need to use THREE.Line2 with LineMaterial from examples.
-    singleSpinArrow.line.material.linewidth = 3;
-    scene.add(singleSpinArrow);
-
-    // Create helper spin arrows (green, smaller) - represent individual protons
-    // These all point in the same direction as the main spin in Module A
-    // (no frequency spread, so they stay coherent)
-    for (let i = 0; i < NUM_HELPER_SPINS; i++) {
-        const helperArrow = new THREE.ArrowHelper(
-            dir.clone(),
-            new THREE.Vector3(0, 0, 0),
-            0.85,
-            0x10b981,
-            0.1,
-            0.06
+    // Create individual spin arrows (green, smaller)
+    for (let i = 0; i < numSpins; i++) {
+        // Random initial direction
+        const theta = Math.random() * 2 * Math.PI;
+        const phi = Math.acos(2 * Math.random() - 1);
+        const dir = new THREE.Vector3(
+            Math.sin(phi) * Math.cos(theta),
+            Math.sin(phi) * Math.sin(theta),
+            Math.cos(phi)
         );
-        helperArrow.name = 'helperSpin';
-        helperSpinArrows.push(helperArrow);
-        scene.add(helperArrow);
+
+        const arrow = new THREE.ArrowHelper(
+            dir,
+            new THREE.Vector3(0, 0, 0),
+            0.75,
+            0x10b981,
+            0.08,
+            0.05
+        );
+        arrow.name = 'alignmentSpin';
+        alignmentArrows.push(arrow);
+        scene.add(arrow);
+    }
+
+    // Net magnetization arrow (white, larger)
+    const netDir = new THREE.Vector3(0, 0, 0.01);
+    netMagArrowA = new THREE.ArrowHelper(netDir, new THREE.Vector3(0, 0, 0), 0.01, 0xffffff, 0.12, 0.06);
+    netMagArrowA.name = 'netMagA';
+    netMagArrowA.visible = false;
+    scene.add(netMagArrowA);
+}
+
+/**
+ * Update alignment arrows to match ensemble spin orientations
+ */
+function updateAlignmentArrows() {
+    if (!alignmentEnsemble) return;
+
+    // Update individual arrows
+    alignmentEnsemble.spins.forEach((spin, i) => {
+        if (alignmentArrows[i]) {
+            const dir = new THREE.Vector3(spin.Mx, spin.My, spin.Mz);
+            const length = dir.length();
+            if (length > 0.001) {
+                dir.normalize();
+                alignmentArrows[i].setDirection(dir);
+                alignmentArrows[i].setLength(length * 0.75, 0.08, 0.05);
+            }
+        }
+    });
+
+    // Update net magnetization arrow
+    // EXAGGERATION: The true net magnetization from random spins is ~1/√N (very small)
+    // We amplify it for visibility. The direction is correct, only magnitude is scaled.
+    const sum = alignmentEnsemble.getSumMagnetization();
+    const sumDir = new THREE.Vector3(sum.Mx, sum.My, sum.Mz);
+    const sumLength = sumDir.length();
+
+    // Exaggeration factor: amplify small net magnetization for visibility
+    // True physics: random spins give |M| ~ 1/√N ≈ 0.1 for N=100
+    // We scale up by 10x to make the arrow clearly visible during alignment
+    const EXAGGERATION_FACTOR = 10.0;
+    const displayLength = Math.min(sumLength * EXAGGERATION_FACTOR, 1.0);
+
+    if (netMagArrowA) {
+        if (displayLength > 0.05) {
+            sumDir.normalize();
+            netMagArrowA.setDirection(sumDir);
+            netMagArrowA.setLength(displayLength, 0.12, 0.06);
+            netMagArrowA.visible = true;
+        } else {
+            netMagArrowA.visible = false;
+        }
     }
 }
 
@@ -610,27 +710,6 @@ function createEnsembleArrows() {
     }
 }
 
-function updateSingleSpinArrow() {
-    if (!singleSpinArrow) return;
-
-    const dir = new THREE.Vector3(singleSpin.Mx, singleSpin.My, singleSpin.Mz);
-    const length = dir.length();
-
-    if (length > 0.001) {
-        dir.normalize();
-        singleSpinArrow.setDirection(dir);
-        // Smaller arrowhead: headLength=0.12*length, headRadius=0.06*length
-        singleSpinArrow.setLength(length, 0.12 * length, 0.06 * length);
-
-        // Update helper spin arrows - all point in same direction (coherent spins)
-        // Slightly different lengths to show they're individual spins
-        helperSpinArrows.forEach((arrow) => {
-            arrow.setDirection(dir);
-            const helperLength = length * (0.75 + 0.15 * Math.random());
-            arrow.setLength(helperLength, 0.1 * helperLength, 0.06 * helperLength);
-        });
-    }
-}
 
 function updateEnsembleArrows() {
     // Update individual arrows
@@ -962,19 +1041,54 @@ function animate(timestamp) {
 }
 
 function updateModuleA(dt) {
-    // Evolve single spin
-    singleSpin.evolve(dt);
+    if (!alignmentEnsemble || !b0IsOn) return;
+
+    // When B0 is on, spins align toward +z through T1 relaxation
+    // Each spin evolves independently
+    alignmentEnsemble.spins.forEach(spin => {
+        // T1 relaxation drives Mz toward equilibrium (M0 = 1)
+        const E1 = Math.exp(-dt / spin.T1);
+        spin.Mz = spin.Mz * E1 + (1 - E1);
+
+        // Transverse components decay (but more slowly since no RF was applied)
+        // In reality, random thermal motion causes some T2-like decay
+        const E2 = Math.exp(-dt / spin.T2);
+        spin.Mx *= E2;
+        spin.My *= E2;
+
+        // Normalize the magnetization vector (keep it on unit sphere during alignment)
+        const mag = Math.sqrt(spin.Mx * spin.Mx + spin.My * spin.My + spin.Mz * spin.Mz);
+        if (mag > 0.01) {
+            spin.Mx /= mag;
+            spin.My /= mag;
+            spin.Mz /= mag;
+        }
+    });
+
+    // Get sum magnetization for plotting
+    const sum = alignmentEnsemble.getSumMagnetization();
+    const avgMz = alignmentEnsemble.getAverageMz();
 
     // Record data
     timeData.push(CONFIG.currentTime);
-    mxyData.push(singleSpin.getMxy());
-    mzData.push(singleSpin.Mz);
-    signalReData.push(singleSpin.Mx);
-    signalImData.push(singleSpin.My);
+    mxyData.push(Math.sqrt(sum.Mx * sum.Mx + sum.My * sum.My));
+    mzData.push(sum.Mz);
+    signalReData.push(sum.Mx);
+    signalImData.push(sum.My);
 
     // Update visualization
-    updateSingleSpinArrow();
-    updateVectorDisplay(singleSpin);
+    updateAlignmentArrows();
+
+    // Update alignment progress bar
+    const alignmentPercent = Math.max(0, avgMz * 100);
+    document.getElementById('alignment-fill').style.width = alignmentPercent + '%';
+    document.getElementById('net-mz').textContent = alignmentPercent.toFixed(0) + '%';
+
+    // Update vector display
+    document.getElementById('Mx-val').textContent = sum.Mx.toFixed(2);
+    document.getElementById('My-val').textContent = sum.My.toFixed(2);
+    document.getElementById('Mz-val').textContent = sum.Mz.toFixed(2);
+
     updateCharts();
 }
 
@@ -1017,18 +1131,19 @@ function updateModuleC(dt) {
             echoSequenceState = 'refocusing';
         }
     } else {
-        // Gradient Echo: gradient reversal at TE/2, restore at TE
+        // Gradient Echo: gradient reversal at TE/2, turn off at TE
         if (echoSequenceState === 'dephasing' && echoSequenceTime >= halfTE && !gradientFlipped) {
-            // Toggle gradient direction
+            // Toggle gradient direction (flip sign)
             ensemble.toggleGradient();
             gradientFlipped = true;
             // Add event marker for gradient flip
             addEventMarker(CONFIG.currentTime, 'gradient_flip', 'G flip');
             echoSequenceState = 'refocusing';
         }
-        // Restore gradient after echo (at TE)
+        // Turn off gradient at echo (TE) - readout complete
         if (echoSequenceState === 'refocusing' && echoSequenceTime >= CONFIG.TE && gradientFlipped) {
-            ensemble.restoreGradient();
+            // Clear gradient completely - only B0 inhomogeneity remains
+            ensemble.clearGradient();
             echoSequenceState = 'done';
         }
     }
@@ -1084,17 +1199,55 @@ function switchModule(module) {
 
     // Setup 3D view for module
     if (module === 'A') {
-        // Show single spin and helper spins
-        if (singleSpinArrow) singleSpinArrow.visible = true;
-        helperSpinArrows.forEach(a => a.visible = true);
+        // Initialize Module A alignment ensemble
+        initModuleA();
+        // Hide Module B/C ensemble arrows
         spinArrows.forEach(a => a.visible = false);
         if (sumArrow) sumArrow.visible = false;
     } else {
-        // Show ensemble, hide single spin and helpers
-        if (singleSpinArrow) singleSpinArrow.visible = false;
-        helperSpinArrows.forEach(a => a.visible = false);
+        // Hide Module A arrows
+        alignmentArrows.forEach(a => a.visible = false);
+        if (netMagArrowA) netMagArrowA.visible = false;
+        // Show ensemble
         createEnsembleArrows();
     }
+}
+
+/**
+ * Initialize Module A: B0 Alignment Animation
+ * Creates ensemble with random orientations to visualize effect of B0 turning on
+ */
+function initModuleA() {
+    const numSpins = parseInt(document.getElementById('num-spins-A').value);
+    const T1 = CONFIG.T1;
+    const T2 = CONFIG.T2;
+
+    // Create alignment ensemble
+    alignmentEnsemble = new SpinEnsemble(numSpins, T1, T2, 0, CONFIG.B0);
+
+    // Randomize spin orientations (B0 OFF state)
+    alignmentEnsemble.randomizeOrientations();
+    b0IsOn = false;
+
+    // Create 3D arrows
+    createAlignmentArrows(numSpins);
+
+    // Sync arrow directions with ensemble
+    alignmentEnsemble.spins.forEach((spin, i) => {
+        if (alignmentArrows[i]) {
+            const dir = new THREE.Vector3(spin.Mx, spin.My, spin.Mz);
+            alignmentArrows[i].setDirection(dir.normalize());
+        }
+    });
+
+    // Update UI
+    const sum = alignmentEnsemble.getSumMagnetization();
+    const avgMz = alignmentEnsemble.getAverageMz();
+    document.getElementById('alignment-fill').style.width = Math.max(0, avgMz * 100) + '%';
+    document.getElementById('net-mz').textContent = Math.max(0, avgMz * 100).toFixed(0) + '%';
+    document.getElementById('Mx-val').textContent = sum.Mx.toFixed(2);
+    document.getElementById('My-val').textContent = sum.My.toFixed(2);
+    document.getElementById('Mz-val').textContent = sum.Mz.toFixed(2);
 }
 
 function updateInfoPanel(module) {
@@ -1103,11 +1256,12 @@ function updateInfoPanel(module) {
 
     switch (module) {
         case 'A':
-            infoTitle.textContent = 'Module A: Bloch Equations';
+            infoTitle.textContent = 'Module A: B₀ Alignment';
             infoText.innerHTML = `
-                <strong>Arrow Direction:</strong> RF pulse rotates M from z-axis into xy-plane (flip angle α).<br>
-                <strong>Arrow Length:</strong> T2 decay shrinks Mxy; T1 recovery restores Mz toward equilibrium (M₀=1).<br>
-                <em>Green circle = transverse (xy) plane where signal is detected.</em>
+                <strong>Without B₀:</strong> Spins point in random directions (thermal equilibrium). Net M ≈ 0.<br>
+                <strong>With B₀:</strong> Spins gradually align with field through T1 relaxation. Net M grows along +z.<br>
+                <strong>T1 (spin-lattice):</strong> Time constant for alignment. Mz(t) = M₀(1 - e<sup>-t/T1</sup>)<br>
+                <em style="color: #f59e0b;">Note: White arrow length is exaggerated 10× for visibility. True |M| ~ 1/√N is very small.</em>
             `;
             break;
         case 'B':
@@ -1115,7 +1269,8 @@ function updateInfoPanel(module) {
             infoText.innerHTML = `
                 <strong>Arrow Direction (Phase):</strong> Each spin precesses at ω₀ + Δω (field inhomogeneity). Different Δω → different phases → dephasing.<br>
                 <strong>Arrow Length (Mxy):</strong> Individual Mxy decays by T2. Sum shrinks faster (T2*) due to destructive interference.<br>
-                <strong>White arrow:</strong> Vector sum of all spins = detected signal.
+                <strong>White arrow:</strong> Vector sum of all spins = detected signal.<br>
+                <em style="color: #f59e0b;">Note: In reality, net M is ~1/√N of individual spins. Here we show normalized sum for clarity.</em>
             `;
             break;
         case 'C':
@@ -1123,7 +1278,8 @@ function updateInfoPanel(module) {
             infoText.innerHTML = `
                 <strong>Spin Echo:</strong> 180° pulse flips phase (φ → -φ). Fast spins now "behind" → catch up → rephase at TE.<br>
                 <strong>Gradient Echo:</strong> Gradient reversal (G → -G) reverses Δω sign. Phase unwinding → echo at TE.<br>
-                <strong>Key difference:</strong> Spin Echo refocuses B₀ inhomogeneity (T2 weighting); Gradient Echo does not (T2* weighting).
+                <strong>Key difference:</strong> Spin Echo refocuses B₀ inhomogeneity (T2 weighting); Gradient Echo does not (T2* weighting).<br>
+                <em style="color: #f59e0b;">Note: Net M visualization is normalized for clarity. True magnitude scales as ~1/√N.</em>
             `;
             break;
     }
@@ -1163,38 +1319,75 @@ function setupEventListeners() {
     });
 
     // Module A controls
-    document.getElementById('flip-angle').addEventListener('input', (e) => {
-        CONFIG.flipAngle = parseInt(e.target.value);
-        document.getElementById('flip-angle-val').textContent = CONFIG.flipAngle + '°';
+    document.getElementById('num-spins-A').addEventListener('input', (e) => {
+        const numSpins = parseInt(e.target.value);
+        document.getElementById('num-spins-A-val').textContent = numSpins + ' spins';
+    });
+
+    document.getElementById('num-spins-A').addEventListener('change', () => {
+        if (CONFIG.currentModule === 'A') {
+            initModuleA();
+        }
     });
 
     document.getElementById('T1-val').addEventListener('input', (e) => {
         CONFIG.T1 = parseInt(e.target.value);
         document.getElementById('T1-display').textContent = CONFIG.T1 + ' ms';
-        singleSpin.T1 = CONFIG.T1;
-    });
-
-    document.getElementById('T2-val').addEventListener('input', (e) => {
-        CONFIG.T2 = parseInt(e.target.value);
-        document.getElementById('T2-display').textContent = CONFIG.T2 + ' ms';
-        singleSpin.T2 = CONFIG.T2;
+        if (alignmentEnsemble) {
+            alignmentEnsemble.setT1(CONFIG.T1);
+        }
     });
 
     document.getElementById('B0-val').addEventListener('input', (e) => {
         CONFIG.B0 = parseFloat(e.target.value);
         const freq = (GAMMA * CONFIG.B0).toFixed(1);
         document.getElementById('B0-display').textContent = `${CONFIG.B0} T (${freq} MHz)`;
-        // Update B0 for single spin and ensemble (affects precession rate scaling)
-        singleSpin.B0 = CONFIG.B0;
+        // Update B0 for alignment ensemble and FID ensemble
+        if (alignmentEnsemble) {
+            alignmentEnsemble.setB0(CONFIG.B0);
+        }
         ensemble.setB0(CONFIG.B0);
     });
 
-    document.getElementById('btn-rf-pulse').addEventListener('click', () => {
-        singleSpin.applyRFPulse(CONFIG.flipAngle, 0);
-        updateSingleSpinArrow();
-        updateVectorDisplay(singleSpin);
-        if (!CONFIG.isPlaying) {
-            CONFIG.isPlaying = true;
+    document.getElementById('btn-b0-on').addEventListener('click', () => {
+        if (!alignmentEnsemble) {
+            initModuleA();
+        }
+        // Turn B0 ON - starts alignment animation
+        b0IsOn = true;
+        CONFIG.isPlaying = true;
+        clearChartData();
+        CONFIG.currentTime = 0;
+    });
+
+    document.getElementById('btn-b0-off').addEventListener('click', () => {
+        // Turn B0 OFF - randomize spins
+        b0IsOn = false;
+        CONFIG.isPlaying = false;
+        CONFIG.currentTime = 0;
+        clearChartData();
+
+        if (alignmentEnsemble) {
+            alignmentEnsemble.randomizeOrientations();
+
+            // Sync arrow directions with ensemble
+            alignmentEnsemble.spins.forEach((spin, i) => {
+                if (alignmentArrows[i]) {
+                    const dir = new THREE.Vector3(spin.Mx, spin.My, spin.Mz);
+                    alignmentArrows[i].setDirection(dir.normalize());
+                }
+            });
+
+            // Update UI
+            const sum = alignmentEnsemble.getSumMagnetization();
+            const avgMz = alignmentEnsemble.getAverageMz();
+            document.getElementById('alignment-fill').style.width = Math.max(0, avgMz * 100) + '%';
+            document.getElementById('net-mz').textContent = Math.max(0, avgMz * 100).toFixed(0) + '%';
+            document.getElementById('Mx-val').textContent = sum.Mx.toFixed(2);
+            document.getElementById('My-val').textContent = sum.My.toFixed(2);
+            document.getElementById('Mz-val').textContent = sum.Mz.toFixed(2);
+
+            if (netMagArrowA) netMagArrowA.visible = false;
         }
     });
 
@@ -1226,9 +1419,15 @@ function setupEventListeners() {
         ensemble.setT2(CONFIG.T2ensemble);
     });
 
+    // Module B flip angle control
+    document.getElementById('flip-angle').addEventListener('input', (e) => {
+        CONFIG.flipAngle = parseInt(e.target.value);
+        document.getElementById('flip-angle-val').textContent = CONFIG.flipAngle + '°';
+    });
+
     document.getElementById('btn-excite').addEventListener('click', () => {
         resetSimulation();
-        ensemble.applyRFPulse(90, 0);
+        ensemble.applyRFPulse(CONFIG.flipAngle, 0);
         updateEnsembleArrows();
         CONFIG.isPlaying = true;
     });
@@ -1241,6 +1440,7 @@ function setupEventListeners() {
     // Module C controls
     document.getElementById('echo-type').addEventListener('change', (e) => {
         CONFIG.echoType = e.target.value;
+        updateT2starSliderForEchoType();
     });
 
     document.getElementById('TE-val').addEventListener('input', (e) => {
@@ -1258,7 +1458,27 @@ function setupEventListeners() {
         document.getElementById('T2star-echo-val').textContent = CONFIG.T2starEcho + ' ms';
     });
 
+    document.getElementById('num-spins-C').addEventListener('input', (e) => {
+        const numSpins = parseInt(e.target.value);
+        document.getElementById('num-spins-C-val').textContent = numSpins + ' spins';
+        CONFIG.numSpins = numSpins;
+    });
+
     document.getElementById('btn-run-sequence').addEventListener('click', runEchoSequence);
+}
+
+/**
+ * Update T2* slider based on echo type selection
+ */
+function updateT2starSliderForEchoType() {
+    const slider = document.getElementById('T2star-echo');
+    const display = document.getElementById('T2star-echo-val');
+
+    if (CONFIG.echoType === 'gradient') {
+        slider.value = 100;
+        CONFIG.T2starEcho = 100;
+        display.textContent = '100 ms';
+    }
 }
 
 function resetSimulation() {
@@ -1273,7 +1493,6 @@ function resetSimulation() {
     clearChartData();
 
     // Reset spins
-    singleSpin.reset();
     ensemble.reset();
 
     // Reset echo state
@@ -1281,12 +1500,21 @@ function resetSimulation() {
     echoSequenceTime = 0;
     gradientFlipped = false;
 
+    // Reset B0 state for Module A
+    b0IsOn = false;
+
     // Update UI
     document.getElementById('time-val').textContent = '0.00 ms';
-    updateVectorDisplay(singleSpin);
 
     if (CONFIG.currentModule === 'A') {
-        updateSingleSpinArrow();
+        // Module A resets are handled by initModuleA()
+        // Don't auto-reinitialize here to preserve user's choice
+        if (alignmentEnsemble) {
+            const sum = alignmentEnsemble.getSumMagnetization();
+            document.getElementById('Mx-val').textContent = sum.Mx.toFixed(2);
+            document.getElementById('My-val').textContent = sum.My.toFixed(2);
+            document.getElementById('Mz-val').textContent = sum.Mz.toFixed(2);
+        }
     } else {
         updateEnsembleArrows();
         document.getElementById('coherent-count').textContent = '0%';
@@ -1296,8 +1524,9 @@ function resetSimulation() {
 function runEchoSequence() {
     resetSimulation();
 
-    // Create ensemble with T2* based on freq spread
-    // T2* ≈ 1/(π * freqSpread) in seconds
+    // T2* determines B0 inhomogeneity spread
+    // SE: user's T2* setting (will be refocused by 180°)
+    // GRE: slider auto-set to 100ms for visible echo
     const T2star = CONFIG.T2starEcho;
     const freqSpread = 1000 / (Math.PI * T2star); // Convert T2* to freq spread
 
@@ -1308,12 +1537,12 @@ function runEchoSequence() {
     ensemble.applyRFPulse(90, 0);
     addEventMarker(0, 'rf90', '90°');
 
-    // For Gradient Echo, apply gradient that adds to dephasing
-    // This gradient can be refocused (unlike B0 inhomogeneity)
+    // For Gradient Echo, apply gradient for controlled dephasing/rephasing
+    // Gradient causes fast dephasing that IS refocused
+    // B0 inhomogeneity causes slow decay that is NOT refocused
     if (CONFIG.echoType === 'gradient') {
-        // Apply gradient: adds frequency offset proportional to B0 inhomogeneity
-        // This creates faster dephasing that CAN be refocused
-        ensemble.applyGradient(1.0);
+        // Strong gradient (100 Hz) for rapid, visible dephasing
+        ensemble.applyGradientFixed(100);
     }
 
     // Add echo marker at TE

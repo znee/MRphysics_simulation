@@ -59,29 +59,35 @@
                     </div>
                 </div>
 
-                <!-- Module A: Single Spin Controls -->
+                <!-- Module A: Spin Alignment - B0 Turn-On -->
                 <div class="control-group module-controls" id="controls-A">
-                    <h2>Single Spin Parameters</h2>
+                    <h2>Spin Alignment (B0 Effect)</h2>
 
-                    <label for="flip-angle">Flip Angle (\(\alpha\))</label>
-                    <input type="range" id="flip-angle" min="0" max="180" step="5" value="90">
-                    <span id="flip-angle-val">90°</span>
+                    <label for="num-spins-A">Number of Spins</label>
+                    <input type="range" id="num-spins-A" min="10" max="200" step="10" value="100">
+                    <span id="num-spins-A-val">100 spins</span>
 
                     <label for="T1-val">T1 Relaxation (ms)</label>
                     <input type="range" id="T1-val" min="100" max="2000" step="50" value="500">
                     <span id="T1-display">500 ms</span>
 
-                    <label for="T2-val">T2 Relaxation (ms)</label>
-                    <input type="range" id="T2-val" min="10" max="300" step="10" value="80">
-                    <span id="T2-display">80 ms</span>
-
                     <label for="B0-val">B0 Field (T)</label>
                     <input type="range" id="B0-val" min="0.5" max="7" step="0.5" value="1.5">
                     <span id="B0-display">1.5 T (63.9 MHz)</span>
 
-                    <button class="btn primary" id="btn-rf-pulse" style="width: 100%; margin-top: 15px;">
-                        Apply RF Pulse
+                    <button class="btn primary" id="btn-b0-on" style="width: 100%; margin-top: 15px;">
+                        Turn B0 ON
                     </button>
+                    <button class="btn secondary" id="btn-b0-off" style="width: 100%; margin-top: 8px;">
+                        Turn B0 OFF (Randomize)
+                    </button>
+
+                    <div class="alignment-display">
+                        <div class="alignment-bar">
+                            <div class="alignment-fill" id="alignment-fill" style="width: 0%;"></div>
+                        </div>
+                        <span class="alignment-label">Net Magnetization: <span id="net-mz">0%</span></span>
+                    </div>
 
                     <div class="vector-display">
                         <div class="vector-component x">
@@ -94,18 +100,22 @@
                         </div>
                         <div class="vector-component z">
                             <div class="axis">Mz</div>
-                            <div class="value" id="Mz-val">1.00</div>
+                            <div class="value" id="Mz-val">0.00</div>
                         </div>
                     </div>
                 </div>
 
-                <!-- Module B: Multi-Spin Controls -->
+                <!-- Module B: FID - RF Excitation & Dephasing -->
                 <div class="control-group module-controls" id="controls-B" style="display: none;">
-                    <h2>Spin Ensemble Parameters</h2>
+                    <h2>FID Parameters</h2>
+
+                    <label for="flip-angle">Flip Angle (α)</label>
+                    <input type="range" id="flip-angle" min="10" max="180" step="5" value="90">
+                    <span id="flip-angle-val">90°</span>
 
                     <label for="num-spins">Number of Spins</label>
-                    <input type="range" id="num-spins" min="10" max="200" step="10" value="50">
-                    <span id="num-spins-val">50 spins</span>
+                    <input type="range" id="num-spins" min="10" max="200" step="10" value="100">
+                    <span id="num-spins-val">100 spins</span>
 
                     <label for="freq-spread">Frequency Spread (Hz) - T2*</label>
                     <input type="range" id="freq-spread" min="0" max="100" step="5" value="30">
@@ -116,7 +126,7 @@
                     <span id="T2-ensemble-val">100 ms</span>
 
                     <button class="btn primary" id="btn-excite" style="width: 100%; margin-top: 15px;">
-                        90° Excitation
+                        Apply RF Pulse
                     </button>
 
                     <label style="margin-top: 15px;">
@@ -140,13 +150,17 @@
                         <option value="gradient">Gradient Echo</option>
                     </select>
 
+                    <label for="num-spins-C">Number of Spins</label>
+                    <input type="range" id="num-spins-C" min="10" max="200" step="10" value="100">
+                    <span id="num-spins-C-val">100 spins</span>
+
                     <label for="TE-val">Echo Time TE (ms)</label>
-                    <input type="range" id="TE-val" min="20" max="300" step="10" value="80">
-                    <span id="TE-display">80 ms</span>
+                    <input type="range" id="TE-val" min="20" max="200" step="5" value="60">
+                    <span id="TE-display">60 ms</span>
 
                     <label for="T2-echo">T2 (ms)</label>
-                    <input type="range" id="T2-echo" min="50" max="300" step="10" value="120">
-                    <span id="T2-echo-val">120 ms</span>
+                    <input type="range" id="T2-echo" min="50" max="500" step="10" value="200">
+                    <span id="T2-echo-val">200 ms</span>
 
                     <label for="T2star-echo">T2* (ms)</label>
                     <input type="range" id="T2star-echo" min="10" max="100" step="5" value="30">
