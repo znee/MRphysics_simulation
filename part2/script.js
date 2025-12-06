@@ -649,7 +649,7 @@ function updateResolutionInfo() {
 
     // Show coverage as area percentage
     if (isHigherRes) {
-        document.getElementById('kspaceCoverageVal').innerText = '100% (+ interp.)';
+        document.getElementById('kspaceCoverageVal').innerText = '100% (extended)';
     } else {
         document.getElementById('kspaceCoverageVal').innerText = kspaceCoverageArea.toFixed(1) + '%';
     }
@@ -854,23 +854,23 @@ function renderKSpace() {
         phaseCtx.lineWidth = 1;
         phaseCtx.strokeRect(1, 1, N - 2, N - 2);
     } else {
-        // Zero-padding: show full boundary with indicator
-        magCtx.strokeStyle = 'rgba(74, 222, 128, 0.8)'; // Green for zero-pad
+        // Higher resolution: show full boundary with indicator
+        magCtx.strokeStyle = 'rgba(248, 113, 113, 0.8)'; // Red for high res (lower SNR)
         magCtx.lineWidth = 2;
         magCtx.setLineDash([3, 3]);
         magCtx.strokeRect(1, 1, N - 2, N - 2);
         magCtx.setLineDash([]);
 
-        // Add zero-pad label
-        magCtx.fillStyle = 'rgba(74, 222, 128, 0.9)';
+        // Add high resolution label
+        magCtx.fillStyle = 'rgba(248, 113, 113, 0.9)';
         magCtx.font = '10px Inter';
         magCtx.shadowColor = 'black';
         magCtx.shadowBlur = 2;
-        magCtx.fillText('Zero-pad → ' + matrixSize + '×' + matrixSize, 5, 12);
+        magCtx.fillText('High Res: ' + matrixSize + '×' + matrixSize, 5, 12);
         magCtx.shadowBlur = 0;
 
         // Also draw on phase canvas
-        phaseCtx.strokeStyle = 'rgba(74, 222, 128, 0.8)';
+        phaseCtx.strokeStyle = 'rgba(248, 113, 113, 0.8)';
         phaseCtx.lineWidth = 2;
         phaseCtx.setLineDash([3, 3]);
         phaseCtx.strokeRect(1, 1, N - 2, N - 2);

@@ -51,28 +51,6 @@ class MRPhysics {
         });
     }
 
-    applyPreset(type) {
-        if (type === 'T1') {
-            this.params.sequence = 'SE';
-            this.params.tr = 500;
-            this.params.te = 20;
-        } else if (type === 'T2') {
-            this.params.sequence = 'SE';
-            this.params.tr = 3000;
-            this.params.te = 100;
-        } else if (type === 'PD') {
-            this.params.sequence = 'SE';
-            this.params.tr = 3000;
-            this.params.te = 20;
-        }
-
-        // Update UI
-        document.getElementById('sequenceType').value = this.params.sequence;
-        this.renderParams();
-        this.updateSimulation();
-        this.updateInhomogeneityVisibility();
-    }
-
     makeDraggable() {
         const overlay = document.getElementById('equation-overlay');
         let isDragging = false;
@@ -288,12 +266,12 @@ class MRPhysics {
         container.appendChild(createInput('te', 'TE (ms)', this.params.te, 1, 300, 1));
 
         if (this.params.sequence === 'IR') {
-            container.appendChild(createInput('ti', 'TI (ms)', this.params.ti || 150, 10, 2000, 10));
+            container.appendChild(createInput('ti', 'TI (ms)', this.params.ti || 150, 10, 2500, 10));
             this.params.ti = this.params.ti || 150;
         }
 
-        // FA applies to all sequences now (SE, GRE, IR)
-        if (this.params.sequence === 'GRE' || this.params.sequence === 'SE' || this.params.sequence === 'IR') {
+        // FA only applies to GRE and IR (SE uses fixed 90°/180° pulses)
+        if (this.params.sequence === 'GRE' || this.params.sequence === 'IR') {
             container.appendChild(createInput('fa', 'Flip Angle (°)', this.params.fa || 90, 1, 180, 1));
             this.params.fa = this.params.fa || 90;
         }
