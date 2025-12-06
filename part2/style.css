@@ -98,7 +98,7 @@ h1 {
 }
 
 .column-group .panel {
-    flex: 1;
+    flex: 0 1 auto;
     min-height: 0;
     /* Allow shrinking */
 }
@@ -126,7 +126,6 @@ h2 {
 }
 
 .canvas-container {
-    flex: 1;
     display: flex;
     justify-content: center;
     align-items: center;
@@ -134,7 +133,8 @@ h2 {
     border-radius: 6px;
     position: relative;
     overflow: hidden;
-    min-height: 0;
+    /* Use width-based aspect ratio to prevent vertical stretching */
+    width: 100%;
     aspect-ratio: 1 / 1;
 }
 
