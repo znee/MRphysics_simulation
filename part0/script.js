@@ -506,9 +506,12 @@ function createSingleSpinArrow() {
     helperSpinArrows = [];
 
     // Main spin arrow (white, larger) - represents the net magnetization
+    // ArrowHelper params: (dir, origin, length, color, headLength, headRadius)
     const dir = new THREE.Vector3(0, 0, 1);
-    singleSpinArrow = new THREE.ArrowHelper(dir, new THREE.Vector3(0, 0, 0), 1, 0xffffff, 0.2, 0.12);
+    singleSpinArrow = new THREE.ArrowHelper(dir, new THREE.Vector3(0, 0, 0), 1, 0xffffff, 0.12, 0.06);
     singleSpinArrow.name = 'singleSpin';
+    // Make stem thicker by setting line width (note: may not work on all platforms)
+    singleSpinArrow.line.material.linewidth = 3;
     scene.add(singleSpinArrow);
 
     // Create helper spin arrows (green, smaller) - represent individual protons
@@ -559,7 +562,9 @@ function createEnsembleArrows() {
     const sumLength = sumDir.length();
     if (sumLength > 0.01) {
         sumDir.normalize();
-        sumArrow = new THREE.ArrowHelper(sumDir, new THREE.Vector3(0, 0, 0), sumLength, 0xffffff, 0.2, 0.12);
+        // Smaller arrowhead (headLength=0.12, headRadius=0.06)
+        sumArrow = new THREE.ArrowHelper(sumDir, new THREE.Vector3(0, 0, 0), sumLength, 0xffffff, 0.12, 0.06);
+        sumArrow.line.material.linewidth = 3;
         scene.add(sumArrow);
     }
 }
@@ -573,7 +578,8 @@ function updateSingleSpinArrow() {
     if (length > 0.001) {
         dir.normalize();
         singleSpinArrow.setDirection(dir);
-        singleSpinArrow.setLength(length, 0.2 * length, 0.12 * length);
+        // Smaller arrowhead: headLength=0.12*length, headRadius=0.06*length
+        singleSpinArrow.setLength(length, 0.12 * length, 0.06 * length);
 
         // Update helper spin arrows - all point in same direction (coherent spins)
         // Slightly different lengths to show they're individual spins
@@ -609,7 +615,8 @@ function updateEnsembleArrows() {
         if (sumLength > 0.01) {
             sumDir.normalize();
             sumArrow.setDirection(sumDir);
-            sumArrow.setLength(sumLength, 0.2, 0.12);
+            // Smaller arrowhead
+            sumArrow.setLength(sumLength, 0.12, 0.06);
             sumArrow.visible = true;
         } else {
             sumArrow.visible = false;
