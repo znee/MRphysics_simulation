@@ -210,15 +210,15 @@ body {
     flex: 1;
 }
 
-/* Module Tabs */
+/* Module Tabs - 2x2 grid layout */
 .module-tabs {
-    display: flex;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
     gap: 5px;
     margin-bottom: 10px;
 }
 
 .module-tab {
-    flex: 1;
     padding: 8px;
     background: rgba(255, 255, 255, 0.05);
     border: 1px solid var(--border-color);
