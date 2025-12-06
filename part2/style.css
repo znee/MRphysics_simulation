@@ -27,7 +27,7 @@ body {
 .app-container {
     max-width: 1400px;
     margin: 0 auto;
-    padding: 20px;
+    padding: 12px 20px;
     width: 100%;
     height: 100%;
     display: flex;
@@ -35,7 +35,7 @@ body {
 }
 
 header {
-    margin-bottom: 20px;
+    margin-bottom: 10px;
 }
 
 .header-row {
@@ -84,7 +84,7 @@ h1 {
 .visualization-grid {
     display: grid;
     grid-template-columns: 1fr 1fr 300px;
-    gap: 20px;
+    gap: 12px;
     flex: 1;
     min-height: 0;
     /* Prevent overflow issues */
@@ -93,7 +93,7 @@ h1 {
 .column-group {
     display: flex;
     flex-direction: column;
-    gap: 20px;
+    gap: 12px;
 }
 
 .column-group .panel {
@@ -104,8 +104,8 @@ h1 {
 
 .panel {
     background-color: var(--panel-bg);
-    border-radius: 12px;
-    padding: 20px;
+    border-radius: 10px;
+    padding: 12px;
     border: 1px solid var(--border-color);
     display: flex;
     flex-direction: column;
@@ -115,11 +115,11 @@ h1 {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: 15px;
+    margin-bottom: 8px;
 }
 
 h2 {
-    font-size: 1.2rem;
+    font-size: 1rem;
     font-weight: 500;
     color: var(--accent-color);
 }
@@ -130,10 +130,11 @@ h2 {
     justify-content: center;
     align-items: center;
     background-color: #000;
-    border-radius: 8px;
+    border-radius: 6px;
     position: relative;
     overflow: hidden;
-    min-height: 300px;
+    min-height: 0;
+    aspect-ratio: 1 / 1;
 }
 
 canvas {
@@ -191,8 +192,8 @@ canvas {
 }
 
 .control-group {
-    margin-bottom: 20px;
-    padding-bottom: 15px;
+    margin-bottom: 12px;
+    padding-bottom: 10px;
     border-bottom: 1px solid var(--border-color);
 }
 
@@ -201,23 +202,28 @@ canvas {
 }
 
 .control-group h3 {
-    font-size: 0.9rem;
+    font-size: 0.8rem;
     text-transform: uppercase;
     letter-spacing: 0.05em;
     color: var(--text-secondary);
-    margin-bottom: 10px;
+    margin-bottom: 6px;
+}
+
+.control-group label {
+    font-size: 0.85rem;
 }
 
 button {
     display: block;
     width: 100%;
-    padding: 10px;
-    margin-bottom: 8px;
+    padding: 8px;
+    margin-bottom: 6px;
     background-color: var(--accent-color);
     color: #0f172a;
     border: none;
-    border-radius: 6px;
+    border-radius: 5px;
     font-weight: 600;
+    font-size: 0.85rem;
     cursor: pointer;
     transition: background-color 0.2s;
 }
@@ -228,41 +234,44 @@ button:hover {
 
 select {
     width: 100%;
-    padding: 8px;
+    padding: 6px;
     background-color: var(--bg-color);
     color: var(--text-primary);
     border: 1px solid var(--border-color);
-    border-radius: 6px;
+    border-radius: 5px;
+    font-size: 0.85rem;
 }
 
 input[type="range"] {
     width: 100%;
-    margin-top: 5px;
+    margin-top: 4px;
 }
 
 .info-box {
     background-color: rgba(56, 189, 248, 0.1);
-    padding: 10px;
-    border-radius: 6px;
+    padding: 8px;
+    border-radius: 5px;
     border-left: 3px solid var(--accent-color);
+    margin-top: 8px;
 }
 
 .info-box h3 {
     color: var(--accent-color);
-    margin-bottom: 5px;
+    margin-bottom: 4px;
+    font-size: 0.8rem;
 }
 
 /* Resolution & SNR Info Panel */
 .resolution-group h3 {
     color: var(--accent-color);
-    margin-bottom: 12px;
+    margin-bottom: 8px;
 }
 
 .resolution-info {
     background-color: rgba(56, 189, 248, 0.08);
-    padding: 12px;
-    border-radius: 8px;
-    margin-top: 12px;
+    padding: 8px;
+    border-radius: 6px;
+    margin-top: 8px;
     border: 1px solid rgba(56, 189, 248, 0.2);
 }
 
@@ -270,7 +279,7 @@ input[type="range"] {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 6px 0;
+    padding: 3px 0;
     border-bottom: 1px solid rgba(255, 255, 255, 0.05);
 }
 
@@ -280,20 +289,20 @@ input[type="range"] {
 
 .resolution-info .info-label {
     color: var(--text-secondary);
-    font-size: 0.85rem;
+    font-size: 0.75rem;
 }
 
 .resolution-info .info-value {
     color: var(--accent-color);
     font-weight: 600;
-    font-size: 0.95rem;
+    font-size: 0.85rem;
 }
 
 .snr-bar-container {
-    margin-top: 10px;
-    height: 8px;
+    margin-top: 6px;
+    height: 6px;
     background-color: rgba(255, 255, 255, 0.1);
-    border-radius: 4px;
+    border-radius: 3px;
     overflow: hidden;
 }
 
@@ -301,29 +310,29 @@ input[type="range"] {
     height: 100%;
     width: 50%;
     background-color: rgba(56, 189, 248, 0.8);
-    border-radius: 4px;
+    border-radius: 3px;
     transition: width 0.3s ease, background-color 0.3s ease;
 }
 
 /* Explanation Box */
 .explanation-box {
-    margin-top: 15px;
+    margin-top: 8px;
     background-color: rgba(148, 163, 184, 0.08);
     border-left-color: var(--text-secondary);
 }
 
 .explanation-box h3 {
     color: var(--text-secondary);
-    font-size: 0.85rem;
+    font-size: 0.75rem;
     text-transform: uppercase;
     letter-spacing: 0.05em;
 }
 
 .explanation-text {
-    font-size: 0.8rem;
+    font-size: 0.7rem;
     color: var(--text-secondary);
-    line-height: 1.5;
-    margin-bottom: 8px;
+    line-height: 1.4;
+    margin-bottom: 4px;
 }
 
 .explanation-text:last-child {
