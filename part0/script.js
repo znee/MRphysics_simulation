@@ -32,6 +32,9 @@ const CONFIG = {
     T1: 500,              // ms (shorter for faster demo)
     T2: 80,               // ms
     B0: 1.5,              // Tesla
+    // Off-resonance frequency for Module A to show precession in rotating frame
+    // Set to small value (Hz) so users can see the spin rotate after RF pulse
+    singleSpinFreq: 5,    // Hz - visible precession in rotating frame
 
     // Module B: Ensemble
     numSpins: 50,
@@ -64,19 +67,27 @@ class Spin {
         this.T1 = T1;
         this.T2 = T2;
 
-        // Base frequency offset from Larmor (Hz) - for T2* effects
-        // This is the "intrinsic" offset due to field inhomogeneity
-        this.baseDeltaOmega = deltaOmega;
-        this.deltaOmega = deltaOmega;
+        // B0 inhomogeneity offset (Hz) - causes T2* decay
+        // This is FIXED and NOT refocused by gradient reversal
+        this.deltaOmegaB0 = deltaOmega;
 
-        // B0 field strength (Tesla) - affects Larmor frequency
+        // Gradient-induced frequency offset (Hz)
+        // This IS refocused by gradient reversal (sign flip)
+        this.deltaOmegaGrad = 0;
+        this.gradientSign = 1;
+
+        // B0 field strength (Tesla)
         this.B0 = B0;
 
         // Phase accumulation
         this.phase = 0;
+    }
 
-        // Gradient state (for gradient echo)
-        this.gradientSign = 1;
+    /**
+     * Get total frequency offset (B0 inhomogeneity + gradient)
+     */
+    getTotalDeltaOmega() {
+        return this.deltaOmegaB0 + (this.deltaOmegaGrad * this.gradientSign);
     }
 
     /**
@@ -126,13 +137,10 @@ class Spin {
         // Convert dt to seconds for calculation
         const dtSec = dt / 1000;
 
-        // Precession due to frequency offset (in rotating frame)
-        // deltaOmega represents field inhomogeneity in Hz at reference B0 (1.5T)
-        // Scale with B0: higher field = larger frequency spread (linear with B0)
-        // This simulates how field inhomogeneity effects scale with main field
-        const B0scale = this.B0 / 1.5; // Scale relative to 1.5T reference
-        const effectiveDeltaOmega = this.deltaOmega * B0scale;
-        const dPhi = 2 * Math.PI * effectiveDeltaOmega * dtSec;
+        // Precession due to total frequency offset (B0 inhomogeneity + gradient)
+        // Both components contribute to phase accumulation
+        const totalDeltaOmega = this.getTotalDeltaOmega();
+        const dPhi = 2 * Math.PI * totalDeltaOmega * dtSec;
         this.phase += dPhi;
 
         // Rotation due to off-resonance
@@ -166,20 +174,21 @@ class Spin {
     }
 
     /**
-     * Reset to equilibrium (preserves base frequency offset)
+     * Reset to equilibrium
      */
     reset() {
         this.Mx = 0;
         this.My = 0;
         this.Mz = 1.0;
         this.phase = 0;
-        // Restore original frequency offset
-        this.deltaOmega = this.baseDeltaOmega;
+        // Reset gradient state but keep B0 inhomogeneity
+        this.deltaOmegaGrad = 0;
         this.gradientSign = 1;
     }
 
     /**
      * Invert phase (180° pulse effect on phase)
+     * Used for spin echo - inverts ALL accumulated phase
      */
     invertPhase() {
         this.phase = -this.phase;
@@ -192,11 +201,19 @@ class Spin {
     }
 
     /**
-     * Toggle gradient direction (for gradient echo)
+     * Set gradient frequency offset (Hz)
+     * For gradient echo, this creates additional dephasing that can be refocused
+     */
+    setGradient(gradFreq) {
+        this.deltaOmegaGrad = gradFreq;
+    }
+
+    /**
+     * Toggle gradient direction (for gradient echo refocusing)
+     * ONLY affects gradient-induced offset, NOT B0 inhomogeneity
      */
     toggleGradient() {
         this.gradientSign *= -1;
-        this.deltaOmega = this.baseDeltaOmega * this.gradientSign;
     }
 
     /**
@@ -204,7 +221,6 @@ class Spin {
      */
     restoreGradient() {
         this.gradientSign = 1;
-        this.deltaOmega = this.baseDeltaOmega;
     }
 }
 
@@ -280,17 +296,39 @@ class SpinEnsemble {
     }
 
     /**
-     * Toggle gradient for all spins
+     * Apply gradient to all spins
+     * Uses each spin's B0 offset as a proxy for spatial position
+     * Gradient adds additional frequency offset proportional to "position"
+     * @param {number} gradientStrength - Multiplier for gradient effect
+     */
+    applyGradient(gradientStrength = 1.0) {
+        this.spins.forEach(spin => {
+            // Use B0 inhomogeneity offset as proxy for spatial position
+            // Gradient adds additional dephasing proportional to this
+            spin.setGradient(spin.deltaOmegaB0 * gradientStrength);
+        });
+    }
+
+    /**
+     * Toggle gradient direction for all spins (for GRE refocusing)
+     * Only affects gradient-induced offset, NOT B0 inhomogeneity
      */
     toggleGradient() {
         this.spins.forEach(spin => spin.toggleGradient());
     }
 
     /**
-     * Restore gradient for all spins
+     * Restore gradient to original direction for all spins
      */
     restoreGradient() {
         this.spins.forEach(spin => spin.restoreGradient());
+    }
+
+    /**
+     * Clear gradient offset (back to pure B0 inhomogeneity)
+     */
+    clearGradient() {
+        this.spins.forEach(spin => spin.setGradient(0));
     }
 
     /**
@@ -337,7 +375,8 @@ class SpinEnsemble {
 // GLOBAL STATE
 // ============================================================================
 
-let singleSpin = new Spin(CONFIG.T1, CONFIG.T2, 0, CONFIG.B0);
+// Single spin with small off-resonance to show precession in rotating frame
+let singleSpin = new Spin(CONFIG.T1, CONFIG.T2, CONFIG.singleSpinFreq, CONFIG.B0);
 let ensemble = new SpinEnsemble(CONFIG.numSpins, CONFIG.T1, CONFIG.T2ensemble, CONFIG.freqSpread, CONFIG.B0);
 
 // Data arrays for plotting
@@ -510,7 +549,9 @@ function createSingleSpinArrow() {
     const dir = new THREE.Vector3(0, 0, 1);
     singleSpinArrow = new THREE.ArrowHelper(dir, new THREE.Vector3(0, 0, 0), 1, 0xffffff, 0.12, 0.06);
     singleSpinArrow.name = 'singleSpin';
-    // Make stem thicker by setting line width (note: may not work on all platforms)
+    // NOTE: linewidth > 1 is not supported in WebGL on most platforms (Windows, macOS).
+    // This is a known Three.js/WebGL limitation. The line will appear thin regardless.
+    // To get thicker lines, would need to use THREE.Line2 with LineMaterial from examples.
     singleSpinArrow.line.material.linewidth = 3;
     scene.add(singleSpinArrow);
 
@@ -1266,6 +1307,14 @@ function runEchoSequence() {
     // Apply initial 90° pulse and add marker
     ensemble.applyRFPulse(90, 0);
     addEventMarker(0, 'rf90', '90°');
+
+    // For Gradient Echo, apply gradient that adds to dephasing
+    // This gradient can be refocused (unlike B0 inhomogeneity)
+    if (CONFIG.echoType === 'gradient') {
+        // Apply gradient: adds frequency offset proportional to B0 inhomogeneity
+        // This creates faster dephasing that CAN be refocused
+        ensemble.applyGradient(1.0);
+    }
 
     // Add echo marker at TE
     addEventMarker(CONFIG.TE, 'echo', 'Echo');
