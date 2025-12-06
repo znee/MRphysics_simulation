@@ -621,57 +621,66 @@ function updateResolutionInfo() {
     // Base resolution is N (256), matrixSize can be 32-512
     const isZeroPadding = matrixSize > N;
 
-    // Pixel size ratio relative to native 256x256
-    // Smaller matrix = larger pixels, larger matrix = smaller pixels
-    const pixelSizeRatio = N / matrixSize;
+    // Actual acquired matrix is clamped to N (we can't acquire more k-space than exists)
+    const acquiredMatrix = Math.min(matrixSize, N);
 
-    // K-space coverage: for display purposes
-    // < 256: truncated k-space
-    // = 256: native resolution
-    // > 256: zero-padded (simulating higher resolution acquisition)
-    const kspaceCoverage = Math.min(100, (matrixSize / N) * 100);
+    // Pixel size ratio - based on ACQUIRED resolution, not requested
+    // Zero-padding doesn't create smaller pixels, just interpolates between existing ones
+    const actualPixelRatio = N / acquiredMatrix;
+
+    // K-space coverage: percentage of k-space AREA sampled
+    // Since we truncate both axes, coverage = (acquiredMatrix/N)^2
+    // e.g., 128x128 keeps (128/256)^2 = 25% of k-space samples
+    // e.g., 64x64 keeps (64/256)^2 = 6.25% of k-space samples
+    const kspaceCoverageArea = (acquiredMatrix / N) * (acquiredMatrix / N) * 100;
 
     // SNR relationship for 2D imaging with constant FOV:
     // Signal per voxel ∝ voxel_area = (pixel_size)^2
     // Noise per voxel is constant (thermal noise in receiver)
-    // Therefore: SNR ∝ (pixel_size)^2 = (N/matrixSize)^2
+    // Therefore: SNR ∝ (pixel_size)^2 = (N/acquiredMatrix)^2
     //
-    // Lower resolution (32x32): 8x pixels → 64x SNR
+    // Lower resolution (64x64): 4x pixels → 16x SNR
     // Native resolution (256x256): 1x pixels → 1x SNR
-    // Higher resolution (512x512): 0.5x pixels → 0.25x SNR
+    // Zero-padding (512x512): still 1x pixels → 1x SNR (no real improvement)
     //
-    // This is the fundamental resolution-SNR tradeoff in MRI!
-    const relativeSNR = pixelSizeRatio * pixelSizeRatio;
+    // Note: Zero-padding is interpolation only - it doesn't improve SNR
+    const relativeSNR = actualPixelRatio * actualPixelRatio;
 
     document.getElementById('matrixSizeVal').innerText = matrixSize;
     document.getElementById('matrixSizeVal2').innerText = matrixSize;
-    document.getElementById('pixelSizeVal').innerText = pixelSizeRatio.toFixed(2) + 'x';
 
-    // Show coverage
+    // Show actual pixel size (what's really acquired)
     if (isZeroPadding) {
-        document.getElementById('kspaceCoverageVal').innerText = '100% + extended';
+        document.getElementById('pixelSizeVal').innerText = '1.00x (interp.)';
     } else {
-        document.getElementById('kspaceCoverageVal').innerText = kspaceCoverage.toFixed(0) + '%';
+        document.getElementById('pixelSizeVal').innerText = actualPixelRatio.toFixed(2) + 'x';
+    }
+
+    // Show coverage as area percentage
+    if (isZeroPadding) {
+        document.getElementById('kspaceCoverageVal').innerText = '100% + zero-pad';
+    } else {
+        document.getElementById('kspaceCoverageVal').innerText = kspaceCoverageArea.toFixed(1) + '%';
     }
 
     document.getElementById('snrVal').innerText = relativeSNR.toFixed(2);
 
     // Update SNR bar visualization
-    // Map SNR from range 0.25 (512 matrix) to 64 (32 matrix) to bar width
-    // Use log scale: log2(SNR) maps 0.25->-2, 1->0, 64->6
+    // Map SNR from range 1 (256 matrix) to 64 (32 matrix) to bar width
+    // Use log scale: log2(SNR) maps 1->0, 4->2, 16->4, 64->6
     // Normalize to 0-100% range
     const logSNR = Math.log2(relativeSNR);
-    const snrBarWidth = Math.min(100, Math.max(5, ((logSNR + 2) / 8) * 100));
+    const snrBarWidth = Math.min(100, Math.max(10, (logSNR / 6) * 100 + 16));
     const snrBar = document.getElementById('snrBar');
     snrBar.style.width = snrBarWidth + '%';
 
-    // Color code: green for high SNR, cyan for baseline, red for low
-    if (relativeSNR >= 2) {
+    // Color code: green for high SNR, cyan for baseline, yellow/red for low
+    if (relativeSNR >= 4) {
         snrBar.style.backgroundColor = 'rgba(74, 222, 128, 0.8)'; // Green - high SNR
-    } else if (relativeSNR >= 0.5) {
+    } else if (relativeSNR >= 1) {
         snrBar.style.backgroundColor = 'rgba(56, 189, 248, 0.8)'; // Cyan - baseline
     } else {
-        snrBar.style.backgroundColor = 'rgba(248, 113, 113, 0.8)'; // Red - low SNR
+        snrBar.style.backgroundColor = 'rgba(248, 113, 113, 0.8)'; // Red - low SNR (shouldn't happen now)
     }
 }
 
@@ -679,18 +688,20 @@ function updateResolutionInfo() {
 function getEffectiveNoiseLevel() {
     if (!simulateSNR) return noiseLevel;
 
+    // Actual acquired matrix is clamped to N
+    const acquiredMatrix = Math.min(matrixSize, N);
+
     // When simulating SNR, noise scales inversely with voxel area
-    // SNR ∝ (pixel_size)^2, so noise ∝ 1/(pixel_size)^2 = (matrixSize/N)^2
-    const pixelSizeRatio = N / matrixSize;
+    // SNR ∝ (pixel_size)^2, so noise ∝ 1/(pixel_size)^2 = (acquiredMatrix/N)^2
+    const pixelSizeRatio = N / acquiredMatrix;
     const snrFactor = 1 / (pixelSizeRatio * pixelSizeRatio);
 
     // At 256x256 (baseline), snrFactor = 1, noise = base
     // At 128x128, snrFactor = 0.25 (less noise, 4x SNR)
     // At 64x64, snrFactor = 0.0625 (much less noise, 16x SNR)
-    // At 512x512, snrFactor = 4 (more noise, 0.25x SNR)
+    // At >256 (zero-padded), snrFactor = 1 (same as 256, no SNR change)
     //
-    // This demonstrates the fundamental MRI tradeoff:
-    // Higher resolution → smaller voxels → less signal per voxel → lower SNR
+    // Zero-padding is interpolation only - it doesn't change SNR
     const baseSimulatedNoise = 25;
     const simulatedNoise = baseSimulatedNoise * snrFactor;
 
