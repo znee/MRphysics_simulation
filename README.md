@@ -53,20 +53,58 @@ Visualizes the relationship between spatial frequency domain (k-space) and image
 
 ---
 
+## Part 3: QSM & Susceptibility Simulation
+
+**[Launch Part 3](https://znee.github.io/MRphysics_simulation/part3/)**
+
+Explores Quantitative Susceptibility Mapping (QSM) physics, including dipole field perturbation and solving the ill-posed inverse problem.
+
+### Features
+- **3D Phantom Visualization**: Interactive 3D view with slice plane navigation
+- **Full 3D Simulation**: Complete 3D FFT with proper dipole kernel
+- **B₀ Direction Control**: Adjustable B₀ angle (-90° to +90°) to visualize cone-of-silence rotation
+- **Multiple Object Shapes**: Sphere, Cube, Cylinder, Ellipsoid with random orientations
+- **Susceptibility Sources**: Paramagnetic (+χ, red) and Diamagnetic (-χ, blue) objects
+- **Forward Model**: 3D dipole convolution generates realistic phase maps
+- **Inverse Problem**: Tikhonov regularization and Truncated K-Space Division (TKD)
+- **Realistic Artifacts**: Cone-of-silence streaking from ill-conditioned k-space regions
+
+### Physics Model
+- **3D Dipole Kernel**: D(k) = 1/3 - k_B₀²/|k|² where k_B₀ is the k-component along B₀
+- **Forward Model**: φ = F⁻¹{D(k) · F{χ}} using 3D FFT
+- **Tikhonov**: χ = F⁻¹{D/(D² + λ) · F{φ}}
+- **TKD**: Threshold small D values to avoid division instability
+- **Cone of Silence**: Magic angle at θ ≈ 54.7° where D(k) = 0
+
+### Volume Dimensions & Computational Notes
+- **FOV**: 128×128×128 mm (isotropic physical space)
+- **Resolution**: 128×128×64 voxels (fixed for performance)
+- **3D FFT Complexity**: O(N³ log N) - full 3D simulation requires ~1M voxel operations
+- **Why Z=64?**: Browser-based JavaScript has limited computational power. A 128³ volume would require 2M voxels and significantly longer processing time. The 128×128×64 configuration provides a good balance between realistic 3D dipole physics and interactive performance.
+- **Anisotropic Voxels**: With Z=64, each Z voxel represents 2mm (vs 1mm in XY), simulating clinical thick-slice acquisitions
+
+### Simplifications
+Phase unwrapping, background field removal, and multi-echo combination are omitted.
+See [QSM Consensus Organization Committee, MRM 2024](https://onlinelibrary.wiley.com/doi/full/10.1002/mrm.30006) for the complete clinical QSM pipeline.
+
+---
+
 ## How to Use
 
 ### Online
-Visit the [Live Demo](https://znee.github.io/MRphysics_simulation/) and select Part 1 or Part 2.
+Visit the [Live Demo](https://znee.github.io/MRphysics_simulation/) and select Part 1, Part 2, or Part 3.
 
 ### Local
 1. Clone this repository
 2. Open `index.html` in a modern browser, or
-3. Navigate directly to `part1/index.html` or `part2/index.html`
+3. Navigate directly to `part1/index.html`, `part2/index.html`, or `part3/index.html`
 
 ## Technologies
 
 - Pure HTML/CSS/JavaScript (no frameworks)
 - [Chart.js](https://www.chartjs.org/) for interactive plotting
+- [Three.js](https://threejs.org/) for 3D visualization (Part 3)
+- [MathJax](https://www.mathjax.org/) for LaTeX rendering
 - Canvas API for image processing
 - SVG for anatomical visualization
 
