@@ -3,8 +3,9 @@
     --panel-bg: #1e293b;
     --text-primary: #f8fafc;
     --text-secondary: #94a3b8;
-    --accent-color: #38bdf8;
-    --accent-hover: #0ea5e9;
+    --accent-color: #a855f7;
+    /* Purple/Violet for Part 2 - K-Space & Fourier Transform */
+    --accent-hover: #9333ea;
     --border-color: #334155;
     --font-family: 'Inter', sans-serif;
 }
