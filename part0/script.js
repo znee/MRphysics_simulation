@@ -52,6 +52,8 @@ const CONFIG = {
     TE: 60,               // ms
     T2echo: 200,          // ms (long T2 for strong SE echo)
     T2starEcho: 30,       // ms (short T2* - shows GRE vs SE difference)
+    T2starEchoSE: 30,     // Saved T2* for Spin Echo
+    T2starEchoGRE: 100,   // Saved T2* for Gradient Echo (longer for visible echo)
 
     // Current module
     currentModule: 'A'
@@ -448,10 +450,15 @@ let gradientFlipped = false; // Track if gradient has been flipped
 // Event markers for chart annotations (RF pulses, gradients)
 let eventMarkers = []; // Array of { time, type, label }
 
+// Previous Mxy for computing dMxy/dt (signal detection is EMF ∝ dMxy/dt)
+let previousMxy = 0;
+
 // Three.js globals
 let scene, camera, renderer;
 let spinArrows = [];        // Individual spin arrows (ensemble for Module B/C)
-let sumArrow = null;        // Sum magnetization arrow
+let sumArrow = null;        // Sum magnetization arrow (white - total M)
+let mxyArrow = null;        // Transverse component arrow (cyan - Mxy in xy plane)
+let mzArrow = null;         // Longitudinal component arrow (blue - Mz along z)
 let b0Arrow = null;         // B0 field indicator
 let xyPlane = null;         // XY plane visualization
 let netMagArrowA = null;    // Net magnetization arrow for Module A
@@ -525,11 +532,12 @@ function init3D() {
     // XY plane (semi-transparent) - transverse plane perpendicular to B0
     // CircleGeometry creates a circle in XY plane by default, which is correct
     // (z=0 plane, perpendicular to B0 which is along Z)
+    // Use blue/purple color to distinguish from receiver coil
     const planeGeom = new THREE.CircleGeometry(1.2, 64);
     const planeMat = new THREE.MeshBasicMaterial({
-        color: 0x10b981,
+        color: 0x6366f1,  // Indigo/purple - distinct from coil color
         transparent: true,
-        opacity: 0.15,
+        opacity: 0.12,
         side: THREE.DoubleSide
     });
     xyPlane = new THREE.Mesh(planeGeom, planeMat);
@@ -581,6 +589,54 @@ function createAxisLabels() {
     scene.add(createLabel("x'", new THREE.Vector3(1.7, 0, 0), '#ff6666'));
     scene.add(createLabel("y'", new THREE.Vector3(0, 1.7, 0), '#66ff66'));
     scene.add(createLabel("B₀", new THREE.Vector3(0, 0, 1.7), '#6666ff'));
+}
+
+/**
+ * Update signal panel glow based on detected signal strength
+ * The Signal/FID chart panel border glows when signal is detected
+ * This avoids the rotating frame vs lab frame confusion of showing a coil in 3D
+ *
+ * PHYSICS: Signal detection uses Faraday's law: EMF ∝ -dΦ/dt ∝ dMxy/dt
+ * In lab frame, Mxy rotates at ω₀, so EMF ∝ ω₀ × Mxy × sin(ω₀t)
+ * The envelope of detected signal is proportional to |dMxy/dt|
+ *
+ * For educational purposes, we use |dMxy/dt| to show:
+ * - Strong glow during rapid changes (RF excitation, echo formation)
+ * - Weak glow when Mxy is large but stable
+ * - Fading glow during slow T2/T2* decay
+ *
+ * @param {number} mxy - Current transverse magnetization magnitude (0 to 1)
+ * @param {number} dt - Time step in ms
+ */
+function updateSignalPanelGlow(mxy, dt) {
+    const signalPanel = document.querySelector('.signal-panel:last-child');
+    if (!signalPanel) return;
+
+    // Compute |dMxy/dt| - rate of change of transverse magnetization
+    // This is what a receiver coil actually detects (Faraday's law)
+    const dMxyDt = Math.abs(mxy - previousMxy) / (dt || 0.5);  // units: 1/ms
+    previousMxy = mxy;
+
+    // Scale factor: dMxy/dt during RF pulse is very fast (~1/ms)
+    // During echo rephasing, it's slower (~0.01-0.1/ms)
+    // Normalize to 0-1 range with sensitivity to typical signal changes
+    // Also include a small contribution from |Mxy| for continuous visibility
+    const rateContribution = Math.min(dMxyDt * 5, 1.0);  // Fast changes → strong glow
+    const steadyContribution = mxy * 0.3;  // Some glow when Mxy exists (rotating signal)
+    const glowIntensity = Math.min(rateContribution + steadyContribution, 1.0);
+
+    if (glowIntensity > 0.05) {
+        // Glow color: orange to yellow based on intensity
+        const r = 255;
+        const g = Math.floor(150 + glowIntensity * 105);
+        const b = Math.floor(glowIntensity * 50);
+        const glowSize = 5 + glowIntensity * 15; // 5-20px glow
+        signalPanel.style.boxShadow = `0 0 ${glowSize}px rgba(${r}, ${g}, ${b}, ${glowIntensity * 0.8})`;
+        signalPanel.style.borderColor = `rgb(${r}, ${g}, ${b})`;
+    } else {
+        signalPanel.style.boxShadow = 'none';
+        signalPanel.style.borderColor = 'var(--border-color)';
+    }
 }
 
 /**
@@ -679,6 +735,8 @@ function createEnsembleArrows() {
     spinArrows = [];
 
     if (sumArrow) scene.remove(sumArrow);
+    if (mxyArrow) scene.remove(mxyArrow);
+    if (mzArrow) scene.remove(mzArrow);
 
     // Create individual spin arrows
     const arrowLength = 0.8;
@@ -697,17 +755,34 @@ function createEnsembleArrows() {
         scene.add(arrow);
     });
 
-    // Sum arrow (thicker, brighter)
+    // Get sum magnetization for component arrows
+    // Note: getSumMagnetization returns normalized values (0-1 range for coherent spins)
     const sum = ensemble.getSumMagnetization();
-    const sumDir = new THREE.Vector3(sum.Mx, sum.My, sum.Mz);
-    const sumLength = sumDir.length();
-    if (sumLength > 0.01) {
-        sumDir.normalize();
-        // Smaller arrowhead (headLength=0.12, headRadius=0.06)
-        sumArrow = new THREE.ArrowHelper(sumDir, new THREE.Vector3(0, 0, 0), sumLength, 0xffffff, 0.12, 0.06);
-        sumArrow.line.material.linewidth = 3;
-        scene.add(sumArrow);
-    }
+
+    // Always create all three arrows (they'll be updated in updateEnsembleArrows)
+    // Mxy arrow (cyan) - transverse component in xy plane
+    const mxyMag = Math.sqrt(sum.Mx * sum.Mx + sum.My * sum.My);
+    const mxyDir = mxyMag > 0.001 ? new THREE.Vector3(sum.Mx, sum.My, 0).normalize() : new THREE.Vector3(1, 0, 0);
+    const mxyLen = Math.max(mxyMag, 0.1); // Minimum visible length
+    mxyArrow = new THREE.ArrowHelper(mxyDir, new THREE.Vector3(0, 0, 0), mxyLen, 0x22d3ee, 0.12, 0.06);
+    mxyArrow.visible = mxyMag > 0.02;
+    scene.add(mxyArrow);
+
+    // Mz arrow (blue) - longitudinal component along z
+    const mzMag = Math.abs(sum.Mz);
+    const mzDir = new THREE.Vector3(0, 0, sum.Mz >= 0 ? 1 : -1);
+    const mzLen = Math.max(mzMag, 0.1);
+    mzArrow = new THREE.ArrowHelper(mzDir, new THREE.Vector3(0, 0, 0), mzLen, 0x3b82f6, 0.12, 0.06);
+    mzArrow.visible = mzMag > 0.02;
+    scene.add(mzArrow);
+
+    // Sum arrow (white) - total magnetization vector
+    const sumMag = Math.sqrt(sum.Mx*sum.Mx + sum.My*sum.My + sum.Mz*sum.Mz);
+    const sumDir = sumMag > 0.001 ? new THREE.Vector3(sum.Mx, sum.My, sum.Mz).normalize() : new THREE.Vector3(0, 0, 1);
+    const sumLen = Math.max(sumMag, 0.1);
+    sumArrow = new THREE.ArrowHelper(sumDir, new THREE.Vector3(0, 0, 0), sumLen, 0xffffff, 0.12, 0.06);
+    sumArrow.visible = sumMag > 0.02;
+    scene.add(sumArrow);
 }
 
 
@@ -726,17 +801,42 @@ function updateEnsembleArrows() {
         }
     });
 
-    // Update sum arrow
+    // Get sum magnetization
     const sum = ensemble.getSumMagnetization();
-    const sumDir = new THREE.Vector3(sum.Mx, sum.My, sum.Mz);
-    const sumLength = sumDir.length();
 
+    // Update Mxy arrow (cyan) - transverse component
+    const mxyMag = Math.sqrt(sum.Mx * sum.Mx + sum.My * sum.My);
+    if (mxyArrow) {
+        if (mxyMag > 0.02) {
+            const mxyDir = new THREE.Vector3(sum.Mx, sum.My, 0).normalize();
+            mxyArrow.setDirection(mxyDir);
+            mxyArrow.setLength(Math.min(mxyMag, 1.0), 0.12, 0.06);
+            mxyArrow.visible = true;
+        } else {
+            mxyArrow.visible = false;
+        }
+    }
+
+    // Update Mz arrow (blue) - longitudinal component
+    const mzMag = Math.abs(sum.Mz);
+    if (mzArrow) {
+        if (mzMag > 0.02) {
+            const mzDir = new THREE.Vector3(0, 0, sum.Mz >= 0 ? 1 : -1);
+            mzArrow.setDirection(mzDir);
+            mzArrow.setLength(Math.min(mzMag, 1.0), 0.12, 0.06);
+            mzArrow.visible = true;
+        } else {
+            mzArrow.visible = false;
+        }
+    }
+
+    // Update sum arrow (white) - total magnetization
+    const sumMag = Math.sqrt(sum.Mx*sum.Mx + sum.My*sum.My + sum.Mz*sum.Mz);
     if (sumArrow) {
-        if (sumLength > 0.01) {
-            sumDir.normalize();
+        if (sumMag > 0.02) {
+            const sumDir = new THREE.Vector3(sum.Mx, sum.My, sum.Mz).normalize();
             sumArrow.setDirection(sumDir);
-            // Smaller arrowhead
-            sumArrow.setLength(sumLength, 0.12, 0.06);
+            sumArrow.setLength(Math.min(sumMag, 1.0), 0.12, 0.06);
             sumArrow.visible = true;
         } else {
             sumArrow.visible = false;
@@ -1111,6 +1211,10 @@ function updateModuleB(dt) {
     updateVectorDisplay({ Mx: sum.Mx, My: sum.My, Mz: sum.Mz, getMxy: () => Math.sqrt(sum.Mx * sum.Mx + sum.My * sum.My) });
     document.getElementById('coherent-count').textContent = ensemble.getPhaseCoherence().toFixed(0) + '%';
     updateCharts();
+
+    // Update receiver coil glow based on dMxy/dt (detected signal - Faraday's law)
+    const mxy = Math.sqrt(sum.Mx * sum.Mx + sum.My * sum.My);
+    updateSignalPanelGlow(mxy, dt);
 }
 
 function updateModuleC(dt) {
@@ -1165,6 +1269,10 @@ function updateModuleC(dt) {
     updateEnsembleArrows();
     document.getElementById('coherent-count').textContent = ensemble.getPhaseCoherence().toFixed(0) + '%';
     updateCharts();
+
+    // Update receiver coil glow based on dMxy/dt (detected signal - Faraday's law)
+    const mxy = Math.sqrt(sum.Mx * sum.Mx + sum.My * sum.My);
+    updateSignalPanelGlow(mxy, dt);
 }
 
 function updateVectorDisplay(spin) {
@@ -1204,13 +1312,18 @@ function switchModule(module) {
         // Hide Module B/C ensemble arrows
         spinArrows.forEach(a => a.visible = false);
         if (sumArrow) sumArrow.visible = false;
+        if (mxyArrow) mxyArrow.visible = false;
+        if (mzArrow) mzArrow.visible = false;
     } else {
         // Hide Module A arrows
         alignmentArrows.forEach(a => a.visible = false);
         if (netMagArrowA) netMagArrowA.visible = false;
-        // Show ensemble
+        // Show ensemble with component arrows
         createEnsembleArrows();
     }
+
+    // Update signal panel glow for Module B/C
+    updateSignalPanelGlow(0);
 }
 
 /**
@@ -1265,21 +1378,21 @@ function updateInfoPanel(module) {
             `;
             break;
         case 'B':
-            infoTitle.textContent = 'Module B: FID Formation';
+            infoTitle.textContent = 'Module B: FID & Signal Detection';
             infoText.innerHTML = `
-                <strong>Arrow Direction (Phase):</strong> Each spin precesses at ω₀ + Δω (field inhomogeneity). Different Δω → different phases → dephasing.<br>
-                <strong>Arrow Length (Mxy):</strong> Individual Mxy decays by T2. Sum shrinks faster (T2*) due to destructive interference.<br>
-                <strong>White arrow:</strong> Vector sum of all spins = detected signal.<br>
-                <em style="color: #f59e0b;">Note: In reality, net M is ~1/√N of individual spins. Here we show normalized sum for clarity.</em>
+                <strong>Dephasing:</strong> Spins precess at ω₀ + Δω (field inhomogeneity). Different phases → destructive interference → FID decay.<br>
+                <strong>Signal:</strong> In lab frame, rotating Mxy induces EMF ∝ ω₀|Mxy|. Signal panel glows with signal strength.<br>
+                <strong>T2* decay:</strong> Mxy(t) = M₀·e<sup>-t/T2*</sup>. White arrow = net magnetization = signal envelope.<br>
+                <em style="color: #f59e0b;">Note: 3D shows rotating frame. Net M ~1/√N, shown normalized.</em>
             `;
             break;
         case 'C':
             infoTitle.textContent = 'Module C: Echo Formation';
             infoText.innerHTML = `
-                <strong>Spin Echo:</strong> 180° pulse flips phase (φ → -φ). Fast spins now "behind" → catch up → rephase at TE.<br>
-                <strong>Gradient Echo:</strong> Gradient reversal (G → -G) reverses Δω sign. Phase unwinding → echo at TE.<br>
-                <strong>Key difference:</strong> Spin Echo refocuses B₀ inhomogeneity (T2 weighting); Gradient Echo does not (T2* weighting).<br>
-                <em style="color: #f59e0b;">Note: Net M visualization is normalized for clarity. True magnitude scales as ~1/√N.</em>
+                <strong>Spin Echo:</strong> 180° pulse inverts phases → rephasing → echo at TE. Refocuses B₀ inhomogeneity (T2 weighting).<br>
+                <strong>Gradient Echo:</strong> Gradient reversal → rephasing → echo. Does NOT refocus B₀ (T2* weighting).<br>
+                <strong>Signal:</strong> Watch the Signal/FID panel glow brighten at echo!<br>
+                <em style="color: #f59e0b;">Note: 3D shows rotating frame. Net M ~1/√N, shown normalized.</em>
             `;
             break;
     }
@@ -1342,7 +1455,12 @@ function setupEventListeners() {
         CONFIG.B0 = parseFloat(e.target.value);
         const freq = (GAMMA * CONFIG.B0).toFixed(1);
         document.getElementById('B0-display').textContent = `${CONFIG.B0} T (${freq} MHz)`;
-        // Update B0 for alignment ensemble and FID ensemble
+        // NOTE: B0 slider is primarily cosmetic/educational in this simulation.
+        // In the rotating frame at ω₀ = γB₀, the main field effect is removed.
+        // What matters is the off-resonance (ΔB₀ inhomogeneity), which is controlled
+        // by the "Frequency Spread" parameter and determines T2* decay.
+        // The B0 value is stored for reference but doesn't change the physics
+        // because we're simulating relative frequencies, not absolute precession.
         if (alignmentEnsemble) {
             alignmentEnsemble.setB0(CONFIG.B0);
         }
@@ -1456,6 +1574,12 @@ function setupEventListeners() {
     document.getElementById('T2star-echo').addEventListener('input', (e) => {
         CONFIG.T2starEcho = parseInt(e.target.value);
         document.getElementById('T2star-echo-val').textContent = CONFIG.T2starEcho + ' ms';
+        // Save to appropriate storage based on current echo type
+        if (CONFIG.echoType === 'gradient') {
+            CONFIG.T2starEchoGRE = CONFIG.T2starEcho;
+        } else {
+            CONFIG.T2starEchoSE = CONFIG.T2starEcho;
+        }
     });
 
     document.getElementById('num-spins-C').addEventListener('input', (e) => {
@@ -1465,20 +1589,39 @@ function setupEventListeners() {
     });
 
     document.getElementById('btn-run-sequence').addEventListener('click', runEchoSequence);
+
+    document.getElementById('show-individual-C').addEventListener('change', (e) => {
+        CONFIG.showIndividual = e.target.checked;
+        spinArrows.forEach(a => a.visible = CONFIG.showIndividual);
+    });
 }
 
 /**
  * Update T2* slider based on echo type selection
+ * Saves current value before switching and restores saved value for new type
  */
 function updateT2starSliderForEchoType() {
     const slider = document.getElementById('T2star-echo');
     const display = document.getElementById('T2star-echo-val');
+    const previousType = CONFIG.echoType === 'gradient' ? 'spin' : 'gradient';
 
-    if (CONFIG.echoType === 'gradient') {
-        slider.value = 100;
-        CONFIG.T2starEcho = 100;
-        display.textContent = '100 ms';
+    // Save current slider value to the PREVIOUS echo type (before user switched)
+    if (previousType === 'spin') {
+        CONFIG.T2starEchoSE = CONFIG.T2starEcho;
+    } else {
+        CONFIG.T2starEchoGRE = CONFIG.T2starEcho;
     }
+
+    // Restore saved value for the NEW echo type
+    if (CONFIG.echoType === 'gradient') {
+        CONFIG.T2starEcho = CONFIG.T2starEchoGRE;
+    } else {
+        CONFIG.T2starEcho = CONFIG.T2starEchoSE;
+    }
+
+    // Update UI
+    slider.value = CONFIG.T2starEcho;
+    display.textContent = CONFIG.T2starEcho + ' ms';
 }
 
 function resetSimulation() {
@@ -1499,6 +1642,9 @@ function resetSimulation() {
     echoSequenceState = 'idle';
     echoSequenceTime = 0;
     gradientFlipped = false;
+
+    // Reset signal detection state
+    previousMxy = 0;
 
     // Reset B0 state for Module A
     b0IsOn = false;
