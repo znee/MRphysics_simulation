@@ -33,10 +33,23 @@ Demonstrates how MRI sequences produce different tissue contrasts based on T1, T
 Visualizes the relationship between spatial frequency domain (k-space) and image domain.
 
 ### Features
-- **K-Space Visualization**: See how spatial frequencies combine to form images
-- **Fourier Transform**: Interactive demonstration of 2D FFT
-- **Sampling Patterns**: Explore different k-space trajectories
-- **Artifact Demonstration**: Understand common MRI artifacts
+- **K-Space Visualization**: Watch k-space fill line-by-line with animated acquisition
+- **Resolution & SNR Tradeoff**: Adjust matrix size (32-512) to see the fundamental MRI tradeoff
+  - 256×256 baseline: SNR = 1.0
+  - Lower resolution → larger voxels → higher SNR
+  - Higher resolution → smaller voxels → lower SNR
+- **K-Space Inspection**: Hover over k-space to see corresponding spatial frequency patterns
+- **Artifact Simulation**:
+  - Noise injection with SNR visualization
+  - Motion artifacts (respiratory simulation)
+  - Spike noise (bad pixel artifacts)
+  - Undersampling (aliasing/ghosting)
+- **Multiple Phantoms**: Circle, Square, Simulated Brain, Real Brain MRI
+
+### Physics Model
+- 2D FFT/IFFT for image ↔ k-space transformation
+- SNR ∝ (voxel size)² - quadratic relationship with pixel area
+- K-space coverage scales as (matrix/N)² for area-based truncation
 
 ---
 
