@@ -165,13 +165,13 @@
                     <div class="info-box explanation-box">
                         <h3>Resolution & K-Space</h3>
                         <p class="explanation-text">
-                            <strong>Low Resolution (&lt;256):</strong> Truncates outer k-space (high frequencies), losing fine details. K-space coverage is area-based: 128×128 = 25% coverage.
+                            <strong>Low Resolution (&lt;256):</strong> Truncates outer k-space. Coverage is area-based: 128×128 = 25%, 64×64 = 6.25%.
                         </p>
                         <p class="explanation-text">
-                            <strong>Zero-Padding (&gt;256):</strong> Interpolates between voxels for smoother display. No new k-space data—same resolution & SNR as 256×256.
+                            <strong>High Resolution (&gt;256):</strong> Smaller voxels require more k-space. Simulation shows SNR penalty of finer resolution.
                         </p>
                         <p class="explanation-text">
-                            <strong>SNR Trade-off:</strong> SNR ∝ (voxel area). Halving matrix → 4× larger voxels → 4× SNR. This is why low-res scans look cleaner!
+                            <strong>SNR Trade-off:</strong> SNR ∝ (voxel size)². 2× resolution → 0.25× SNR. This is the fundamental MRI tradeoff!
                         </p>
                     </div>
                 </div>
