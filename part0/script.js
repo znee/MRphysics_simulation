@@ -1585,7 +1585,7 @@ function updateInfoPanel(module) {
                 <strong>Without B₀:</strong> Spins point in random directions (thermal equilibrium). Net M ≈ 0.<br>
                 <strong>With B₀:</strong> Spins gradually align with field through T1 relaxation. Net M grows along +z.<br>
                 <strong>T1 (spin-lattice):</strong> Time constant for alignment. Mz(t) = M₀(1 - e<sup>-t/T1</sup>)<br>
-                <em style="color: #f59e0b;">Note: White arrow hidden when |M| < 0.2 (random state). Appears as spins align.</em>
+                <em style="color: #f59e0b;">Rotating frame: Simulation at Larmor frequency ω₀. B₀ slider shows clinical field strength but physics is normalized (M₀=1).</em>
             `;
             break;
         case 'B':
