@@ -123,6 +123,33 @@
                         </div>
                     </div>
 
+                    <div class="control-group resolution-group">
+                        <h3>Resolution & SNR</h3>
+                        <label>Matrix Size: <span id="matrixSizeVal">256</span> x <span id="matrixSizeVal2">256</span></label>
+                        <input type="range" id="matrixSizeRange" min="32" max="512" value="256" step="32">
+                        <div class="sub-control">
+                            <input type="checkbox" id="simulateSNRCheck" checked>
+                            <label for="simulateSNRCheck">Simulate SNR effect</label>
+                        </div>
+                        <div class="resolution-info">
+                            <div class="info-row">
+                                <span class="info-label">Pixel Size:</span>
+                                <span id="pixelSizeVal" class="info-value">1.0x</span>
+                            </div>
+                            <div class="info-row">
+                                <span class="info-label">K-Space Coverage:</span>
+                                <span id="kspaceCoverageVal" class="info-value">100%</span>
+                            </div>
+                            <div class="info-row">
+                                <span class="info-label">Relative SNR:</span>
+                                <span id="snrVal" class="info-value">1.00</span>
+                            </div>
+                            <div class="snr-bar-container">
+                                <div class="snr-bar" id="snrBar"></div>
+                            </div>
+                        </div>
+                    </div>
+
                     <div class="control-group">
                         <button id="btnStartFill" class="primary-btn">Start Filling Animation</button>
                         <button id="btnStopFill" class="secondary-btn">Stop</button>
@@ -133,6 +160,19 @@
                     <div class="info-box">
                         <h3>Current Status</h3>
                         <p id="statusText">Ready</p>
+                    </div>
+
+                    <div class="info-box explanation-box">
+                        <h3>Resolution & K-Space</h3>
+                        <p class="explanation-text">
+                            <strong>Low Resolution (&lt;256):</strong> Truncates outer k-space, losing fine details. Larger pixels = higher SNR (scales with pixel area).
+                        </p>
+                        <p class="explanation-text">
+                            <strong>Zero-Padding (&gt;256):</strong> Pads k-space with zeros before IFFT. Creates smoother interpolation but no new information—SNR unchanged.
+                        </p>
+                        <p class="explanation-text">
+                            <strong>SNR Trade-off:</strong> SNR ∝ (pixel size)². Halving resolution → 4× SNR. Zero-padding doesn't improve SNR.
+                        </p>
                     </div>
                 </div>
             </section>

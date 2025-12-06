@@ -23,6 +23,8 @@ let noiseLevel = 0;
 let motionLevel = 0;
 let hasSpike = false;
 let skipY = 1;
+let matrixSize = 256; // Effective matrix size (resolution)
+let simulateSNR = true; // Whether to visually simulate SNR effect (default: on)
 let currentLine = 0;
 let globalMaxMag = 0;
 let spikeX = 0;
@@ -73,6 +75,9 @@ function initApp() {
 
     // Generate initial phantom
     generatePhantom(phantomType);
+
+    // Initialize resolution info display
+    updateResolutionInfo();
 
     // Initial render
     renderAll();
@@ -286,21 +291,204 @@ function ifftShift(data) {
 }
 
 function reconstructImage() {
-    // 1. Copy acquired K-space
-    const temp = new Array(N).fill(0).map((_, y) =>
-        new Array(N).fill(0).map((_, x) =>
-            new Complex(acquiredKSpace[y][x].re, acquiredKSpace[y][x].im)
-        )
-    );
+    // Handle zero-padding for higher resolution (matrixSize > N)
+    // or truncation for lower resolution (matrixSize < N)
 
-    // 2. IFFT Shift (undo centering)
-    const unshifted = ifftShift(temp);
+    if (matrixSize <= N) {
+        // Standard reconstruction at native or lower resolution
+        // 1. Copy acquired K-space
+        const temp = new Array(N).fill(0).map((_, y) =>
+            new Array(N).fill(0).map((_, x) =>
+                new Complex(acquiredKSpace[y][x].re, acquiredKSpace[y][x].im)
+            )
+        );
 
-    // 3. IFFT
-    ifft2D(unshifted);
+        // 2. IFFT Shift (undo centering)
+        const unshifted = ifftShift(temp);
 
-    reconstructedImage = unshifted;
+        // 3. IFFT
+        ifft2D(unshifted);
+
+        reconstructedImage = unshifted;
+    } else {
+        // Zero-padding reconstruction for higher resolution (interpolation)
+        // FFT requires power-of-2 sizes, so round up to next power of 2
+        const nextPow2 = (n) => Math.pow(2, Math.ceil(Math.log2(n)));
+        const fftSize = nextPow2(matrixSize);
+
+        // Create FFT-sized k-space array with zeros
+        const padded = new Array(fftSize).fill(0).map(() =>
+            new Array(fftSize).fill(0).map(() => new Complex(0, 0))
+        );
+
+        // Copy acquired k-space data to center of padded array
+        // This keeps the same FOV but adds interpolated samples between voxels
+        const offset = (fftSize - N) / 2;
+        for (let y = 0; y < N; y++) {
+            for (let x = 0; x < N; x++) {
+                padded[y + offset][x + offset] = new Complex(
+                    acquiredKSpace[y][x].re,
+                    acquiredKSpace[y][x].im
+                );
+            }
+        }
+
+        // IFFT Shift on padded data
+        const unshifted = ifftShiftVariable(padded, fftSize);
+
+        // IFFT on padded data
+        ifft2DVariable(unshifted, fftSize);
+
+        // Compensate for zero-padding scaling
+        // IFFT divides by fftSize^2, but we want signal level consistent with N^2
+        // Scale factor = (fftSize/N)^2
+        const scaleFactor = (fftSize / N) * (fftSize / N);
+        for (let y = 0; y < fftSize; y++) {
+            for (let x = 0; x < fftSize; x++) {
+                unshifted[y][x].re *= scaleFactor;
+                unshifted[y][x].im *= scaleFactor;
+            }
+        }
+
+        // Store the full padded result
+        reconstructedImagePadded = unshifted;
+        reconstructedImagePaddedSize = fftSize;
+
+        // Downsample to N×N for display using bilinear interpolation
+        // Zero-padding keeps the same FOV, so we sample the full fftSize grid
+        // and map it back to N×N display
+        reconstructedImage = new Array(N).fill(0).map((_, y) =>
+            new Array(N).fill(0).map((_, x) => {
+                // Map display pixel [0,N) to padded grid [0,fftSize)
+                const srcY = y * fftSize / N;
+                const srcX = x * fftSize / N;
+
+                // Bilinear interpolation
+                const y0 = Math.floor(srcY);
+                const x0 = Math.floor(srcX);
+                const y1 = Math.min(y0 + 1, fftSize - 1);
+                const x1 = Math.min(x0 + 1, fftSize - 1);
+                const fy = srcY - y0;
+                const fx = srcX - x0;
+
+                // Interpolate real and imaginary parts separately
+                const v00 = unshifted[y0][x0];
+                const v01 = unshifted[y0][x1];
+                const v10 = unshifted[y1][x0];
+                const v11 = unshifted[y1][x1];
+
+                const re = (1 - fy) * ((1 - fx) * v00.re + fx * v01.re) +
+                           fy * ((1 - fx) * v10.re + fx * v11.re);
+                const im = (1 - fy) * ((1 - fx) * v00.im + fx * v01.im) +
+                           fy * ((1 - fx) * v10.im + fx * v11.im);
+
+                return new Complex(re, im);
+            })
+        );
+    }
 }
+
+// Variable-size FFT shift
+function ifftShiftVariable(data, size) {
+    const shifted = new Array(size).fill(0).map(() => new Array(size));
+    const half = size / 2;
+
+    for (let y = 0; y < size; y++) {
+        for (let x = 0; x < size; x++) {
+            const newY = (y + half) % size;
+            const newX = (x + half) % size;
+            shifted[newY][newX] = data[y][x];
+        }
+    }
+    return shifted;
+}
+
+// Variable-size 2D IFFT
+function ifft2DVariable(data, size) {
+    // Conjugate
+    for (let y = 0; y < size; y++) {
+        for (let x = 0; x < size; x++) {
+            data[y][x].im = -data[y][x].im;
+        }
+    }
+
+    // FFT
+    fft2DVariable(data, size);
+
+    // Conjugate again and Scale
+    for (let y = 0; y < size; y++) {
+        for (let x = 0; x < size; x++) {
+            data[y][x].im = -data[y][x].im;
+            data[y][x].re /= (size * size);
+            data[y][x].im /= (size * size);
+        }
+    }
+}
+
+// Variable-size 2D FFT
+function fft2DVariable(data, size) {
+    // FFT rows
+    for (let y = 0; y < size; y++) {
+        fft1DVariable(data[y], size);
+    }
+
+    // FFT columns
+    const col = new Array(size);
+    for (let x = 0; x < size; x++) {
+        for (let y = 0; y < size; y++) col[y] = data[y][x];
+        fft1DVariable(col, size);
+        for (let y = 0; y < size; y++) data[y][x] = col[y];
+    }
+}
+
+// Variable-size 1D FFT (Iterative Cooley-Tukey radix-2)
+// Iterative version to avoid stack overflow for large sizes
+function fft1DVariable(arr, n) {
+    if (n <= 1) return;
+
+    // Bit-reversal permutation
+    const bits = Math.log2(n);
+    for (let i = 0; i < n; i++) {
+        const j = reverseBits(i, bits);
+        if (j > i) {
+            const temp = arr[i];
+            arr[i] = arr[j];
+            arr[j] = temp;
+        }
+    }
+
+    // Iterative FFT
+    for (let size = 2; size <= n; size *= 2) {
+        const halfSize = size / 2;
+        const tableStep = n / size;
+
+        for (let i = 0; i < n; i += size) {
+            for (let j = 0; j < halfSize; j++) {
+                const angle = -2 * Math.PI * j / size;
+                const twiddle = Complex.fromPolar(1, angle);
+                const even = arr[i + j];
+                const odd = arr[i + j + halfSize].mul(twiddle);
+
+                arr[i + j] = even.add(odd);
+                arr[i + j + halfSize] = even.sub(odd);
+            }
+        }
+    }
+}
+
+// Helper function to reverse bits
+function reverseBits(x, bits) {
+    let result = 0;
+    for (let i = 0; i < bits; i++) {
+        result = (result << 1) | (x & 1);
+        x >>= 1;
+    }
+    return result;
+}
+
+// Storage for padded reconstruction
+let reconstructedImagePadded = null;
+let reconstructedImagePaddedSize = N;
 
 // --- Animation ---
 
@@ -353,8 +541,10 @@ function acquireLine(lineIndex) {
     // Reference signal is N*N (theoretical max for all-ones image).
     // We scale noise relative to this fixed reference.
     const referenceSignal = N * N;
+    // Use effective noise level (considers SNR simulation)
+    const effectiveNoise = getEffectiveNoiseLevel();
     // Calibrated: Reduced factor from 0.002 to 0.0005 based on user feedback
-    const sigma = (noiseLevel / 100) * (referenceSignal * 0.0005);
+    const sigma = (effectiveNoise / 100) * (referenceSignal * 0.0005);
 
     // 2. Motion Parameters (Deterministic/Periodic)
     // Simulate respiration: Sine wave displacement in Y
@@ -370,10 +560,27 @@ function acquireLine(lineIndex) {
     // Is this line acquired?
     const isAcquired = (lineIndex % skipY === 0);
 
+    // Resolution mask: only acquire within the effective matrix size
+    // K-space center is at N/2, so we mask based on distance from center
+    // For matrixSize > N: acquire all k-space (will be zero-padded in reconstruction)
+    // For matrixSize <= N: truncate outer k-space for lower resolutions
+    const effectiveMatrixForAcquisition = Math.min(matrixSize, N);
+    const halfRes = effectiveMatrixForAcquisition / 2;
+    const centerY = N / 2;
+    const centerX = N / 2;
+
+    // Check if this line is within the resolution boundary
+    const kyFromCenter = Math.abs(lineIndex - centerY);
+    const lineInResolution = kyFromCenter < halfRes;
+
     for (let x = 0; x < N; x++) {
         let val = new Complex(0, 0);
 
-        if (isAcquired) {
+        // Check if this x position is within resolution boundary
+        const kxFromCenter = Math.abs(x - centerX);
+        const pointInResolution = lineInResolution && (kxFromCenter < halfRes);
+
+        if (isAcquired && pointInResolution) {
             val = kSpaceData[lineIndex][x];
 
             // Apply Motion: Phase Ramp in Y
@@ -384,24 +591,111 @@ function acquireLine(lineIndex) {
             }
         }
 
-        // Add Gaussian Noise (to ALL lines)
-        if (noiseLevel > 0) {
+        // Add Gaussian Noise only to actually acquired samples
+        // (must be both within resolution AND not skipped by undersampling)
+        if (effectiveNoise > 0 && isAcquired && pointInResolution) {
             val = val.add(gaussianNoise(sigma));
         }
 
         acquiredKSpace[lineIndex][x] = val;
     }
 
-    // Spike Noise: Inject a single bad point
+    // Spike Noise: Inject a single bad point (only if within resolution)
     if (hasSpike) {
         if (lineIndex === spikeY) {
-            // Scale spike relative to TRUE global max
-            // Calibrated: Reduced from 2 to 0.5 to prevent image corruption
-            const spikeAmp = globalMaxMag * 0.5;
-            // Add to existing value
-            acquiredKSpace[lineIndex][spikeX] = acquiredKSpace[lineIndex][spikeX].add(new Complex(spikeAmp, spikeAmp));
+            const kxFromCenter = Math.abs(spikeX - centerX);
+            const kyFromCenter = Math.abs(spikeY - centerY);
+            if (kxFromCenter < halfRes && kyFromCenter < halfRes) {
+                // Scale spike relative to TRUE global max
+                // Calibrated: Reduced from 2 to 0.5 to prevent image corruption
+                const spikeAmp = globalMaxMag * 0.5;
+                // Add to existing value
+                acquiredKSpace[lineIndex][spikeX] = acquiredKSpace[lineIndex][spikeX].add(new Complex(spikeAmp, spikeAmp));
+            }
         }
     }
+}
+
+// Calculate and update resolution info display
+function updateResolutionInfo() {
+    // Base resolution is N (256), matrixSize can be 32-512
+    const isZeroPadding = matrixSize > N;
+
+    // Pixel size ratio relative to native 256x256
+    // Smaller matrix = larger pixels, larger matrix = smaller pixels
+    const pixelSizeRatio = N / matrixSize;
+
+    // K-space coverage: for display purposes
+    // < 256: truncated k-space
+    // = 256: native resolution
+    // > 256: zero-padded (simulating higher resolution acquisition)
+    const kspaceCoverage = Math.min(100, (matrixSize / N) * 100);
+
+    // SNR relationship for 2D imaging with constant FOV:
+    // Signal per voxel ∝ voxel_area = (pixel_size)^2
+    // Noise per voxel is constant (thermal noise in receiver)
+    // Therefore: SNR ∝ (pixel_size)^2 = (N/matrixSize)^2
+    //
+    // Lower resolution (32x32): 8x pixels → 64x SNR
+    // Native resolution (256x256): 1x pixels → 1x SNR
+    // Higher resolution (512x512): 0.5x pixels → 0.25x SNR
+    //
+    // This is the fundamental resolution-SNR tradeoff in MRI!
+    const relativeSNR = pixelSizeRatio * pixelSizeRatio;
+
+    document.getElementById('matrixSizeVal').innerText = matrixSize;
+    document.getElementById('matrixSizeVal2').innerText = matrixSize;
+    document.getElementById('pixelSizeVal').innerText = pixelSizeRatio.toFixed(2) + 'x';
+
+    // Show coverage
+    if (isZeroPadding) {
+        document.getElementById('kspaceCoverageVal').innerText = '100% + extended';
+    } else {
+        document.getElementById('kspaceCoverageVal').innerText = kspaceCoverage.toFixed(0) + '%';
+    }
+
+    document.getElementById('snrVal').innerText = relativeSNR.toFixed(2);
+
+    // Update SNR bar visualization
+    // Map SNR from range 0.25 (512 matrix) to 64 (32 matrix) to bar width
+    // Use log scale: log2(SNR) maps 0.25->-2, 1->0, 64->6
+    // Normalize to 0-100% range
+    const logSNR = Math.log2(relativeSNR);
+    const snrBarWidth = Math.min(100, Math.max(5, ((logSNR + 2) / 8) * 100));
+    const snrBar = document.getElementById('snrBar');
+    snrBar.style.width = snrBarWidth + '%';
+
+    // Color code: green for high SNR, cyan for baseline, red for low
+    if (relativeSNR >= 2) {
+        snrBar.style.backgroundColor = 'rgba(74, 222, 128, 0.8)'; // Green - high SNR
+    } else if (relativeSNR >= 0.5) {
+        snrBar.style.backgroundColor = 'rgba(56, 189, 248, 0.8)'; // Cyan - baseline
+    } else {
+        snrBar.style.backgroundColor = 'rgba(248, 113, 113, 0.8)'; // Red - low SNR
+    }
+}
+
+// Get the effective noise level considering SNR simulation
+function getEffectiveNoiseLevel() {
+    if (!simulateSNR) return noiseLevel;
+
+    // When simulating SNR, noise scales inversely with voxel area
+    // SNR ∝ (pixel_size)^2, so noise ∝ 1/(pixel_size)^2 = (matrixSize/N)^2
+    const pixelSizeRatio = N / matrixSize;
+    const snrFactor = 1 / (pixelSizeRatio * pixelSizeRatio);
+
+    // At 256x256 (baseline), snrFactor = 1, noise = base
+    // At 128x128, snrFactor = 0.25 (less noise, 4x SNR)
+    // At 64x64, snrFactor = 0.0625 (much less noise, 16x SNR)
+    // At 512x512, snrFactor = 4 (more noise, 0.25x SNR)
+    //
+    // This demonstrates the fundamental MRI tradeoff:
+    // Higher resolution → smaller voxels → less signal per voxel → lower SNR
+    const baseSimulatedNoise = 25;
+    const simulatedNoise = baseSimulatedNoise * snrFactor;
+
+    // Combine with user-set noise level
+    return Math.max(noiseLevel, simulatedNoise);
 }
 
 function acquireAllLines() {
@@ -510,6 +804,78 @@ function renderKSpace() {
 
     magCtx.putImageData(magImgData, 0, 0);
     phaseCtx.putImageData(phaseImgData, 0, 0);
+
+    // Visual Marker for Resolution Boundary (k-space coverage)
+    // Always show boundary and label for educational clarity
+    const centerX = N / 2;
+    const centerY = N / 2;
+
+    if (matrixSize < N) {
+        // Low resolution: show truncation boundary
+        const halfRes = matrixSize / 2;
+
+        // Draw rectangle showing acquired k-space region
+        magCtx.strokeStyle = 'rgba(56, 189, 248, 0.8)'; // Cyan for truncation
+        magCtx.lineWidth = 2;
+        magCtx.setLineDash([5, 5]);
+        magCtx.strokeRect(centerX - halfRes, centerY - halfRes, matrixSize, matrixSize);
+        magCtx.setLineDash([]);
+
+        // Add truncation label
+        magCtx.fillStyle = 'rgba(56, 189, 248, 0.9)';
+        magCtx.font = '10px Inter';
+        magCtx.shadowColor = 'black';
+        magCtx.shadowBlur = 2;
+        magCtx.fillText('Truncated: ' + matrixSize + '×' + matrixSize, 5, 12);
+        magCtx.shadowBlur = 0;
+
+        // Also draw on phase canvas
+        phaseCtx.strokeStyle = 'rgba(56, 189, 248, 0.8)';
+        phaseCtx.lineWidth = 2;
+        phaseCtx.setLineDash([5, 5]);
+        phaseCtx.strokeRect(centerX - halfRes, centerY - halfRes, matrixSize, matrixSize);
+        phaseCtx.setLineDash([]);
+    } else if (matrixSize === N) {
+        // Native resolution: show full boundary
+        magCtx.strokeStyle = 'rgba(148, 163, 184, 0.6)'; // Gray for native
+        magCtx.lineWidth = 1;
+        magCtx.strokeRect(1, 1, N - 2, N - 2);
+
+        // Add native label
+        magCtx.fillStyle = 'rgba(148, 163, 184, 0.9)';
+        magCtx.font = '10px Inter';
+        magCtx.shadowColor = 'black';
+        magCtx.shadowBlur = 2;
+        magCtx.fillText('Native: ' + N + '×' + N, 5, 12);
+        magCtx.shadowBlur = 0;
+
+        // Also draw on phase canvas
+        phaseCtx.strokeStyle = 'rgba(148, 163, 184, 0.6)';
+        phaseCtx.lineWidth = 1;
+        phaseCtx.strokeRect(1, 1, N - 2, N - 2);
+    } else {
+        // Zero-padding: show full boundary with indicator
+        magCtx.strokeStyle = 'rgba(74, 222, 128, 0.8)'; // Green for zero-pad
+        magCtx.lineWidth = 2;
+        magCtx.setLineDash([3, 3]);
+        magCtx.strokeRect(1, 1, N - 2, N - 2);
+        magCtx.setLineDash([]);
+
+        // Add zero-pad label
+        magCtx.fillStyle = 'rgba(74, 222, 128, 0.9)';
+        magCtx.font = '10px Inter';
+        magCtx.shadowColor = 'black';
+        magCtx.shadowBlur = 2;
+        magCtx.fillText('Zero-pad → ' + matrixSize + '×' + matrixSize, 5, 12);
+        magCtx.shadowBlur = 0;
+
+        // Also draw on phase canvas
+        phaseCtx.strokeStyle = 'rgba(74, 222, 128, 0.8)';
+        phaseCtx.lineWidth = 2;
+        phaseCtx.setLineDash([3, 3]);
+        phaseCtx.strokeRect(1, 1, N - 2, N - 2);
+        phaseCtx.setLineDash([]);
+    }
 
     // Visual Marker for Spike Noise
     if (hasSpike) {
@@ -648,6 +1014,25 @@ function bindEvents() {
     document.getElementById('skipYRange').addEventListener('input', (e) => {
         skipY = parseInt(e.target.value);
         document.getElementById('skipYVal').innerText = skipY;
+        if (!isAnimating && currentLine === N) {
+            acquireAllLines();
+            renderAll();
+        }
+    });
+
+    // Matrix Size (Resolution) slider
+    document.getElementById('matrixSizeRange').addEventListener('input', (e) => {
+        matrixSize = parseInt(e.target.value);
+        updateResolutionInfo();
+        if (!isAnimating && currentLine === N) {
+            acquireAllLines();
+            renderAll();
+        }
+    });
+
+    // Simulate SNR checkbox
+    document.getElementById('simulateSNRCheck').addEventListener('change', (e) => {
+        simulateSNR = e.target.checked;
         if (!isAnimating && currentLine === N) {
             acquireAllLines();
             renderAll();
