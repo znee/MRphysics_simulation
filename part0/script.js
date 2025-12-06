@@ -705,20 +705,22 @@ function updateAlignmentArrows() {
     });
 
     // Update net magnetization arrow
-    // EXAGGERATION: The true net magnetization from random spins is ~1/√N (very small)
-    // We amplify it for visibility. The direction is correct, only magnitude is scaled.
+    // The true net magnetization from random spins is ~1/√N (very small)
+    // For N=100 random spins: |M| ~ 0.1
+    // After alignment: |M| ~ 1.0 (all spins along +z)
     const sum = alignmentEnsemble.getSumMagnetization();
     const sumDir = new THREE.Vector3(sum.Mx, sum.My, sum.Mz);
     const sumLength = sumDir.length();
 
-    // Exaggeration factor: amplify small net magnetization for visibility
-    // True physics: random spins give |M| ~ 1/√N ≈ 0.1 for N=100
-    // We scale up by 10x to make the arrow clearly visible during alignment
-    const EXAGGERATION_FACTOR = 10.0;
-    const displayLength = Math.min(sumLength * EXAGGERATION_FACTOR, 1.0);
+    // Only show the arrow when there's meaningful alignment (Mz > 0.3)
+    // Random spins give |M| ~ 0.1, so threshold at 0.2 hides the noise
+    // Aligned spins give |M| ~ 1.0, clearly visible
+    // Scale the display length but don't exaggerate random fluctuations
+    const VISIBILITY_THRESHOLD = 0.2;  // Hide arrow for random state
+    const displayLength = Math.min(sumLength, 1.0);
 
     if (netMagArrowA) {
-        if (displayLength > 0.05) {
+        if (sumLength > VISIBILITY_THRESHOLD) {
             sumDir.normalize();
             netMagArrowA.setDirection(sumDir);
             netMagArrowA.setLength(displayLength, 0.12, 0.06);
@@ -1374,7 +1376,7 @@ function updateInfoPanel(module) {
                 <strong>Without B₀:</strong> Spins point in random directions (thermal equilibrium). Net M ≈ 0.<br>
                 <strong>With B₀:</strong> Spins gradually align with field through T1 relaxation. Net M grows along +z.<br>
                 <strong>T1 (spin-lattice):</strong> Time constant for alignment. Mz(t) = M₀(1 - e<sup>-t/T1</sup>)<br>
-                <em style="color: #f59e0b;">Note: White arrow length is exaggerated 10× for visibility. True |M| ~ 1/√N is very small.</em>
+                <em style="color: #f59e0b;">Note: White arrow hidden when |M| < 0.2 (random state). Appears as spins align.</em>
             `;
             break;
         case 'B':
