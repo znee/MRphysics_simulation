@@ -383,15 +383,63 @@ input[type="range"] {
 }
 
 /* Mobile Responsiveness */
+
+/* Large screens - reduce control panel width */
+@media (max-width: 1400px) {
+    .visualization-grid {
+        grid-template-columns: 1fr 1fr 280px;
+    }
+}
+
+@media (max-width: 1200px) {
+    .visualization-grid {
+        grid-template-columns: 1fr 1fr 250px;
+    }
+
+    .control-group {
+        margin-bottom: 12px;
+        padding-bottom: 10px;
+    }
+
+    .info-box {
+        padding: 8px;
+    }
+
+    .explanation-text {
+        font-size: 0.75rem;
+    }
+}
+
 @media (max-width: 1024px) {
     .visualization-grid {
         grid-template-columns: 1fr 1fr;
         /* 2 columns for tablets */
     }
 
-    .column-group:last-child {
+    .controls-panel {
         grid-column: 1 / -1;
         /* Controls take full width */
+    }
+
+    .controls-content {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 15px;
+    }
+
+    .control-group {
+        margin-bottom: 0;
+        border-bottom: none;
+    }
+
+    /* Full width for buttons and info boxes */
+    .control-group:has(button),
+    .info-box {
+        grid-column: 1 / -1;
+    }
+
+    .canvas-container {
+        min-height: 280px;
     }
 }
 
@@ -444,7 +492,8 @@ input[type="range"] {
     }
 
     /* Full width buttons on mobile */
-    .control-group:has(button) {
+    .control-group:has(button),
+    .info-box {
         grid-column: 1 / -1;
     }
 }
@@ -452,5 +501,17 @@ input[type="range"] {
 @media (max-width: 480px) {
     .controls-content {
         grid-template-columns: 1fr;
+    }
+
+    .canvas-container {
+        min-height: 200px;
+    }
+
+    h1 {
+        font-size: 1.1rem;
+    }
+
+    .subtitle {
+        font-size: 0.8rem;
     }
 }

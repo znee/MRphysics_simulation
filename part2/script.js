@@ -976,8 +976,8 @@ function bindEvents() {
 
     document.getElementById('noiseRange').addEventListener('input', (e) => {
         noiseLevel = parseInt(e.target.value);
-        // Re-acquire to show noise effect immediately if static
-        if (!isAnimating && currentLine >= matrixSize) {
+        // Re-acquire to show noise effect immediately if any data acquired
+        if (!isAnimating && currentLine > 0) {
             acquireAllLines();
             renderAll();
         }
@@ -985,7 +985,7 @@ function bindEvents() {
 
     document.getElementById('motionRange').addEventListener('input', (e) => {
         motionLevel = parseInt(e.target.value);
-        if (!isAnimating && currentLine >= matrixSize) {
+        if (!isAnimating && currentLine > 0) {
             acquireAllLines();
             renderAll();
         }
@@ -1001,7 +1001,8 @@ function bindEvents() {
             spikeX = Math.floor(centerX - halfRes + Math.random() * matrixSize);
             spikeY = Math.floor(centerY - halfRes + Math.random() * matrixSize);
         }
-        if (!isAnimating && currentLine >= matrixSize) {
+        // Always re-acquire when spike changes (to inject or remove spike)
+        if (!isAnimating && currentLine > 0) {
             acquireAllLines();
             renderAll();
         }
@@ -1010,7 +1011,7 @@ function bindEvents() {
     document.getElementById('skipYRange').addEventListener('input', (e) => {
         skipY = parseInt(e.target.value);
         document.getElementById('skipYVal').innerText = skipY;
-        if (!isAnimating && currentLine >= matrixSize) {
+        if (!isAnimating && currentLine > 0) {
             acquireAllLines();
             renderAll();
         }
@@ -1018,7 +1019,6 @@ function bindEvents() {
 
     // Matrix Size (Resolution) slider
     document.getElementById('matrixSizeRange').addEventListener('input', (e) => {
-        const oldMatrixSize = matrixSize;
         matrixSize = parseInt(e.target.value);
         updateResolutionInfo();
         // Reset spike position if it's now outside the new boundary
@@ -1036,7 +1036,8 @@ function bindEvents() {
                 spikeY = Math.floor(centerY - halfRes + Math.random() * matrixSize);
             }
         }
-        if (!isAnimating && currentLine >= oldMatrixSize) {
+        // Re-acquire with new resolution if any data was acquired
+        if (!isAnimating && currentLine > 0) {
             acquireAllLines();
             renderAll();
         }
@@ -1045,7 +1046,7 @@ function bindEvents() {
     // Simulate SNR checkbox
     document.getElementById('simulateSNRCheck').addEventListener('change', (e) => {
         simulateSNR = e.target.checked;
-        if (!isAnimating && currentLine >= matrixSize) {
+        if (!isAnimating && currentLine > 0) {
             acquireAllLines();
             renderAll();
         }
