@@ -781,33 +781,55 @@ function renderKSpace() {
     const phaseCtx = phaseCanvas.getContext('2d');
     const phaseImgData = phaseCtx.createImageData(N, N);
 
+    // Calculate max from ACQUIRED k-space only (not ground truth)
     let maxMag = 0;
     for (let y = 0; y < N; y++) {
         for (let x = 0; x < N; x++) {
-            const mag = kSpaceData[y][x].magnitude;
+            const mag = acquiredKSpace[y][x].magnitude;
             if (mag > maxMag) maxMag = mag;
         }
     }
+
+    // Define acquired region boundary
+    const halfRes = matrixSize / 2;
+    const centerX = N / 2;
+    const centerY = N / 2;
 
     for (let y = 0; y < N; y++) {
         for (let x = 0; x < N; x++) {
             const idx = (y * N + x) * 4;
 
-            // Magnitude (Log scaled)
-            const magVal = acquiredKSpace[y][x].magnitude;
-            const magNorm = maxMag > 0 ? (Math.log(1 + magVal) / Math.log(1 + maxMag)) * 255 : 0;
-            magImgData.data[idx] = magNorm;
-            magImgData.data[idx + 1] = magNorm;
-            magImgData.data[idx + 2] = magNorm;
-            magImgData.data[idx + 3] = 255;
+            // Check if this point is within the acquired region
+            const inAcquiredRegion = Math.abs(x - centerX) < halfRes && Math.abs(y - centerY) < halfRes;
 
-            // Phase
-            const phaseVal = acquiredKSpace[y][x].phase;
-            const phaseNorm = ((phaseVal + Math.PI) / (2 * Math.PI)) * 255;
-            phaseImgData.data[idx] = phaseNorm;
-            phaseImgData.data[idx + 1] = phaseNorm;
-            phaseImgData.data[idx + 2] = phaseNorm;
-            phaseImgData.data[idx + 3] = 255;
+            if (inAcquiredRegion && maxMag > 0) {
+                // Magnitude (Log scaled)
+                const magVal = acquiredKSpace[y][x].magnitude;
+                const magNorm = (Math.log(1 + magVal) / Math.log(1 + maxMag)) * 255;
+                magImgData.data[idx] = magNorm;
+                magImgData.data[idx + 1] = magNorm;
+                magImgData.data[idx + 2] = magNorm;
+                magImgData.data[idx + 3] = 255;
+
+                // Phase
+                const phaseVal = acquiredKSpace[y][x].phase;
+                const phaseNorm = ((phaseVal + Math.PI) / (2 * Math.PI)) * 255;
+                phaseImgData.data[idx] = phaseNorm;
+                phaseImgData.data[idx + 1] = phaseNorm;
+                phaseImgData.data[idx + 2] = phaseNorm;
+                phaseImgData.data[idx + 3] = 255;
+            } else {
+                // Outside acquired region - pure black
+                magImgData.data[idx] = 0;
+                magImgData.data[idx + 1] = 0;
+                magImgData.data[idx + 2] = 0;
+                magImgData.data[idx + 3] = 255;
+
+                phaseImgData.data[idx] = 0;
+                phaseImgData.data[idx + 1] = 0;
+                phaseImgData.data[idx + 2] = 0;
+                phaseImgData.data[idx + 3] = 255;
+            }
         }
     }
 
