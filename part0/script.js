@@ -340,9 +340,13 @@ let gradientFlipped = false; // Track if gradient has been flipped
 let scene, camera, renderer;
 let spinArrows = [];        // Individual spin arrows (ensemble)
 let sumArrow = null;        // Sum magnetization arrow
-let singleSpinArrow = null; // Single spin arrow
+let singleSpinArrow = null; // Single spin arrow (main, white)
+let helperSpinArrows = [];  // Helper spin arrows for Module A (green, following main spin)
 let b0Arrow = null;         // B0 field indicator
 let xyPlane = null;         // XY plane visualization
+
+// Number of helper spins to show in Module A
+const NUM_HELPER_SPINS = 8;
 
 // Chart.js instances
 let chartMxy, chartMz, chartSignal;
@@ -410,16 +414,18 @@ function init3D() {
 
     scene.add(axesGroup);
 
-    // XY plane (semi-transparent)
+    // XY plane (semi-transparent) - transverse plane perpendicular to B0
+    // CircleGeometry creates a circle in XY plane by default, which is correct
+    // (z=0 plane, perpendicular to B0 which is along Z)
     const planeGeom = new THREE.CircleGeometry(1.2, 64);
     const planeMat = new THREE.MeshBasicMaterial({
         color: 0x10b981,
         transparent: true,
-        opacity: 0.1,
+        opacity: 0.15,
         side: THREE.DoubleSide
     });
     xyPlane = new THREE.Mesh(planeGeom, planeMat);
-    xyPlane.rotation.x = -Math.PI / 2;
+    // No rotation needed - circle is already in XY plane (perpendicular to Z/B0)
     scene.add(xyPlane);
 
     // B0 arrow (pointing up along Z)
@@ -477,11 +483,31 @@ function createSingleSpinArrow() {
     if (singleSpinArrow) {
         scene.remove(singleSpinArrow);
     }
+    helperSpinArrows.forEach(arrow => scene.remove(arrow));
+    helperSpinArrows = [];
 
+    // Main spin arrow (white, larger) - represents the net magnetization
     const dir = new THREE.Vector3(0, 0, 1);
-    singleSpinArrow = new THREE.ArrowHelper(dir, new THREE.Vector3(0, 0, 0), 1, 0x10b981, 0.2, 0.12);
+    singleSpinArrow = new THREE.ArrowHelper(dir, new THREE.Vector3(0, 0, 0), 1, 0xffffff, 0.2, 0.12);
     singleSpinArrow.name = 'singleSpin';
     scene.add(singleSpinArrow);
+
+    // Create helper spin arrows (green, smaller) - represent individual protons
+    // These all point in the same direction as the main spin in Module A
+    // (no frequency spread, so they stay coherent)
+    for (let i = 0; i < NUM_HELPER_SPINS; i++) {
+        const helperArrow = new THREE.ArrowHelper(
+            dir.clone(),
+            new THREE.Vector3(0, 0, 0),
+            0.85,
+            0x10b981,
+            0.1,
+            0.06
+        );
+        helperArrow.name = 'helperSpin';
+        helperSpinArrows.push(helperArrow);
+        scene.add(helperArrow);
+    }
 }
 
 function createEnsembleArrows() {
@@ -529,6 +555,14 @@ function updateSingleSpinArrow() {
         dir.normalize();
         singleSpinArrow.setDirection(dir);
         singleSpinArrow.setLength(length, 0.2 * length, 0.12 * length);
+
+        // Update helper spin arrows - all point in same direction (coherent spins)
+        // Slightly different lengths to show they're individual spins
+        helperSpinArrows.forEach((arrow) => {
+            arrow.setDirection(dir);
+            const helperLength = length * (0.75 + 0.15 * Math.random());
+            arrow.setLength(helperLength, 0.1 * helperLength, 0.06 * helperLength);
+        });
     }
 }
 
@@ -905,13 +939,15 @@ function switchModule(module) {
 
     // Setup 3D view for module
     if (module === 'A') {
-        // Show single spin
+        // Show single spin and helper spins
         if (singleSpinArrow) singleSpinArrow.visible = true;
+        helperSpinArrows.forEach(a => a.visible = true);
         spinArrows.forEach(a => a.visible = false);
         if (sumArrow) sumArrow.visible = false;
     } else {
-        // Show ensemble
+        // Show ensemble, hide single spin and helpers
         if (singleSpinArrow) singleSpinArrow.visible = false;
+        helperSpinArrows.forEach(a => a.visible = false);
         createEnsembleArrows();
     }
 }
