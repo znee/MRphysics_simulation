@@ -123,6 +123,33 @@
                         </div>
                     </div>
 
+                    <div class="control-group">
+                        <h3>Acceleration Techniques</h3>
+                        <label>Partial Fourier</label>
+                        <select id="partialFourierSelect">
+                            <option value="1.0" selected>Full (100%)</option>
+                            <option value="0.75">6/8 (75%)</option>
+                            <option value="0.625">5/8 (62.5%)</option>
+                        </select>
+                        <div class="sub-control" id="pfReconControl" style="display: none; margin-top: 5px;">
+                            <label>Reconstruction:</label>
+                            <select id="pfReconSelect" style="margin-left: 5px;">
+                                <option value="zerofill">Zero-fill</option>
+                                <option value="conjugate">Conjugate Synthesis</option>
+                            </select>
+                        </div>
+
+                        <label style="margin-top: 10px;">Parallel Imaging (Demo)</label>
+                        <select id="parallelImagingSelect">
+                            <option value="1" selected>Off (1 coil)</option>
+                            <option value="2">SENSE R=2 (2 coils)</option>
+                            <option value="4">SENSE R=4 (4 coils)</option>
+                        </select>
+                        <em style="font-size: 0.65rem; opacity: 0.7; display: block; margin-top: 3px;">
+                            Simulates coil unfolding concept
+                        </em>
+                    </div>
+
                     <div class="control-group resolution-group">
                         <h3>Resolution & SNR</h3>
                         <label>Matrix Size: <span id="matrixSizeVal">256</span> x <span id="matrixSizeVal2">256</span></label>
@@ -182,6 +209,16 @@
                         </p>
                         <p class="explanation-text">
                             Each k-space point represents a 2D sinusoidal wave. <strong>Center</strong> = low frequency (contrast), <strong>Edges</strong> = high frequency (fine detail).
+                        </p>
+                    </div>
+
+                    <div class="info-box explanation-box">
+                        <h3>Acceleration Techniques</h3>
+                        <p class="explanation-text">
+                            <strong>Partial Fourier:</strong> Exploits k-space conjugate symmetry. Acquires ~60-75% of ky lines. Faster scan, slight blur/artifacts.
+                        </p>
+                        <p class="explanation-text">
+                            <strong>Parallel Imaging:</strong> Uses multiple coils to unfold aliased images. SENSE/GRAPPA recover missing data. SNR ∝ 1/√R (g-factor).
                         </p>
                     </div>
 

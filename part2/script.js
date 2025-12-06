@@ -26,6 +26,14 @@ let skipY = 1;
 let matrixSize = 256; // Effective matrix size (resolution)
 let simulateSNR = true; // Whether to visually simulate SNR effect (default: on)
 let currentLine = 0;
+
+// Partial Fourier settings
+let partialFourierFraction = 1.0; // 1.0 = full, 0.75, 0.625
+let partialFourierRecon = 'zerofill'; // 'zerofill' or 'conjugate'
+
+// Parallel Imaging settings (simplified demo)
+let numCoils = 1; // 1 = no parallel imaging, 2 or 4 coils
+let parallelAcceleration = 1; // R factor (1, 2, or 4)
 let globalMaxMag = 0;
 let spikeX = 0;
 let spikeY = 0;
@@ -288,6 +296,158 @@ function ifftShift(data) {
     return fftShift(data);
 }
 
+/**
+ * Partial Fourier Reconstruction
+ * Fills missing k-space using conjugate symmetry: S(-k) = S*(k) for real images
+ */
+function applyPartialFourierRecon(kspace, size) {
+    const centerY = size / 2;
+    const halfRes = matrixSize / 2;
+
+    // Calculate the boundary of acquired data
+    const acquiredFraction = partialFourierFraction;
+    const overlapFraction = (acquiredFraction - 0.5) * 2;
+    const minKyAcquired = Math.floor(centerY - halfRes * overlapFraction);
+
+    if (partialFourierRecon === 'zerofill') {
+        // Zero-fill: just leave missing data as zeros (already done during acquisition)
+        return kspace;
+    } else if (partialFourierRecon === 'conjugate') {
+        // Conjugate synthesis: use S(-k) = S*(k) to fill missing data
+        // This assumes the image is real (or nearly real)
+        const result = new Array(size).fill(0).map((_, y) =>
+            new Array(size).fill(0).map((_, x) =>
+                new Complex(kspace[y][x].re, kspace[y][x].im)
+            )
+        );
+
+        // Fill missing lines in top half using conjugate of bottom half
+        for (let y = 0; y < size; y++) {
+            const kyRelative = y - centerY;
+
+            // Check if this line is in the missing region (top of k-space)
+            if (kyRelative < -halfRes * overlapFraction) {
+                for (let x = 0; x < size; x++) {
+                    // Find conjugate point: (-ky, -kx) -> (size-y, size-x)
+                    const conjY = (size - y) % size;
+                    const conjX = (size - x) % size;
+
+                    // Check if conjugate point was acquired
+                    if (kspace[conjY][conjX].re !== 0 || kspace[conjY][conjX].im !== 0) {
+                        // S(-k) = S*(k)
+                        result[y][x] = new Complex(kspace[conjY][conjX].re, -kspace[conjY][conjX].im);
+                    }
+                }
+            }
+        }
+        return result;
+    }
+    return kspace;
+}
+
+/**
+ * Simplified Parallel Imaging Reconstruction (SENSE-like concept demo)
+ * In real SENSE: aliased image is unfolded using coil sensitivity maps
+ * Here we simulate the effect by reducing aliasing artifacts from undersampling
+ *
+ * Key physics: SNR_SENSE = SNR_full / (g * sqrt(R))
+ * where g = geometry factor (typically 1.0-1.5 for modern coils)
+ * We simulate g-factor noise penalty even when recovering aliasing
+ */
+function applyParallelImagingRecon(kspace, size) {
+    // For the demo, we show the concept that parallel imaging can
+    // recover information from undersampled data, but with SNR penalty
+    //
+    // Real SENSE: Combines aliased coil images using sensitivity maps
+    // Our simplification: When parallel imaging is "on", we reduce the
+    // aliasing effect by partially filling skipped lines from interpolation
+    // BUT we add g-factor noise to show the SNR penalty
+
+    if (numCoils <= 1) return kspace;
+
+    // The acceleration factor from parallel imaging
+    const R = parallelAcceleration;
+
+    // If undersampling (skipY) is used, parallel imaging can help recover
+    // For demo purposes, we interpolate missing lines when R >= skipY
+    if (skipY > 1 && R >= skipY) {
+        const result = new Array(size).fill(0).map((_, y) =>
+            new Array(size).fill(0).map((_, x) =>
+                new Complex(kspace[y][x].re, kspace[y][x].im)
+            )
+        );
+
+        // Fill skipped lines using weighted average of neighbors
+        // This simulates how SENSE can recover missing k-space lines
+        const centerY = size / 2;
+        const halfRes = matrixSize / 2;
+
+        // g-factor: geometry factor that increases with R
+        // Typical values: R=2 -> g~1.1, R=4 -> g~1.3
+        const gFactor = 1.0 + 0.1 * (R - 1);
+
+        // Calculate noise to add (simulates g-factor SNR penalty)
+        // Find max magnitude for noise scaling
+        let maxMag = 0;
+        for (let y = 0; y < size; y++) {
+            for (let x = 0; x < size; x++) {
+                const mag = Math.sqrt(kspace[y][x].re * kspace[y][x].re + kspace[y][x].im * kspace[y][x].im);
+                if (mag > maxMag) maxMag = mag;
+            }
+        }
+        // Noise level proportional to g-factor and sqrt(R)
+        const noiseSigma = maxMag * 0.02 * gFactor * Math.sqrt(R);
+
+        for (let y = 0; y < size; y++) {
+            // Check if this line was skipped
+            if (y % skipY !== 0) {
+                const kyFromCenter = Math.abs(y - centerY);
+                if (kyFromCenter < halfRes) {
+                    // Find nearest acquired lines
+                    const prevLine = Math.floor(y / skipY) * skipY;
+                    const nextLine = Math.min(prevLine + skipY, size - 1);
+
+                    // Interpolate
+                    const t = (y - prevLine) / skipY;
+                    for (let x = 0; x < size; x++) {
+                        const re = (1 - t) * kspace[prevLine][x].re + t * kspace[nextLine][x].re;
+                        const im = (1 - t) * kspace[prevLine][x].im + t * kspace[nextLine][x].im;
+
+                        // Add g-factor noise to recovered lines
+                        const noiseRe = gaussianRandom() * noiseSigma;
+                        const noiseIm = gaussianRandom() * noiseSigma;
+
+                        result[y][x] = new Complex(re + noiseRe, im + noiseIm);
+                    }
+                }
+            } else {
+                // Acquired lines also get some g-factor noise penalty
+                const kyFromCenter = Math.abs(y - centerY);
+                if (kyFromCenter < halfRes) {
+                    for (let x = 0; x < size; x++) {
+                        const noiseRe = gaussianRandom() * noiseSigma * 0.5; // Less noise on acquired lines
+                        const noiseIm = gaussianRandom() * noiseSigma * 0.5;
+                        result[y][x] = new Complex(
+                            kspace[y][x].re + noiseRe,
+                            kspace[y][x].im + noiseIm
+                        );
+                    }
+                }
+            }
+        }
+        return result;
+    }
+
+    return kspace;
+}
+
+// Simple Gaussian random number generator (Box-Muller, single value)
+function gaussianRandom() {
+    const u1 = Math.random();
+    const u2 = Math.random();
+    return Math.sqrt(-2.0 * Math.log(u1 || 0.0001)) * Math.cos(2.0 * Math.PI * u2);
+}
+
 function reconstructImage() {
     // Handle zero-padding for higher resolution (matrixSize > N)
     // or truncation for lower resolution (matrixSize < N)
@@ -295,11 +455,21 @@ function reconstructImage() {
     if (matrixSize <= N) {
         // Standard reconstruction at native or lower resolution
         // 1. Copy acquired K-space
-        const temp = new Array(N).fill(0).map((_, y) =>
+        let temp = new Array(N).fill(0).map((_, y) =>
             new Array(N).fill(0).map((_, x) =>
                 new Complex(acquiredKSpace[y][x].re, acquiredKSpace[y][x].im)
             )
         );
+
+        // 1b. Apply Partial Fourier reconstruction if needed
+        if (partialFourierFraction < 1.0) {
+            temp = applyPartialFourierRecon(temp, N);
+        }
+
+        // 1c. Apply Parallel Imaging reconstruction if needed
+        if (numCoils > 1) {
+            temp = applyParallelImagingRecon(temp, N);
+        }
 
         // 2. IFFT Shift (undo centering)
         const unshifted = ifftShift(temp);
@@ -576,7 +746,7 @@ function acquireLine(lineIndex) {
         dy = maxDisp * Math.sin(2 * Math.PI * lineIndex / period);
     }
 
-    // Is this line acquired?
+    // Is this line acquired? (undersampling)
     const isAcquired = (lineIndex % skipY === 0);
 
     // Resolution mask: only acquire within the effective matrix size
@@ -592,6 +762,20 @@ function acquireLine(lineIndex) {
     const kyFromCenter = Math.abs(lineIndex - centerY);
     const lineInResolution = kyFromCenter < halfRes;
 
+    // Partial Fourier: only acquire fraction of ky (asymmetric about center)
+    // Acquire from center to +ky edge, plus small margin into -ky for phase estimation
+    let lineInPartialFourier = true;
+    if (partialFourierFraction < 1.0) {
+        const kyRelative = lineIndex - centerY; // Negative = top half, positive = bottom half
+        // Acquire: full positive ky + small overlap into negative ky
+        // e.g., 75% = acquire from -25% to +50% (relative to halfRes)
+        const acquiredFraction = partialFourierFraction;
+        const overlapFraction = (acquiredFraction - 0.5) * 2; // Overlap into negative ky
+        const minKy = -halfRes * overlapFraction;
+        const maxKy = halfRes;
+        lineInPartialFourier = (kyRelative >= minKy && kyRelative < maxKy);
+    }
+
     for (let x = 0; x < N; x++) {
         let val = new Complex(0, 0);
 
@@ -599,7 +783,10 @@ function acquireLine(lineIndex) {
         const kxFromCenter = Math.abs(x - centerX);
         const pointInResolution = lineInResolution && (kxFromCenter < halfRes);
 
-        if (isAcquired && pointInResolution) {
+        // Combined check: undersampling + resolution + partial Fourier
+        const shouldAcquire = isAcquired && pointInResolution && lineInPartialFourier;
+
+        if (shouldAcquire) {
             val = kSpaceData[lineIndex][x];
 
             // Apply Motion: Phase Ramp in Y
@@ -611,8 +798,7 @@ function acquireLine(lineIndex) {
         }
 
         // Add Gaussian Noise only to actually acquired samples
-        // (must be both within resolution AND not skipped by undersampling)
-        if (effectiveNoise > 0 && isAcquired && pointInResolution) {
+        if (effectiveNoise > 0 && shouldAcquire) {
             val = val.add(gaussianNoise(sigma));
         }
 
@@ -643,17 +829,26 @@ function updateResolutionInfo() {
     // Pixel size ratio relative to baseline (256×256)
     const pixelSizeRatio = SNR_BASELINE / matrixSize;
 
+    // Calculate total acceleration factor
+    // R_total = R_undersampling × R_partial_fourier
+    const R_undersampling = skipY;
+    const R_partial_fourier = 1 / partialFourierFraction;
+    const R_total = R_undersampling * R_partial_fourier;
+
     // K-space coverage: percentage of k-space AREA relative to full N×N
-    // Must account for undersampling factor (skipY)
-    const kspaceCoverageArea = (matrixSize / N) * (matrixSize / N) * (1 / skipY) * 100;
+    // Must account for undersampling factor (skipY) and partial Fourier
+    const kspaceCoverageArea = (matrixSize / N) * (matrixSize / N) * partialFourierFraction * (1 / skipY) * 100;
 
     // SNR relationship for 2D imaging with constant FOV:
     // Signal per voxel ∝ voxel_area = (pixel_size)^2
     // Noise per voxel is constant (thermal noise in receiver)
     // Therefore: SNR ∝ (pixel_size)^2 = (baseline/matrixSize)^2
     //
-    // With undersampling (acceleration factor R = skipY):
-    // SNR_accelerated = SNR_full / √R (due to reduced averaging/coverage)
+    // With acceleration (undersampling + partial Fourier):
+    // SNR_accelerated = SNR_full / √R_total
+    //
+    // Parallel imaging can recover some SNR loss (g-factor dependent)
+    // For demo: assume perfect recovery up to R = numCoils
     //
     // Lower resolution (128x128): 2x pixels vs baseline → SNR = 4.00
     // Baseline resolution (256x256): 1x pixels → SNR = 1.00
@@ -662,8 +857,21 @@ function updateResolutionInfo() {
     //
     // This demonstrates the fundamental resolution-SNR tradeoff!
     const resolutionSNR = pixelSizeRatio * pixelSizeRatio;
-    const undersamplingPenalty = 1 / Math.sqrt(skipY); // SNR ∝ 1/√R
-    const relativeSNR = resolutionSNR * undersamplingPenalty;
+
+    // SNR penalty from acceleration:
+    // - Undersampling alone (no PI): SNR ∝ 1/√R (fewer samples = more noise)
+    // - With Parallel Imaging: SNR ∝ 1/(g·√R) where g is geometry factor
+    //   PI reduces aliasing but doesn't recover the lost SNR from fewer samples
+    //   In fact, g-factor adds additional penalty (g ≥ 1)
+    //
+    // g-factor: geometry factor that increases with R
+    // Typical values: R=2 -> g~1.1, R=4 -> g~1.3
+    const gFactor = numCoils > 1 ? (1.0 + 0.1 * (numCoils - 1)) : 1.0;
+
+    // Total acceleration penalty (always present regardless of PI)
+    // PI helps with aliasing artifacts but SNR penalty remains
+    const accelerationPenalty = 1 / (gFactor * Math.sqrt(R_total));
+    const relativeSNR = resolutionSNR * accelerationPenalty;
 
     document.getElementById('matrixSizeVal').innerText = matrixSize;
     document.getElementById('matrixSizeVal2').innerText = matrixSize;
@@ -1113,5 +1321,38 @@ function bindEvents() {
         isInspecting = false;
         renderImage();
         updateStatus(isAnimating ? `Acquiring... Line ${currentLine}/${matrixSize}` : 'Ready');
+    });
+
+    // Partial Fourier controls
+    document.getElementById('partialFourierSelect').addEventListener('change', (e) => {
+        partialFourierFraction = parseFloat(e.target.value);
+        // Show/hide reconstruction method selector
+        document.getElementById('pfReconControl').style.display =
+            partialFourierFraction < 1.0 ? 'block' : 'none';
+        updateResolutionInfo();
+        if (!isAnimating && currentLine > 0) {
+            acquireAllLines();
+            renderAll();
+        }
+    });
+
+    document.getElementById('pfReconSelect').addEventListener('change', (e) => {
+        partialFourierRecon = e.target.value;
+        if (!isAnimating && currentLine > 0) {
+            reconstructImage();
+            renderAll();
+        }
+    });
+
+    // Parallel Imaging controls
+    document.getElementById('parallelImagingSelect').addEventListener('change', (e) => {
+        const val = parseInt(e.target.value);
+        numCoils = val;
+        parallelAcceleration = val; // R = number of coils for simplified demo
+        updateResolutionInfo();
+        if (!isAnimating && currentLine > 0) {
+            acquireAllLines();
+            renderAll();
+        }
     });
 }
