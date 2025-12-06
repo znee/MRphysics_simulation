@@ -836,10 +836,8 @@ function renderKSpace() {
 
     // Visual Marker for Resolution Boundary (k-space coverage)
     // SNR baseline is 256×256; show color-coded boundary
+    // (centerX, centerY, halfRes already defined above)
     const SNR_BASELINE = 256;
-    const centerX = N / 2;
-    const centerY = N / 2;
-    const halfRes = matrixSize / 2;
     const snr = (SNR_BASELINE / matrixSize) * (SNR_BASELINE / matrixSize);
 
     // Color based on SNR relative to baseline (256×256 = 1.0)
