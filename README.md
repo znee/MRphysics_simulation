@@ -6,6 +6,28 @@ Interactive web-based educational tools for understanding MRI physics fundamenta
 
 ---
 
+## Part 0: NMR Signal Formation
+
+**[Launch Part 0](https://znee.github.io/MRphysics_simulation/part0/)**
+
+Watch how spinning protons create the MR signal. Visualize magnetization dynamics, FID formation, and echo mechanisms through real-time animations.
+
+### Features
+- **Module A - Spin Alignment**: Watch random spins align with B₀ through T1 relaxation
+- **Module B - FID Formation**: See RF excitation tip magnetization and progressive dephasing create the FID
+- **Module C - Echo Formation**: Compare Spin Echo (180° refocusing) vs Gradient Echo (gradient reversal)
+- **3D Visualization**: Individual spins + net magnetization vector + Mxy/Mz component arrows
+- **Real-time Charts**: Mxy decay, Mz recovery, and complex signal (Re, Im, magnitude)
+- **Signal Detection**: Panel glow based on dMxy/dt (Faraday's law)
+
+### Physics Model
+- **Bloch Equations**: Full magnetization evolution with T1/T2 relaxation
+- **Spin Echo**: 180° pulse inverts phases → echo at T2 envelope (refocuses B₀ inhomogeneity)
+- **Gradient Echo**: Gradient reversal → echo at T2* envelope (does NOT refocus B₀)
+- **Rotating Frame**: Visualization at Larmor frequency ω₀ = γB₀
+
+---
+
 ## Part 1: MR Signal & Contrast Simulator
 
 **[Launch Part 1](https://znee.github.io/MRphysics_simulation/part1/)**
@@ -92,12 +114,12 @@ See [QSM Consensus Organization Committee, MRM 2024](https://onlinelibrary.wiley
 ## How to Use
 
 ### Online
-Visit the [Live Demo](https://znee.github.io/MRphysics_simulation/) and select Part 1, Part 2, or Part 3.
+Visit the [Live Demo](https://znee.github.io/MRphysics_simulation/) and select Part 0, 1, 2, or 3.
 
 ### Local
 1. Clone this repository
 2. Open `index.html` in a modern browser, or
-3. Navigate directly to `part1/index.html`, `part2/index.html`, or `part3/index.html`
+3. Navigate directly to `part0/index.html`, `part1/index.html`, `part2/index.html`, or `part3/index.html`
 
 ## Technologies
 
