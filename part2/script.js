@@ -511,6 +511,9 @@ function animate() {
     const endLine = Math.floor(N / 2 + halfRes);
     const totalLines = endLine - startLine;
 
+    // Calculate actual acquired lines considering undersampling
+    const acquiredLines = Math.ceil(totalLines / skipY);
+
     // Acquire lines based on speed
     const linesPerFrame = Math.max(1, Math.floor(animationSpeed / 2));
 
@@ -518,7 +521,10 @@ function animate() {
         // Map currentLine (0 to totalLines) to actual k-space line (startLine to endLine)
         if (currentLine >= totalLines) {
             stopAnimation();
-            updateStatus('Acquisition Complete');
+            const completionMsg = skipY > 1
+                ? `Acquisition Complete (${acquiredLines}/${totalLines} lines, ${skipY}x undersampling)`
+                : 'Acquisition Complete';
+            updateStatus(completionMsg);
             return;
         }
 
@@ -529,7 +535,13 @@ function animate() {
 
     reconstructImage();
     renderAll();
-    updateStatus(`Acquiring... Line ${currentLine}/${totalLines}`);
+
+    // Show progress with undersampling info
+    const currentAcquired = Math.ceil(currentLine / skipY);
+    const progressMsg = skipY > 1
+        ? `Acquiring... ${currentAcquired}/${acquiredLines} lines (${skipY}x skip)`
+        : `Acquiring... Line ${currentLine}/${totalLines}`
+    updateStatus(progressMsg);
 
     animationFrameId = requestAnimationFrame(animate);
 }
@@ -632,25 +644,32 @@ function updateResolutionInfo() {
     const pixelSizeRatio = SNR_BASELINE / matrixSize;
 
     // K-space coverage: percentage of k-space AREA relative to full N×N
-    const kspaceCoverageArea = (matrixSize / N) * (matrixSize / N) * 100;
+    // Must account for undersampling factor (skipY)
+    const kspaceCoverageArea = (matrixSize / N) * (matrixSize / N) * (1 / skipY) * 100;
 
     // SNR relationship for 2D imaging with constant FOV:
     // Signal per voxel ∝ voxel_area = (pixel_size)^2
     // Noise per voxel is constant (thermal noise in receiver)
     // Therefore: SNR ∝ (pixel_size)^2 = (baseline/matrixSize)^2
     //
+    // With undersampling (acceleration factor R = skipY):
+    // SNR_accelerated = SNR_full / √R (due to reduced averaging/coverage)
+    //
     // Lower resolution (128x128): 2x pixels vs baseline → SNR = 4.00
     // Baseline resolution (256x256): 1x pixels → SNR = 1.00
     // Higher resolution (512x512): 0.5x pixels → SNR = 0.25
+    // With 4x undersampling: SNR reduced by factor of 2 (√4)
     //
     // This demonstrates the fundamental resolution-SNR tradeoff!
-    const relativeSNR = pixelSizeRatio * pixelSizeRatio;
+    const resolutionSNR = pixelSizeRatio * pixelSizeRatio;
+    const undersamplingPenalty = 1 / Math.sqrt(skipY); // SNR ∝ 1/√R
+    const relativeSNR = resolutionSNR * undersamplingPenalty;
 
     document.getElementById('matrixSizeVal').innerText = matrixSize;
     document.getElementById('matrixSizeVal2').innerText = matrixSize;
     document.getElementById('pixelSizeVal').innerText = pixelSizeRatio.toFixed(2) + 'x';
 
-    // Show coverage as area percentage of full k-space (N×N)
+    // Show coverage as area percentage of full k-space (N×N), accounting for undersampling
     document.getElementById('kspaceCoverageVal').innerText = kspaceCoverageArea.toFixed(1) + '%';
 
     document.getElementById('snrVal').innerText = relativeSNR.toFixed(2);

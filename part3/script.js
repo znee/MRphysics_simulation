@@ -514,7 +514,8 @@ let fieldMap = new Float32Array(CONFIG.gridSize * CONFIG.gridSize); // Current s
 let reconMap = new Float32Array(CONFIG.gridSize * CONFIG.gridSize); // Current slice reconstruction
 let cleanFieldMap = new Float32Array(CONFIG.gridSize * CONFIG.gridSize); // Field without noise
 let cachedNoise = new Float32Array(CONFIG.gridSize * CONFIG.gridSize); // Cached noise for current slice
-let needsForwardRecalc = true; // Flag to recalculate forward model
+let needsForwardRecalc = true; // Flag to recalculate forward model (chi → field)
+let needsInverseRecalc = true; // Flag to recalculate inverse model only (field → recon)
 
 // 3D Volume state
 let chiVolume = null; // 3D susceptibility volume
@@ -951,22 +952,24 @@ function setupEventListeners() {
         runSimulation();
     });
 
-    // Lambda - needs full 3D recalc for proper physics
-    // Use 'change' event (on release) for heavy computation, 'input' for label update
+    // Lambda - only needs inverse recalc (reuse existing noisy field)
+    // Use 'change' event (on release) for computation, 'input' for label update
     lambdaSlider.addEventListener('input', (e) => {
         lambdaLabel.innerText = parseFloat(e.target.value).toFixed(3);
     });
     lambdaSlider.addEventListener('change', (e) => {
         CONFIG.lambda = parseFloat(e.target.value);
         lambdaLabel.innerText = CONFIG.lambda.toFixed(3);
-        needsForwardRecalc = true; // Force 3D recalculation
+        // Only inverse recalc needed - keeps same noise for fair comparison
+        needsInverseRecalc = true;
         runSimulation();
     });
 
-    // Recon Method - needs full 3D recalc for proper physics
+    // Recon Method - only needs inverse recalc (reuse existing noisy field)
     reconMethodSelect.addEventListener('change', (e) => {
         CONFIG.reconMethod = e.target.value;
-        needsForwardRecalc = true; // Force 3D recalculation
+        // Only inverse recalc needed - keeps same noise for fair comparison
+        needsInverseRecalc = true;
         runSimulation();
     });
 
@@ -1561,8 +1564,12 @@ function extractSliceFromVolume(volume, slicePos) {
     return slice;
 }
 
-// Run 3D simulation
-function run3DSimulation() {
+// Cached k-space data for inverse-only recalculation
+let cachedKKernel = null;
+let cachedFieldVolumeClean = null; // Field without noise (for reusing with same noise)
+
+// Run 3D forward model: chi → field (with noise)
+function run3DForwardModel() {
     const nx = CONFIG.gridSize;
     const ny = CONFIG.gridSize;
     const nz = CONFIG.gridSizeZ;
@@ -1578,10 +1585,10 @@ function run3DSimulation() {
     FFT.fftShift3D(chiComplex, nx, ny, nz);
 
     // 3. Generate 3D dipole kernel with current B0 angle
-    const kKernel = QSM.generateDipoleKernel3D(nx, ny, nz, CONFIG.b0Angle);
+    cachedKKernel = QSM.generateDipoleKernel3D(nx, ny, nz, CONFIG.b0Angle);
 
     // 4. Multiply in k-space (forward model)
-    const kField = QSM.multiplyKSpace3D(chiComplex, kKernel);
+    const kField = QSM.multiplyKSpace3D(chiComplex, cachedKKernel);
 
     // 5. Inverse FFT to get field (phase)
     const fieldComplex = new ComplexArray(totalSize);
@@ -1590,13 +1597,14 @@ function run3DSimulation() {
     FFT.fftShift3D(fieldComplex, nx, ny, nz);
     FFT.fft3D(fieldComplex, nx, ny, nz, true);
 
-    fieldVolume = new Float32Array(totalSize);
-    fieldVolume.set(fieldComplex.real);
+    // Store clean field (without noise)
+    cachedFieldVolumeClean = new Float32Array(totalSize);
+    cachedFieldVolumeClean.set(fieldComplex.real);
 
     // 6. Add noise to field volume (reduced to 2% for cleaner reconstruction)
     let maxVal = 0;
     for (let i = 0; i < totalSize; i++) {
-        const absVal = Math.abs(fieldVolume[i]);
+        const absVal = Math.abs(cachedFieldVolumeClean[i]);
         if (absVal > maxVal) maxVal = absVal;
     }
     const sigma = maxVal * 0.02;
@@ -1607,7 +1615,27 @@ function run3DSimulation() {
         const u2 = Math.random();
         const z0 = Math.sqrt(-2.0 * Math.log(u1 || 0.001)) * Math.cos(2.0 * Math.PI * u2);
         cachedNoiseVolume[i] = z0 * sigma;
-        fieldVolume[i] += cachedNoiseVolume[i];
+    }
+
+    // Create noisy field volume
+    fieldVolume = new Float32Array(totalSize);
+    for (let i = 0; i < totalSize; i++) {
+        fieldVolume[i] = cachedFieldVolumeClean[i] + cachedNoiseVolume[i];
+    }
+
+    needsForwardRecalc = false;
+}
+
+// Run 3D inverse model: field → recon (reuses existing noisy field)
+function run3DInverseModel() {
+    const nx = CONFIG.gridSize;
+    const ny = CONFIG.gridSize;
+    const nz = CONFIG.gridSizeZ;
+    const totalSize = nx * ny * nz;
+
+    // Ensure we have the dipole kernel (regenerate if B0 angle changed)
+    if (!cachedKKernel) {
+        cachedKKernel = QSM.generateDipoleKernel3D(nx, ny, nz, CONFIG.b0Angle);
     }
 
     // 7. Reconstruction - FFT of noisy field
@@ -1617,7 +1645,7 @@ function run3DSimulation() {
     FFT.fftShift3D(reconComplex, nx, ny, nz);
 
     // 8. Divide by dipole kernel with regularization
-    const kRecon = QSM.divideKSpace3D(reconComplex, kKernel, CONFIG.lambda, CONFIG.reconMethod);
+    const kRecon = QSM.divideKSpace3D(reconComplex, cachedKKernel, CONFIG.lambda, CONFIG.reconMethod);
 
     // Note: Cone-of-silence artifacts naturally arise from the ill-conditioned dipole inversion
     // The regularization/TKD handles this - no need for artificial noise injection
@@ -1632,7 +1660,13 @@ function run3DSimulation() {
     reconVolume = new Float32Array(totalSize);
     reconVolume.set(spatialRecon.real);
 
-    needsForwardRecalc = false;
+    needsInverseRecalc = false;
+}
+
+// Run full 3D simulation (forward + inverse)
+function run3DSimulation() {
+    run3DForwardModel();
+    run3DInverseModel();
 }
 
 function runSimulation(forceForwardRecalc = false) {
@@ -1642,12 +1676,20 @@ function runSimulation(forceForwardRecalc = false) {
 
     if (CONFIG.use3D) {
         // 3D simulation mode
-        // Always run 3D simulation if volumes don't exist yet
+        // Run full forward+inverse if forward model needs recalculation
         if (needsForwardRecalc || forceForwardRecalc || !chiVolume || !fieldVolume) {
             try {
                 run3DSimulation();
             } catch (e) {
                 console.error('3D simulation error:', e);
+            }
+        }
+        // Run inverse-only if just λ or recon method changed (keeps same noise)
+        else if (needsInverseRecalc && fieldVolume && cachedKKernel) {
+            try {
+                run3DInverseModel();
+            } catch (e) {
+                console.error('3D inverse model error:', e);
             }
         }
 
@@ -1656,7 +1698,7 @@ function runSimulation(forceForwardRecalc = false) {
         fieldMap = extractSliceFromVolume(fieldVolume, slicePos);
 
         // Extract reconstruction from 3D volume (using proper 3D physics)
-        // Note: For interactive lambda adjustment, we need to re-run full 3D simulation
+        // Lambda/method changes now reuse same noisy field for fair comparison
         reconMap = extractSliceFromVolume(reconVolume, slicePos);
 
     } else {

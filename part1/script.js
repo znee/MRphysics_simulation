@@ -171,10 +171,12 @@ class MRPhysics {
             this.params.sequence = 'SE';
             this.params.tr = 500;
             this.params.te = 20;
+            this.params.inhomogeneity = 0; // SE doesn't use inhomogeneity
         } else if (type === 'T2') {
             this.params.sequence = 'SE';
             this.params.tr = 3000;
             this.params.te = 100;
+            this.params.inhomogeneity = 0; // SE doesn't use inhomogeneity
         } else if (type === 'T2*') {
             this.params.sequence = 'GRE';
             this.params.tr = 500;
@@ -187,12 +189,14 @@ class MRPhysics {
             this.params.te = 100;
             this.params.ti = 2200; // Null CSF (T1 ~4500ms -> TI ~ 0.69*T1 but usually 2000-2500ms at 1.5T)
             this.params.fa = 90; // Standard readout
+            this.params.inhomogeneity = 0; // IR doesn't use inhomogeneity
         } else if (type === 'STIR') {
             this.params.sequence = 'IR';
             this.params.tr = 4000;
             this.params.te = 50;
             this.params.ti = 170; // Null Fat (T1 ~250ms -> TI ~ 0.69*T1)
             this.params.fa = 90; // Standard readout
+            this.params.inhomogeneity = 0; // IR doesn't use inhomogeneity
         }
 
         // Update UI
@@ -201,13 +205,11 @@ class MRPhysics {
         // Update sliders if they exist (need to re-render params first to create elements)
         this.renderParams();
 
-        // Update inhomogeneity slider if needed
-        if (type === 'T2*') {
-            const inhoSlider = document.getElementById('inhomogeneity');
-            if (inhoSlider) {
-                inhoSlider.value = this.params.inhomogeneity;
-                document.getElementById('inhomogeneityValue').textContent = `${this.params.inhomogeneity} Hz`;
-            }
+        // Always sync inhomogeneity slider with current params
+        const inhoSlider = document.getElementById('inhomogeneity');
+        if (inhoSlider) {
+            inhoSlider.value = this.params.inhomogeneity;
+            document.getElementById('inhomogeneityValue').textContent = `${this.params.inhomogeneity} Hz`;
         }
 
         this.updateSimulation();
