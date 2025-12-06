@@ -6,7 +6,7 @@
  *
  * Modules:
  * A - Single Spin Dynamics (Bloch equations)
- * B - Multi-Spin Ensemble (FID formation)
+ * B - Multi-Spin Ensemble (FID formation) - CENTRAL MODULE
  * C - Echo Formation (Spin Echo, Gradient Echo)
  */
 
@@ -15,13 +15,14 @@
 // ============================================================================
 
 const GAMMA = 42.577; // Gyromagnetic ratio for 1H (MHz/T)
+const DEFAULT_MAX_TIME = 500; // Default simulation duration (ms)
 
 const CONFIG = {
     // Animation
     animationSpeed: 1.0,
     isPlaying: false,
     currentTime: 0,       // ms
-    maxTime: 500,         // ms
+    maxTime: DEFAULT_MAX_TIME,
     dt: 0.5,              // Time step (ms)
 
     // Module A: Single Spin
@@ -51,7 +52,7 @@ const CONFIG = {
 // ============================================================================
 
 class Spin {
-    constructor(T1, T2, deltaOmega = 0) {
+    constructor(T1, T2, deltaOmega = 0, B0 = 1.5) {
         // Magnetization components (normalized to M0 = 1)
         this.Mx = 0;
         this.My = 0;
@@ -61,11 +62,19 @@ class Spin {
         this.T1 = T1;
         this.T2 = T2;
 
-        // Frequency offset from Larmor (Hz) - for T2* effects
+        // Base frequency offset from Larmor (Hz) - for T2* effects
+        // This is the "intrinsic" offset due to field inhomogeneity
+        this.baseDeltaOmega = deltaOmega;
         this.deltaOmega = deltaOmega;
+
+        // B0 field strength (Tesla) - affects Larmor frequency
+        this.B0 = B0;
 
         // Phase accumulation
         this.phase = 0;
+
+        // Gradient state (for gradient echo)
+        this.gradientSign = 1;
     }
 
     /**
@@ -116,6 +125,7 @@ class Spin {
         const dtSec = dt / 1000;
 
         // Precession due to frequency offset (in rotating frame)
+        // deltaOmega includes field inhomogeneity effects
         const dPhi = 2 * Math.PI * this.deltaOmega * dtSec;
         this.phase += dPhi;
 
@@ -150,13 +160,16 @@ class Spin {
     }
 
     /**
-     * Reset to equilibrium
+     * Reset to equilibrium (preserves base frequency offset)
      */
     reset() {
         this.Mx = 0;
         this.My = 0;
         this.Mz = 1.0;
         this.phase = 0;
+        // Restore original frequency offset
+        this.deltaOmega = this.baseDeltaOmega;
+        this.gradientSign = 1;
     }
 
     /**
@@ -171,6 +184,22 @@ class Spin {
         this.Mx = Mxy * Math.cos(newPhase);
         this.My = Mxy * Math.sin(newPhase);
     }
+
+    /**
+     * Toggle gradient direction (for gradient echo)
+     */
+    toggleGradient() {
+        this.gradientSign *= -1;
+        this.deltaOmega = this.baseDeltaOmega * this.gradientSign;
+    }
+
+    /**
+     * Restore gradient to original direction
+     */
+    restoreGradient() {
+        this.gradientSign = 1;
+        this.deltaOmega = this.baseDeltaOmega;
+    }
 }
 
 // ============================================================================
@@ -178,12 +207,13 @@ class Spin {
 // ============================================================================
 
 class SpinEnsemble {
-    constructor(numSpins, T1, T2, freqSpread) {
-        this.spins = [];
+    constructor(numSpins, T1, T2, freqSpread, B0 = 1.5) {
         this.numSpins = numSpins;
         this.T1 = T1;
         this.T2 = T2;
         this.freqSpread = freqSpread;
+        this.B0 = B0;
+        this.spins = [];
 
         this.createSpins();
     }
@@ -194,10 +224,10 @@ class SpinEnsemble {
             // Gaussian distribution of frequency offsets
             const u1 = Math.random();
             const u2 = Math.random();
-            const z = Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+            const z = Math.sqrt(-2 * Math.log(u1 || 0.0001)) * Math.cos(2 * Math.PI * u2);
             const deltaOmega = z * this.freqSpread;
 
-            this.spins.push(new Spin(this.T1, this.T2, deltaOmega));
+            this.spins.push(new Spin(this.T1, this.T2, deltaOmega, this.B0));
         }
     }
 
@@ -211,6 +241,40 @@ class SpinEnsemble {
 
     reset() {
         this.spins.forEach(spin => spin.reset());
+    }
+
+    /**
+     * Update T2 for all spins (for interactive control)
+     */
+    setT2(newT2) {
+        this.T2 = newT2;
+        this.spins.forEach(spin => {
+            spin.T2 = newT2;
+        });
+    }
+
+    /**
+     * Update T1 for all spins
+     */
+    setT1(newT1) {
+        this.T1 = newT1;
+        this.spins.forEach(spin => {
+            spin.T1 = newT1;
+        });
+    }
+
+    /**
+     * Toggle gradient for all spins
+     */
+    toggleGradient() {
+        this.spins.forEach(spin => spin.toggleGradient());
+    }
+
+    /**
+     * Restore gradient for all spins
+     */
+    restoreGradient() {
+        this.spins.forEach(spin => spin.restoreGradient());
     }
 
     /**
@@ -257,8 +321,8 @@ class SpinEnsemble {
 // GLOBAL STATE
 // ============================================================================
 
-let singleSpin = new Spin(CONFIG.T1, CONFIG.T2, 0);
-let ensemble = new SpinEnsemble(CONFIG.numSpins, CONFIG.T1, CONFIG.T2ensemble, CONFIG.freqSpread);
+let singleSpin = new Spin(CONFIG.T1, CONFIG.T2, 0, CONFIG.B0);
+let ensemble = new SpinEnsemble(CONFIG.numSpins, CONFIG.T1, CONFIG.T2ensemble, CONFIG.freqSpread, CONFIG.B0);
 
 // Data arrays for plotting
 let timeData = [];
@@ -268,8 +332,9 @@ let signalReData = [];
 let signalImData = [];
 
 // Echo sequence state
-let echoSequenceState = 'idle'; // 'idle', 'dephasing', 'refocusing', 'echo'
+let echoSequenceState = 'idle'; // 'idle', 'dephasing', 'refocusing', 'echo', 'done'
 let echoSequenceTime = 0;
+let gradientFlipped = false; // Track if gradient has been flipped
 
 // Three.js globals
 let scene, camera, renderer;
@@ -775,13 +840,17 @@ function updateModuleC(dt) {
             echoSequenceState = 'refocusing';
         }
     } else {
-        // Gradient Echo: gradient reversal at TE/2
-        if (echoSequenceState === 'dephasing' && echoSequenceTime >= halfTE) {
-            // Invert frequency offsets (simulate gradient reversal)
-            ensemble.spins.forEach(spin => {
-                spin.deltaOmega = -spin.deltaOmega;
-            });
+        // Gradient Echo: gradient reversal at TE/2, restore at TE
+        if (echoSequenceState === 'dephasing' && echoSequenceTime >= halfTE && !gradientFlipped) {
+            // Toggle gradient direction
+            ensemble.toggleGradient();
+            gradientFlipped = true;
             echoSequenceState = 'refocusing';
+        }
+        // Restore gradient after echo (at TE)
+        if (echoSequenceState === 'refocusing' && echoSequenceTime >= CONFIG.TE && gradientFlipped) {
+            ensemble.restoreGradient();
+            echoSequenceState = 'done';
         }
     }
 
@@ -855,25 +924,25 @@ function updateInfoPanel(module) {
         case 'A':
             infoTitle.textContent = 'Module A: Bloch Equations';
             infoText.innerHTML = `
-                A single proton's magnetization precesses around B₀ at the Larmor frequency
-                \\(\\omega_0 = \\gamma B_0\\). After an RF pulse tips the magnetization,
-                T1 recovery restores Mz while T2 decay reduces Mxy.
+                <strong>Arrow Direction:</strong> RF pulse rotates M from z-axis into xy-plane (flip angle α).<br>
+                <strong>Arrow Length:</strong> T2 decay shrinks Mxy; T1 recovery restores Mz toward equilibrium (M₀=1).<br>
+                <em>Green circle = transverse (xy) plane where signal is detected.</em>
             `;
             break;
         case 'B':
             infoTitle.textContent = 'Module B: FID Formation';
             infoText.innerHTML = `
-                Multiple spins with slightly different frequencies dephase over time.
-                The sum signal decays with time constant T2* (faster than T2).
-                Watch how individual arrows fan out while the sum shrinks!
+                <strong>Arrow Direction (Phase):</strong> Each spin precesses at ω₀ + Δω (field inhomogeneity). Different Δω → different phases → dephasing.<br>
+                <strong>Arrow Length (Mxy):</strong> Individual Mxy decays by T2. Sum shrinks faster (T2*) due to destructive interference.<br>
+                <strong>White arrow:</strong> Vector sum of all spins = detected signal.
             `;
             break;
         case 'C':
             infoTitle.textContent = 'Module C: Echo Formation';
             infoText.innerHTML = `
-                <strong>Spin Echo:</strong> 180° pulse inverts phases, causing rephasing.<br>
-                <strong>Gradient Echo:</strong> Gradient reversal refocuses gradient-induced dephasing.<br>
-                Spin Echo recovers T2* losses; Gradient Echo does not.
+                <strong>Spin Echo:</strong> 180° pulse flips phase (φ → -φ). Fast spins now "behind" → catch up → rephase at TE.<br>
+                <strong>Gradient Echo:</strong> Gradient reversal (G → -G) reverses Δω sign. Phase unwinding → echo at TE.<br>
+                <strong>Key difference:</strong> Spin Echo refocuses B₀ inhomogeneity (T2 weighting); Gradient Echo does not (T2* weighting).
             `;
             break;
     }
@@ -934,6 +1003,8 @@ function setupEventListeners() {
         CONFIG.B0 = parseFloat(e.target.value);
         const freq = (GAMMA * CONFIG.B0).toFixed(1);
         document.getElementById('B0-display').textContent = `${CONFIG.B0} T (${freq} MHz)`;
+        // Update B0 for single spin (affects any off-resonance behavior)
+        singleSpin.B0 = CONFIG.B0;
     });
 
     document.getElementById('btn-rf-pulse').addEventListener('click', () => {
@@ -952,7 +1023,7 @@ function setupEventListeners() {
     });
 
     document.getElementById('num-spins').addEventListener('change', () => {
-        ensemble = new SpinEnsemble(CONFIG.numSpins, CONFIG.T1, CONFIG.T2ensemble, CONFIG.freqSpread);
+        ensemble = new SpinEnsemble(CONFIG.numSpins, CONFIG.T1, CONFIG.T2ensemble, CONFIG.freqSpread, CONFIG.B0);
         if (CONFIG.currentModule === 'B') createEnsembleArrows();
     });
 
@@ -962,13 +1033,15 @@ function setupEventListeners() {
     });
 
     document.getElementById('freq-spread').addEventListener('change', () => {
-        ensemble = new SpinEnsemble(CONFIG.numSpins, CONFIG.T1, CONFIG.T2ensemble, CONFIG.freqSpread);
+        ensemble = new SpinEnsemble(CONFIG.numSpins, CONFIG.T1, CONFIG.T2ensemble, CONFIG.freqSpread, CONFIG.B0);
         if (CONFIG.currentModule === 'B') createEnsembleArrows();
     });
 
     document.getElementById('T2-ensemble').addEventListener('input', (e) => {
         CONFIG.T2ensemble = parseInt(e.target.value);
         document.getElementById('T2-ensemble-val').textContent = CONFIG.T2ensemble + ' ms';
+        // FIX: Update T2 for all spins in the ensemble
+        ensemble.setT2(CONFIG.T2ensemble);
     });
 
     document.getElementById('btn-excite').addEventListener('click', () => {
@@ -1011,6 +1084,9 @@ function resetSimulation() {
     CONFIG.currentTime = 0;
     lastTimestamp = 0;
 
+    // FIX: Always restore maxTime to default
+    CONFIG.maxTime = DEFAULT_MAX_TIME;
+
     // Clear data
     clearChartData();
 
@@ -1021,6 +1097,7 @@ function resetSimulation() {
     // Reset echo state
     echoSequenceState = 'idle';
     echoSequenceTime = 0;
+    gradientFlipped = false;
 
     // Update UI
     document.getElementById('time-val').textContent = '0.00 ms';
@@ -1042,7 +1119,7 @@ function runEchoSequence() {
     const T2star = CONFIG.T2starEcho;
     const freqSpread = 1000 / (Math.PI * T2star); // Convert T2* to freq spread
 
-    ensemble = new SpinEnsemble(CONFIG.numSpins, CONFIG.T1, CONFIG.T2echo, freqSpread);
+    ensemble = new SpinEnsemble(CONFIG.numSpins, CONFIG.T1, CONFIG.T2echo, freqSpread, CONFIG.B0);
     createEnsembleArrows();
 
     // Apply initial 90° pulse
@@ -1051,8 +1128,10 @@ function runEchoSequence() {
     // Start sequence
     echoSequenceState = 'dephasing';
     echoSequenceTime = 0;
+    gradientFlipped = false;
     CONFIG.isPlaying = true;
-    CONFIG.maxTime = CONFIG.TE * 2; // Show until after echo
+    // Set maxTime to show echo and some time after
+    CONFIG.maxTime = CONFIG.TE * 2.5;
 }
 
 // ============================================================================

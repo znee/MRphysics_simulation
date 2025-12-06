@@ -276,6 +276,35 @@ body {
     color: var(--text-secondary);
 }
 
+.spin-view-legend {
+    position: absolute;
+    bottom: 10px;
+    left: 10px;
+    background: rgba(0, 0, 0, 0.7);
+    padding: 8px 12px;
+    border-radius: 6px;
+    font-size: 0.7rem;
+    color: var(--text-secondary);
+}
+
+.spin-view-legend .legend-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 4px;
+}
+
+.spin-view-legend .legend-row:last-child {
+    margin-bottom: 0;
+}
+
+.spin-view-legend .color-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 2px;
+    flex-shrink: 0;
+}
+
 /* Signal Panels */
 .signal-panels {
     width: 450px;
