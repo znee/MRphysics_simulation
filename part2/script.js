@@ -977,7 +977,7 @@ function bindEvents() {
     document.getElementById('noiseRange').addEventListener('input', (e) => {
         noiseLevel = parseInt(e.target.value);
         // Re-acquire to show noise effect immediately if static
-        if (!isAnimating && currentLine === N) {
+        if (!isAnimating && currentLine >= matrixSize) {
             acquireAllLines();
             renderAll();
         }
@@ -985,7 +985,7 @@ function bindEvents() {
 
     document.getElementById('motionRange').addEventListener('input', (e) => {
         motionLevel = parseInt(e.target.value);
-        if (!isAnimating && currentLine === N) {
+        if (!isAnimating && currentLine >= matrixSize) {
             acquireAllLines();
             renderAll();
         }
@@ -994,11 +994,14 @@ function bindEvents() {
     document.getElementById('spikeCheck').addEventListener('change', (e) => {
         hasSpike = e.target.checked;
         if (hasSpike) {
-            // Randomize spike location
-            spikeX = Math.floor(Math.random() * N);
-            spikeY = Math.floor(Math.random() * N);
+            // Randomize spike location within current resolution's k-space boundary
+            const halfRes = matrixSize / 2;
+            const centerX = N / 2;
+            const centerY = N / 2;
+            spikeX = Math.floor(centerX - halfRes + Math.random() * matrixSize);
+            spikeY = Math.floor(centerY - halfRes + Math.random() * matrixSize);
         }
-        if (!isAnimating && currentLine === N) {
+        if (!isAnimating && currentLine >= matrixSize) {
             acquireAllLines();
             renderAll();
         }
@@ -1007,7 +1010,7 @@ function bindEvents() {
     document.getElementById('skipYRange').addEventListener('input', (e) => {
         skipY = parseInt(e.target.value);
         document.getElementById('skipYVal').innerText = skipY;
-        if (!isAnimating && currentLine === N) {
+        if (!isAnimating && currentLine >= matrixSize) {
             acquireAllLines();
             renderAll();
         }
@@ -1015,9 +1018,25 @@ function bindEvents() {
 
     // Matrix Size (Resolution) slider
     document.getElementById('matrixSizeRange').addEventListener('input', (e) => {
+        const oldMatrixSize = matrixSize;
         matrixSize = parseInt(e.target.value);
         updateResolutionInfo();
-        if (!isAnimating && currentLine === N) {
+        // Reset spike position if it's now outside the new boundary
+        if (hasSpike) {
+            const halfRes = matrixSize / 2;
+            const centerX = N / 2;
+            const centerY = N / 2;
+            const minX = centerX - halfRes;
+            const maxX = centerX + halfRes;
+            const minY = centerY - halfRes;
+            const maxY = centerY + halfRes;
+            if (spikeX < minX || spikeX >= maxX || spikeY < minY || spikeY >= maxY) {
+                // Relocate spike within new boundary
+                spikeX = Math.floor(centerX - halfRes + Math.random() * matrixSize);
+                spikeY = Math.floor(centerY - halfRes + Math.random() * matrixSize);
+            }
+        }
+        if (!isAnimating && currentLine >= oldMatrixSize) {
             acquireAllLines();
             renderAll();
         }
@@ -1026,7 +1045,7 @@ function bindEvents() {
     // Simulate SNR checkbox
     document.getElementById('simulateSNRCheck').addEventListener('change', (e) => {
         simulateSNR = e.target.checked;
-        if (!isAnimating && currentLine === N) {
+        if (!isAnimating && currentLine >= matrixSize) {
             acquireAllLines();
             renderAll();
         }
@@ -1053,6 +1072,6 @@ function bindEvents() {
     kCanvas.addEventListener('mouseleave', () => {
         isInspecting = false;
         renderImage();
-        updateStatus(isAnimating ? `Acquiring... Line ${currentLine}/${N}` : 'Ready');
+        updateStatus(isAnimating ? `Acquiring... Line ${currentLine}/${matrixSize}` : 'Ready');
     });
 }
