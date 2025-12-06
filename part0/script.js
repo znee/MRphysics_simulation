@@ -707,21 +707,24 @@ function updateAlignmentArrows() {
     // Update net magnetization arrow
     // The true net magnetization from random spins is ~1/√N (very small)
     // For N=100 random spins: |M| ~ 0.1
-    // After alignment: |M| ~ 1.0 (all spins along +z)
+    // After alignment: |M| approaches 1.0 (all spins along +z)
     const sum = alignmentEnsemble.getSumMagnetization();
     const sumDir = new THREE.Vector3(sum.Mx, sum.My, sum.Mz);
     const sumLength = sumDir.length();
 
-    // Only show the arrow when there's meaningful alignment (Mz > 0.3)
-    // Random spins give |M| ~ 0.1, so threshold at 0.2 hides the noise
-    // Aligned spins give |M| ~ 1.0, clearly visible
-    // Scale the display length but don't exaggerate random fluctuations
-    const VISIBILITY_THRESHOLD = 0.2;  // Hide arrow for random state
-    const displayLength = Math.min(sumLength, 1.0);
+    // Show arrow based on Mz alignment (what we're visualizing)
+    // Random spins: Mz ~ 0 (cancel out)
+    // Aligned spins: Mz → 1.0 (all pointing +z)
+    // Use sum.Mz as the visibility criterion since that's what the chart shows
+    const VISIBILITY_THRESHOLD = 0.1;
 
     if (netMagArrowA) {
-        if (sumLength > VISIBILITY_THRESHOLD) {
+        // Use Mz for visibility check (matches the Mz chart)
+        // But use full vector for direction
+        if (sum.Mz > VISIBILITY_THRESHOLD) {
             sumDir.normalize();
+            // Arrow length proportional to |M|, with minimum for visibility
+            const displayLength = Math.max(sumLength, 0.15);
             netMagArrowA.setDirection(sumDir);
             netMagArrowA.setLength(displayLength, 0.12, 0.06);
             netMagArrowA.visible = true;
