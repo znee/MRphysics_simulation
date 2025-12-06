@@ -33,7 +33,7 @@
                         <h2>Original Object</h2>
                     </div>
                     <div class="canvas-container" style="position: relative;">
-                        <canvas id="originalCanvas" width="256" height="256"></canvas>
+                        <canvas id="originalCanvas" width="512" height="512"></canvas>
                         <div class="encoding-guide phase-guide">
                             <span class="arrow">↓</span>
                             <span class="label">Phase (PE)</span>
@@ -50,7 +50,7 @@
                         <h2>K-Space Magnitude</h2>
                     </div>
                     <div class="canvas-container">
-                        <canvas id="kspaceMagCanvas" width="256" height="256"></canvas>
+                        <canvas id="kspaceMagCanvas" width="512" height="512"></canvas>
                     </div>
                 </div>
             </div>
@@ -62,7 +62,7 @@
                         <h2>Reconstructed Image</h2>
                     </div>
                     <div class="canvas-container">
-                        <canvas id="reconstructedCanvas" width="256" height="256"></canvas>
+                        <canvas id="reconstructedCanvas" width="512" height="512"></canvas>
                     </div>
                 </div>
                 <!-- Bottom Right: K-Space Phase -->
@@ -71,7 +71,7 @@
                         <h2>K-Space Phase</h2>
                     </div>
                     <div class="canvas-container">
-                        <canvas id="kspacePhaseCanvas" width="256" height="256"></canvas>
+                        <canvas id="kspacePhaseCanvas" width="512" height="512"></canvas>
                     </div>
                 </div>
             </div>
@@ -165,13 +165,13 @@
                     <div class="info-box explanation-box">
                         <h3>Resolution & K-Space</h3>
                         <p class="explanation-text">
-                            <strong>Low Resolution (&lt;256):</strong> Truncates outer k-space. Coverage is area-based: 128×128 = 25%, 64×64 = 6.25%.
+                            <strong>Baseline (256):</strong> Uses 25% of full k-space. SNR = 1.0.
                         </p>
                         <p class="explanation-text">
-                            <strong>High Resolution (&gt;256):</strong> Smaller voxels require more k-space. Simulation shows SNR penalty of finer resolution.
+                            <strong>Lower Resolution:</strong> Truncates more k-space. Larger voxels → higher SNR.
                         </p>
                         <p class="explanation-text">
-                            <strong>SNR Trade-off:</strong> SNR ∝ (voxel size)². 2× resolution → 0.25× SNR. This is the fundamental MRI tradeoff!
+                            <strong>Higher Resolution:</strong> Uses more k-space. Smaller voxels → lower SNR. 512×512 = 0.25× SNR.
                         </p>
                     </div>
                 </div>

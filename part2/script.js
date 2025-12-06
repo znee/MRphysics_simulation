@@ -9,7 +9,7 @@
  */
 
 // --- Constants ---
-const N = 256; // Matrix size (256x256 for better resolution)
+const N = 512; // Matrix size (512x512 for full resolution range)
 
 // --- State ---
 let kSpaceData = null; // Full K-space (Ground Truth)
@@ -506,23 +506,32 @@ function stopAnimation() {
 function animate() {
     if (!isAnimating) return;
 
+    // Calculate the k-space region to acquire based on current resolution
+    // Only acquire lines within the matrixSize boundary (centered)
+    const halfRes = matrixSize / 2;
+    const startLine = Math.floor(N / 2 - halfRes);
+    const endLine = Math.floor(N / 2 + halfRes);
+    const totalLines = endLine - startLine;
+
     // Acquire lines based on speed
     const linesPerFrame = Math.max(1, Math.floor(animationSpeed / 2));
 
     for (let i = 0; i < linesPerFrame; i++) {
-        if (currentLine >= N) {
+        // Map currentLine (0 to totalLines) to actual k-space line (startLine to endLine)
+        if (currentLine >= totalLines) {
             stopAnimation();
             updateStatus('Acquisition Complete');
             return;
         }
 
-        acquireLine(currentLine);
+        const actualLine = startLine + currentLine;
+        acquireLine(actualLine);
         currentLine++;
     }
 
     reconstructImage();
     renderAll();
-    updateStatus(`Acquiring... Line ${currentLine}/${N}`);
+    updateStatus(`Acquiring... Line ${currentLine}/${totalLines}`);
 
     animationFrameId = requestAnimationFrame(animate);
 }
@@ -618,27 +627,23 @@ function acquireLine(lineIndex) {
 
 // Calculate and update resolution info display
 function updateResolutionInfo() {
-    // Base resolution is N (256), matrixSize can be 32-512
-    const isHigherRes = matrixSize > N;
+    // SNR baseline is 256×256 for educational clarity
+    const SNR_BASELINE = 256;
 
-    // Pixel size ratio relative to native 256×256
-    // Smaller matrix = larger pixels, larger matrix = smaller pixels
-    const pixelSizeRatio = N / matrixSize;
+    // Pixel size ratio relative to baseline (256×256)
+    const pixelSizeRatio = SNR_BASELINE / matrixSize;
 
-    // K-space coverage: percentage of k-space AREA
-    // For lower res: truncated, coverage = (matrixSize/N)^2
-    // For higher res: would need extended k-space (hypothetical)
-    const effectiveMatrix = Math.min(matrixSize, N);
-    const kspaceCoverageArea = (effectiveMatrix / N) * (effectiveMatrix / N) * 100;
+    // K-space coverage: percentage of k-space AREA relative to full N×N
+    const kspaceCoverageArea = (matrixSize / N) * (matrixSize / N) * 100;
 
     // SNR relationship for 2D imaging with constant FOV:
     // Signal per voxel ∝ voxel_area = (pixel_size)^2
     // Noise per voxel is constant (thermal noise in receiver)
-    // Therefore: SNR ∝ (pixel_size)^2 = (N/matrixSize)^2
+    // Therefore: SNR ∝ (pixel_size)^2 = (baseline/matrixSize)^2
     //
-    // Lower resolution (64x64): 4x pixels → 16x SNR
-    // Native resolution (256x256): 1x pixels → 1x SNR
-    // Higher resolution (512x512): 0.5x pixels → 0.25x SNR
+    // Lower resolution (128x128): 2x pixels vs baseline → SNR = 4.00
+    // Baseline resolution (256x256): 1x pixels → SNR = 1.00
+    // Higher resolution (512x512): 0.5x pixels → SNR = 0.25
     //
     // This demonstrates the fundamental resolution-SNR tradeoff!
     const relativeSNR = pixelSizeRatio * pixelSizeRatio;
@@ -647,12 +652,8 @@ function updateResolutionInfo() {
     document.getElementById('matrixSizeVal2').innerText = matrixSize;
     document.getElementById('pixelSizeVal').innerText = pixelSizeRatio.toFixed(2) + 'x';
 
-    // Show coverage as area percentage
-    if (isHigherRes) {
-        document.getElementById('kspaceCoverageVal').innerText = '100% (extended)';
-    } else {
-        document.getElementById('kspaceCoverageVal').innerText = kspaceCoverageArea.toFixed(1) + '%';
-    }
+    // Show coverage as area percentage of full k-space (N×N)
+    document.getElementById('kspaceCoverageVal').innerText = kspaceCoverageArea.toFixed(1) + '%';
 
     document.getElementById('snrVal').innerText = relativeSNR.toFixed(2);
 
@@ -679,18 +680,19 @@ function updateResolutionInfo() {
 function getEffectiveNoiseLevel() {
     if (!simulateSNR) return noiseLevel;
 
+    // SNR baseline is 256×256
+    const SNR_BASELINE = 256;
+
     // When simulating SNR, noise scales inversely with voxel area
-    // SNR ∝ (pixel_size)^2, so noise ∝ 1/(pixel_size)^2 = (matrixSize/N)^2
-    const pixelSizeRatio = N / matrixSize;
-    const snrFactor = 1 / (pixelSizeRatio * pixelSizeRatio);
+    // SNR ∝ (pixel_size)^2 = (baseline/matrixSize)^2
+    // Noise ∝ 1/SNR = (matrixSize/baseline)^2
+    const snrFactor = (matrixSize / SNR_BASELINE) * (matrixSize / SNR_BASELINE);
 
     // At 256x256 (baseline), snrFactor = 1, noise = base
     // At 128x128, snrFactor = 0.25 (less noise, 4x SNR)
-    // At 64x64, snrFactor = 0.0625 (much less noise, 16x SNR)
     // At 512x512, snrFactor = 4 (more noise, 0.25x SNR)
     //
-    // This demonstrates the fundamental MRI tradeoff:
-    // Higher resolution → smaller voxels → less signal → lower SNR
+    // Higher resolution = smaller voxels = less signal = more visible noise
     const baseSimulatedNoise = 25;
     const simulatedNoise = baseSimulatedNoise * snrFactor;
 
@@ -699,8 +701,15 @@ function getEffectiveNoiseLevel() {
 }
 
 function acquireAllLines() {
-    for (let i = 0; i < N; i++) acquireLine(i);
-    currentLine = N;
+    // Only acquire lines within the matrixSize boundary (centered)
+    const halfRes = matrixSize / 2;
+    const startLine = Math.floor(N / 2 - halfRes);
+    const endLine = Math.floor(N / 2 + halfRes);
+
+    for (let i = startLine; i < endLine; i++) {
+        acquireLine(i);
+    }
+    currentLine = endLine - startLine; // Total lines acquired
     reconstructImage();
 }
 
@@ -806,76 +815,60 @@ function renderKSpace() {
     phaseCtx.putImageData(phaseImgData, 0, 0);
 
     // Visual Marker for Resolution Boundary (k-space coverage)
-    // Always show boundary and label for educational clarity
+    // SNR baseline is 256×256; show color-coded boundary
+    const SNR_BASELINE = 256;
     const centerX = N / 2;
     const centerY = N / 2;
+    const halfRes = matrixSize / 2;
+    const snr = (SNR_BASELINE / matrixSize) * (SNR_BASELINE / matrixSize);
 
-    if (matrixSize < N) {
-        // Low resolution: show truncation boundary
-        const halfRes = matrixSize / 2;
-
-        // Draw rectangle showing acquired k-space region
-        magCtx.strokeStyle = 'rgba(56, 189, 248, 0.8)'; // Cyan for truncation
-        magCtx.lineWidth = 2;
-        magCtx.setLineDash([5, 5]);
-        magCtx.strokeRect(centerX - halfRes, centerY - halfRes, matrixSize, matrixSize);
-        magCtx.setLineDash([]);
-
-        // Add truncation label
-        magCtx.fillStyle = 'rgba(56, 189, 248, 0.9)';
-        magCtx.font = '10px Inter';
-        magCtx.shadowColor = 'black';
-        magCtx.shadowBlur = 2;
-        magCtx.fillText('Truncated: ' + matrixSize + '×' + matrixSize, 5, 12);
-        magCtx.shadowBlur = 0;
-
-        // Also draw on phase canvas
-        phaseCtx.strokeStyle = 'rgba(56, 189, 248, 0.8)';
-        phaseCtx.lineWidth = 2;
-        phaseCtx.setLineDash([5, 5]);
-        phaseCtx.strokeRect(centerX - halfRes, centerY - halfRes, matrixSize, matrixSize);
-        phaseCtx.setLineDash([]);
-    } else if (matrixSize === N) {
-        // Native resolution: show full boundary
-        magCtx.strokeStyle = 'rgba(148, 163, 184, 0.6)'; // Gray for native
-        magCtx.lineWidth = 1;
-        magCtx.strokeRect(1, 1, N - 2, N - 2);
-
-        // Add native label
-        magCtx.fillStyle = 'rgba(148, 163, 184, 0.9)';
-        magCtx.font = '10px Inter';
-        magCtx.shadowColor = 'black';
-        magCtx.shadowBlur = 2;
-        magCtx.fillText('Native: ' + N + '×' + N, 5, 12);
-        magCtx.shadowBlur = 0;
-
-        // Also draw on phase canvas
-        phaseCtx.strokeStyle = 'rgba(148, 163, 184, 0.6)';
-        phaseCtx.lineWidth = 1;
-        phaseCtx.strokeRect(1, 1, N - 2, N - 2);
+    // Color based on SNR relative to baseline (256×256 = 1.0)
+    let strokeColor, fillColor;
+    if (snr >= 4) {
+        // High SNR (low resolution, e.g., 128×128 or smaller)
+        strokeColor = 'rgba(74, 222, 128, 0.8)';
+        fillColor = 'rgba(74, 222, 128, 0.9)';
+    } else if (snr >= 1) {
+        // Baseline or slightly above (e.g., 256×256)
+        strokeColor = 'rgba(56, 189, 248, 0.8)';
+        fillColor = 'rgba(56, 189, 248, 0.9)';
+    } else if (snr >= 0.5) {
+        // Below baseline (e.g., 384×384)
+        strokeColor = 'rgba(251, 191, 36, 0.8)';
+        fillColor = 'rgba(251, 191, 36, 0.9)';
     } else {
-        // Higher resolution: show full boundary with indicator
-        magCtx.strokeStyle = 'rgba(248, 113, 113, 0.8)'; // Red for high res (lower SNR)
-        magCtx.lineWidth = 2;
-        magCtx.setLineDash([3, 3]);
-        magCtx.strokeRect(1, 1, N - 2, N - 2);
-        magCtx.setLineDash([]);
-
-        // Add high resolution label
-        magCtx.fillStyle = 'rgba(248, 113, 113, 0.9)';
-        magCtx.font = '10px Inter';
-        magCtx.shadowColor = 'black';
-        magCtx.shadowBlur = 2;
-        magCtx.fillText('High Res: ' + matrixSize + '×' + matrixSize, 5, 12);
-        magCtx.shadowBlur = 0;
-
-        // Also draw on phase canvas
-        phaseCtx.strokeStyle = 'rgba(248, 113, 113, 0.8)';
-        phaseCtx.lineWidth = 2;
-        phaseCtx.setLineDash([3, 3]);
-        phaseCtx.strokeRect(1, 1, N - 2, N - 2);
-        phaseCtx.setLineDash([]);
+        // Low SNR (high resolution, e.g., 512×512)
+        strokeColor = 'rgba(248, 113, 113, 0.8)';
+        fillColor = 'rgba(248, 113, 113, 0.9)';
     }
+
+    const label = matrixSize + '×' + matrixSize + ' (SNR ' + snr.toFixed(2) + 'x)';
+
+    // Draw rectangle showing acquired k-space region
+    magCtx.strokeStyle = strokeColor;
+    magCtx.lineWidth = 2;
+    if (matrixSize < N) {
+        magCtx.setLineDash([5, 5]);
+    }
+    magCtx.strokeRect(centerX - halfRes, centerY - halfRes, matrixSize, matrixSize);
+    magCtx.setLineDash([]);
+
+    // Add label
+    magCtx.fillStyle = fillColor;
+    magCtx.font = '10px Inter';
+    magCtx.shadowColor = 'black';
+    magCtx.shadowBlur = 2;
+    magCtx.fillText(label, 5, 12);
+    magCtx.shadowBlur = 0;
+
+    // Also draw on phase canvas
+    phaseCtx.strokeStyle = strokeColor;
+    phaseCtx.lineWidth = 2;
+    if (matrixSize < N) {
+        phaseCtx.setLineDash([5, 5]);
+    }
+    phaseCtx.strokeRect(centerX - halfRes, centerY - halfRes, matrixSize, matrixSize);
+    phaseCtx.setLineDash([]);
 
     // Visual Marker for Spike Noise
     if (hasSpike) {
@@ -955,7 +948,9 @@ function bindEvents() {
     });
 
     document.getElementById('btnStartFill').addEventListener('click', () => {
-        if (currentLine >= N) {
+        // Check if acquisition is complete for current resolution
+        const totalLines = matrixSize;
+        if (currentLine >= totalLines) {
             resetAcquisition();
         }
         startAnimation();
@@ -964,9 +959,7 @@ function bindEvents() {
 
     document.getElementById('btnAcquireAll').addEventListener('click', () => {
         stopAnimation();
-        for (let i = 0; i < N; i++) acquireLine(i);
-        currentLine = N;
-        reconstructImage();
+        acquireAllLines();
         renderAll();
         updateStatus('Acquisition Complete');
     });
