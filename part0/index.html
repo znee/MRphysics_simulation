@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Part 0: NMR Signal | MR Physics Simulation</title>
+    <link rel="stylesheet" href="style.css">
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <!-- Three.js -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- MathJax -->
+    <script src="https://polyfill.io/v3/polyfill.min.js?features=es6"></script>
+    <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+</head>
+
+<body>
+    <div class="app-container">
+        <header class="main-header">
+            <a href="../index.html" class="back-link">&larr; Home</a>
+            <div class="header-titles">
+                <h1>NMR <span class="highlight">Signal</span> Formation</h1>
+                <p class="subtitle">From spinning protons to the MR signal - watch magnetization evolve in real-time</p>
+            </div>
+        </header>
+
+        <main class="main-content">
+            <aside class="sidebar">
+                <!-- Module Selection -->
+                <div class="module-tabs">
+                    <button class="module-tab active" data-module="A">A: Spin</button>
+                    <button class="module-tab" data-module="B">B: FID</button>
+                    <button class="module-tab" data-module="C">C: Echo</button>
+                </div>
+
+                <!-- Animation Controls -->
+                <div class="control-group">
+                    <h2>Animation</h2>
+                    <div class="animation-controls">
+                        <button class="btn primary" id="btn-play">Play</button>
+                        <button class="btn secondary" id="btn-pause">Pause</button>
+                        <button class="btn secondary" id="btn-reset">Reset</button>
+                    </div>
+                    <div class="speed-control">
+                        <label>Speed:</label>
+                        <input type="range" id="speed-slider" min="0.1" max="3" step="0.1" value="1">
+                        <span id="speed-val">1.0x</span>
+                    </div>
+                    <div class="time-display">
+                        <span class="label">Time</span>
+                        <span class="value" id="time-val">0.00 ms</span>
+                    </div>
+                </div>
+
+                <!-- Module A: Single Spin Controls -->
+                <div class="control-group module-controls" id="controls-A">
+                    <h2>Single Spin Parameters</h2>
+
+                    <label for="flip-angle">Flip Angle (\(\alpha\))</label>
+                    <input type="range" id="flip-angle" min="0" max="180" step="5" value="90">
+                    <span id="flip-angle-val">90°</span>
+
+                    <label for="T1-val">T1 Relaxation (ms)</label>
+                    <input type="range" id="T1-val" min="100" max="3000" step="100" value="1000">
+                    <span id="T1-display">1000 ms</span>
+
+                    <label for="T2-val">T2 Relaxation (ms)</label>
+                    <input type="range" id="T2-val" min="10" max="500" step="10" value="100">
+                    <span id="T2-display">100 ms</span>
+
+                    <label for="B0-val">B0 Field (T)</label>
+                    <input type="range" id="B0-val" min="0.5" max="7" step="0.5" value="1.5">
+                    <span id="B0-display">1.5 T (63.9 MHz)</span>
+
+                    <button class="btn primary" id="btn-rf-pulse" style="width: 100%; margin-top: 15px;">
+                        Apply RF Pulse
+                    </button>
+
+                    <div class="vector-display">
+                        <div class="vector-component x">
+                            <div class="axis">Mx</div>
+                            <div class="value" id="Mx-val">0.00</div>
+                        </div>
+                        <div class="vector-component y">
+                            <div class="axis">My</div>
+                            <div class="value" id="My-val">0.00</div>
+                        </div>
+                        <div class="vector-component z">
+                            <div class="axis">Mz</div>
+                            <div class="value" id="Mz-val">1.00</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Module B: Multi-Spin Controls -->
+                <div class="control-group module-controls" id="controls-B" style="display: none;">
+                    <h2>Spin Ensemble Parameters</h2>
+
+                    <label for="num-spins">Number of Spins</label>
+                    <input type="range" id="num-spins" min="10" max="200" step="10" value="50">
+                    <span id="num-spins-val">50 spins</span>
+
+                    <label for="freq-spread">Frequency Spread (Hz) - T2*</label>
+                    <input type="range" id="freq-spread" min="0" max="100" step="5" value="30">
+                    <span id="freq-spread-val">30 Hz</span>
+
+                    <label for="T2-ensemble">Intrinsic T2 (ms)</label>
+                    <input type="range" id="T2-ensemble" min="50" max="500" step="10" value="150">
+                    <span id="T2-ensemble-val">150 ms</span>
+
+                    <button class="btn primary" id="btn-excite" style="width: 100%; margin-top: 15px;">
+                        90° Excitation
+                    </button>
+
+                    <label style="margin-top: 15px;">
+                        <input type="checkbox" id="show-individual" checked>
+                        Show Individual Spins
+                    </label>
+
+                    <div class="spin-counter">
+                        <span class="count" id="coherent-count">0%</span>
+                        <span class="label">Phase Coherence</span>
+                    </div>
+                </div>
+
+                <!-- Module C: Echo Controls -->
+                <div class="control-group module-controls" id="controls-C" style="display: none;">
+                    <h2>Echo Formation</h2>
+
+                    <label for="echo-type">Echo Type</label>
+                    <select id="echo-type">
+                        <option value="spin">Spin Echo (180° refocus)</option>
+                        <option value="gradient">Gradient Echo</option>
+                    </select>
+
+                    <label for="TE-val">Echo Time TE (ms)</label>
+                    <input type="range" id="TE-val" min="10" max="200" step="5" value="50">
+                    <span id="TE-display">50 ms</span>
+
+                    <label for="T2-echo">T2 (ms)</label>
+                    <input type="range" id="T2-echo" min="50" max="300" step="10" value="100">
+                    <span id="T2-echo-val">100 ms</span>
+
+                    <label for="T2star-echo">T2* (ms)</label>
+                    <input type="range" id="T2star-echo" min="10" max="100" step="5" value="30">
+                    <span id="T2star-echo-val">30 ms</span>
+
+                    <button class="btn primary" id="btn-run-sequence" style="width: 100%; margin-top: 15px;">
+                        Run Sequence
+                    </button>
+
+                    <div class="legend">
+                        <div class="legend-item">
+                            <span class="legend-color" style="background: #ef4444;"></span>
+                            <span>T2* decay</span>
+                        </div>
+                        <div class="legend-item">
+                            <span class="legend-color" style="background: #22c55e;"></span>
+                            <span>T2 envelope</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Info Panel -->
+                <div class="info-panel" id="info-panel">
+                    <h4>Module A: Bloch Equations</h4>
+                    <p id="info-text">
+                        A single proton's magnetization precesses around B0 at the Larmor frequency
+                        \(\omega_0 = \gamma B_0\). After an RF pulse tips the magnetization,
+                        T1 recovery restores Mz while T2 decay reduces Mxy.
+                    </p>
+                </div>
+
+                <div class="sidebar-footer">
+                    <p>Jinhee Jang, MD, PhD</p>
+                    <p>Department of Radiology, Seoul St. Mary's Hospital</p>
+                </div>
+            </aside>
+
+            <section class="visualization-area">
+                <!-- 3D Spin Visualization -->
+                <div class="spin-view-container">
+                    <div id="canvas-3d"></div>
+                    <div class="spin-view-label">
+                        <span id="view-label">Rotating Frame (ω₀)</span>
+                    </div>
+                </div>
+
+                <!-- Signal Plots -->
+                <div class="signal-panels">
+                    <div class="signal-panel">
+                        <h3>Transverse Magnetization <span class="equation">\(M_{xy}(t)\)</span></h3>
+                        <div class="chart-container">
+                            <canvas id="chart-mxy"></canvas>
+                        </div>
+                    </div>
+                    <div class="signal-panel">
+                        <h3>Longitudinal Recovery <span class="equation">\(M_z(t)\)</span></h3>
+                        <div class="chart-container">
+                            <canvas id="chart-mz"></canvas>
+                        </div>
+                    </div>
+                    <div class="signal-panel">
+                        <h3>Signal / FID <span class="equation">\(S(t) = M_{xy} e^{i\phi}\)</span></h3>
+                        <div class="chart-container">
+                            <canvas id="chart-signal"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+
+</html>

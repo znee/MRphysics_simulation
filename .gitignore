@@ -15,3 +15,4 @@
 # Exclude development artifacts
 node_modules/
 *.log
+PLAN_PART0.md
