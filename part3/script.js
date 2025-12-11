@@ -875,27 +875,32 @@ class SpatialEncodingSimulator {
         ctx.font = 'bold 12px Inter';
         ctx.textAlign = 'left';
         ctx.fillStyle = '#a855f7';
-        ctx.fillText('Circle = Frequency (Gx)', 10, 18);
+        ctx.fillText('Circle color = x position (Gx)', 10, 18);
         ctx.fillStyle = '#22d3ee';
-        ctx.fillText(' →', 155, 18);
+        ctx.fillText(' →', 175, 18);
 
         ctx.fillStyle = '#ef4444';
-        ctx.fillText('Arrow = Phase (Gy)', 10, 34);
+        ctx.fillText('Arrow color = y position (Gy)', 10, 34);
         ctx.fillStyle = '#fbbf24';
-        ctx.fillText(' →', 135, 34);
+        ctx.fillText(' →', 175, 34);
+
+        // Clarify arrow direction meaning
+        ctx.font = '11px Inter';
+        ctx.fillStyle = '#94a3b8';
+        ctx.fillText('Arrow direction = total phase (Gx + Gy)', 10, 50);
 
         // Show current state - explain temporal sequence
         ctx.font = '11px Inter';
-        ctx.fillStyle = '#94a3b8';
-        let stateText = 'No gradients';
+        ctx.fillStyle = '#10b981';  // Green for active state
+        let stateText = 'No gradients active';
         if (this.gxEnabled && this.gyEnabled) {
-            stateText = 'Gy first → then Gx during readout';
+            stateText = 'Active: Gy first → then Gx during readout';
         } else if (this.gxEnabled) {
-            stateText = 'Gx during readout';
+            stateText = 'Active: Gx during readout → phase ramp across x';
         } else if (this.gyEnabled) {
-            stateText = 'Gy before readout (fixed offset)';
+            stateText = 'Active: Gy before readout → fixed offset per row';
         }
-        ctx.fillText(stateText, 10, 50);
+        ctx.fillText(stateText, 10, 66);
 
         // X-axis label at bottom center
         ctx.font = '12px Inter';
