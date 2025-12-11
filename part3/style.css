@@ -439,12 +439,14 @@ body {
 
     .sidebar {
         width: 100%;
-        max-height: 280px;
+        max-height: 320px;
+        overflow-y: auto;
     }
 
     .viz-grid {
         grid-template-columns: 1fr 1fr;
         grid-template-rows: 1fr 1fr;
+        min-height: 400px;
     }
 }
 
@@ -459,8 +461,12 @@ body {
         font-size: 1.2rem;
     }
 
+    .subtitle {
+        font-size: 0.8rem;
+    }
+
     .sidebar {
-        max-height: 250px;
+        max-height: 280px;
         padding: 12px;
     }
 
@@ -470,33 +476,109 @@ body {
     }
 
     .viz-grid {
-        grid-template-columns: 1fr;
-        grid-template-rows: repeat(4, 1fr);
+        grid-template-columns: 1fr 1fr;
+        grid-template-rows: 1fr 1fr;
+        min-height: 350px;
     }
 
     .viz-panel {
-        min-height: 180px;
+        min-height: 160px;
+    }
+
+    .panel-header h2 {
+        font-size: 0.7rem;
+    }
+
+    .panel-badge {
+        font-size: 0.55rem;
+        padding: 2px 6px;
     }
 }
 
 @media (max-width: 480px) {
     .app-container {
-        padding: 8px 12px;
+        padding: 8px 10px;
     }
 
     .header-titles h1 {
-        font-size: 1.1rem;
+        font-size: 1rem;
+    }
+
+    .subtitle {
+        font-size: 0.75rem;
     }
 
     .sidebar {
-        max-height: 220px;
+        max-height: 240px;
+        padding: 10px;
+        gap: 8px;
+    }
+
+    .module-tab {
+        font-size: 0.65rem;
+        padding: 6px 4px;
+    }
+
+    .control-group h2 {
+        font-size: 0.75rem;
+        margin-bottom: 8px;
+    }
+
+    .toggle-group {
+        margin-bottom: 8px;
+        padding: 8px;
     }
 
     .toggle-label {
-        font-size: 0.8rem;
+        font-size: 0.75rem;
+        gap: 8px;
+    }
+
+    .toggle-label input[type="checkbox"] {
+        width: 16px;
+        height: 16px;
+    }
+
+    .info-panel {
+        padding: 8px;
+    }
+
+    .info-panel h4 {
+        font-size: 0.65rem;
     }
 
     .info-panel p {
-        font-size: 0.7rem;
+        font-size: 0.65rem;
+    }
+
+    .equation-box {
+        padding: 8px;
+        font-size: 0.8rem;
+    }
+
+    .viz-grid {
+        grid-template-columns: 1fr;
+        grid-template-rows: repeat(4, minmax(140px, 1fr));
+        min-height: 600px;
+    }
+
+    .viz-panel {
+        min-height: 140px;
+    }
+
+    .panel-header {
+        padding: 6px 10px;
+    }
+
+    .panel-header h2 {
+        font-size: 0.65rem;
+    }
+
+    .sidebar-footer {
+        padding-top: 8px;
+    }
+
+    .sidebar-footer p {
+        font-size: 0.6rem;
     }
 }

@@ -848,38 +848,6 @@ class SpatialEncodingSimulator {
             }
         }
 
-        // Axis labels
-        ctx.fillStyle = '#94a3b8';
-        ctx.font = '12px Inter';
-        ctx.textAlign = 'center';
-
-        // X-axis label with frequency indication
-        if (this.gxEnabled) {
-            ctx.fillStyle = '#a855f7'; // Purple for low frequency
-            ctx.fillText('Low freq', offsetX, h - 15);
-            ctx.fillStyle = '#22d3ee'; // Cyan for high frequency
-            ctx.fillText('High freq', offsetX + gridWidth, h - 15);
-        } else {
-            ctx.fillStyle = '#94a3b8';
-            ctx.fillText('-x', offsetX, h - 15);
-            ctx.fillText('+x', offsetX + gridWidth, h - 15);
-        }
-
-        // Y-axis label with phase indication
-        ctx.save();
-        ctx.translate(15, offsetY + gridWidth / 2);
-        ctx.rotate(-Math.PI / 2);
-        if (this.gyEnabled) {
-            ctx.fillStyle = '#fbbf24'; // Yellow for phase +
-            ctx.fillText('Phase +', -gridWidth * 0.3, 0);
-            ctx.fillStyle = '#ef4444'; // Red for phase -
-            ctx.fillText('Phase -', gridWidth * 0.3, 0);
-        } else {
-            ctx.fillStyle = '#94a3b8';
-            ctx.fillText('+y                    -y', 0, 0);
-        }
-        ctx.restore();
-
         // Frame indicator (top-right)
         ctx.font = 'bold 11px Inter';
         ctx.textAlign = 'right';
@@ -897,42 +865,66 @@ class SpatialEncodingSimulator {
             ctx.fillText('Base precession removed', w - 10, 27);
         }
 
-        // Color key in top-left
+        // Color key in top-left (compact, single line)
         ctx.font = '9px Inter';
         ctx.textAlign = 'left';
-        let keyY = 30;
+        ctx.fillStyle = '#a855f7';
+        ctx.fillText('Circle = Frequency (Gx)', 10, 15);
+        ctx.fillStyle = '#22d3ee';
+        ctx.fillText(' →', 125, 15);
 
-        // Always show the encoding key
-        ctx.fillStyle = '#a855f7'; // Purple
-        ctx.fillText('Circle = Frequency (Gx)', 10, keyY);
-        ctx.fillStyle = '#22d3ee'; // Cyan
-        ctx.fillText(' → ', 120, keyY);
-        keyY += 12;
-
-        ctx.fillStyle = '#ef4444'; // Red
-        ctx.fillText('Arrow = Phase (Gy)', 10, keyY);
-        ctx.fillStyle = '#fbbf24'; // Yellow
-        ctx.fillText(' → ', 100, keyY);
-        keyY += 14;
+        ctx.fillStyle = '#ef4444';
+        ctx.fillText('Arrow = Phase (Gy)', 10, 27);
+        ctx.fillStyle = '#fbbf24';
+        ctx.fillText(' →', 105, 27);
 
         // Show current state
         ctx.fillStyle = '#64748b';
+        let stateText = 'No gradients active';
         if (this.gxEnabled && this.gyEnabled) {
-            ctx.fillText('Both active', 10, keyY);
+            stateText = 'Both active';
         } else if (this.gxEnabled) {
-            if (this.labFrameMode) {
-                ctx.fillText('Gx: Different speeds!', 10, keyY);
-            } else {
-                ctx.fillText('Gx: Same arrows, diff circles', 10, keyY);
-            }
+            stateText = this.labFrameMode ? 'Gx: Different speeds!' : 'Gx active';
         } else if (this.gyEnabled) {
-            if (this.labFrameMode) {
-                ctx.fillText('Gy: Same speed, diff start', 10, keyY);
-            } else {
-                ctx.fillText('Gy: Different arrow angles', 10, keyY);
-            }
-        } else {
-            ctx.fillText('No gradients active', 10, keyY);
+            stateText = this.labFrameMode ? 'Gy: Same speed, diff start' : 'Gy active';
+        }
+        ctx.fillText(stateText, 10, 39);
+
+        // X-axis label at bottom center
+        ctx.font = '11px Inter';
+        ctx.textAlign = 'center';
+        ctx.fillStyle = '#94a3b8';
+        ctx.fillText('X (Frequency Encode Direction)', offsetX + gridWidth / 2, h - 8);
+
+        // X-axis frequency hints at grid corners
+        if (this.gxEnabled) {
+            ctx.font = '9px Inter';
+            ctx.textAlign = 'left';
+            ctx.fillStyle = '#a855f7';
+            ctx.fillText('Low freq', offsetX, h - 22);
+            ctx.textAlign = 'right';
+            ctx.fillStyle = '#22d3ee';
+            ctx.fillText('High freq', offsetX + gridWidth, h - 22);
+        }
+
+        // Y-axis label (rotated, on left side outside grid)
+        ctx.save();
+        ctx.translate(12, offsetY + gridWidth / 2);
+        ctx.rotate(-Math.PI / 2);
+        ctx.font = '11px Inter';
+        ctx.textAlign = 'center';
+        ctx.fillStyle = '#94a3b8';
+        ctx.fillText('Y (Phase Encode Direction)', 0, 0);
+        ctx.restore();
+
+        // Y-axis phase hints
+        if (this.gyEnabled) {
+            ctx.font = '9px Inter';
+            ctx.textAlign = 'left';
+            ctx.fillStyle = '#fbbf24';
+            ctx.fillText('Phase +', offsetX - 50, offsetY + 10);
+            ctx.fillStyle = '#ef4444';
+            ctx.fillText('Phase -', offsetX - 50, offsetY + gridWidth - 5);
         }
     }
 
