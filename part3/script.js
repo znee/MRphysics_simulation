@@ -855,37 +855,38 @@ class SpatialEncodingSimulator {
         }
 
         // Frame indicator (top-right)
-        ctx.font = 'bold 11px Inter';
+        ctx.font = 'bold 13px Inter';
         ctx.textAlign = 'right';
         if (this.labFrameMode) {
             ctx.fillStyle = '#ef4444'; // Red for lab frame
-            ctx.fillText('LAB FRAME', w - 10, 15);
-            ctx.font = '9px Inter';
+            ctx.fillText('LAB FRAME', w - 10, 18);
+            ctx.font = '11px Inter';
             ctx.fillStyle = '#94a3b8';
-            ctx.fillText('All spins precessing', w - 10, 27);
+            ctx.fillText('All spins precessing', w - 10, 34);
         } else {
             ctx.fillStyle = '#10b981'; // Green for rotating frame
-            ctx.fillText('ROTATING FRAME', w - 10, 15);
-            ctx.font = '9px Inter';
+            ctx.fillText('ROTATING FRAME', w - 10, 18);
+            ctx.font = '11px Inter';
             ctx.fillStyle = '#94a3b8';
-            ctx.fillText('Base precession removed', w - 10, 27);
+            ctx.fillText('Base precession removed', w - 10, 34);
         }
 
-        // Color key in top-left (compact, single line)
-        ctx.font = '9px Inter';
+        // Color key in top-left (larger, more readable)
+        ctx.font = 'bold 12px Inter';
         ctx.textAlign = 'left';
         ctx.fillStyle = '#a855f7';
-        ctx.fillText('Circle = Frequency (Gx)', 10, 15);
+        ctx.fillText('Circle = Frequency (Gx)', 10, 18);
         ctx.fillStyle = '#22d3ee';
-        ctx.fillText(' →', 125, 15);
+        ctx.fillText(' →', 155, 18);
 
         ctx.fillStyle = '#ef4444';
-        ctx.fillText('Arrow = Phase (Gy)', 10, 27);
+        ctx.fillText('Arrow = Phase (Gy)', 10, 34);
         ctx.fillStyle = '#fbbf24';
-        ctx.fillText(' →', 105, 27);
+        ctx.fillText(' →', 135, 34);
 
         // Show current state - explain temporal sequence
-        ctx.fillStyle = '#64748b';
+        ctx.font = '11px Inter';
+        ctx.fillStyle = '#94a3b8';
         let stateText = 'No gradients';
         if (this.gxEnabled && this.gyEnabled) {
             stateText = 'Gy first → then Gx during readout';
@@ -894,30 +895,30 @@ class SpatialEncodingSimulator {
         } else if (this.gyEnabled) {
             stateText = 'Gy before readout (fixed offset)';
         }
-        ctx.fillText(stateText, 10, 39);
+        ctx.fillText(stateText, 10, 50);
 
         // X-axis label at bottom center
-        ctx.font = '11px Inter';
+        ctx.font = '12px Inter';
         ctx.textAlign = 'center';
         ctx.fillStyle = '#94a3b8';
         ctx.fillText('X (Frequency Encode Direction)', offsetX + gridWidth / 2, h - 8);
 
         // X-axis frequency hints at grid corners
         if (this.gxEnabled) {
-            ctx.font = '9px Inter';
+            ctx.font = '11px Inter';
             ctx.textAlign = 'left';
             ctx.fillStyle = '#a855f7';
-            ctx.fillText('Low freq', offsetX, h - 22);
+            ctx.fillText('Low freq', offsetX, h - 24);
             ctx.textAlign = 'right';
             ctx.fillStyle = '#22d3ee';
-            ctx.fillText('High freq', offsetX + gridWidth, h - 22);
+            ctx.fillText('High freq', offsetX + gridWidth, h - 24);
         }
 
         // Y-axis label (rotated, on left side outside grid)
         ctx.save();
         ctx.translate(12, offsetY + gridWidth / 2);
         ctx.rotate(-Math.PI / 2);
-        ctx.font = '11px Inter';
+        ctx.font = 'bold 12px Inter';
         ctx.textAlign = 'center';
         ctx.fillStyle = '#94a3b8';
         ctx.fillText('Y (Phase Encode Direction)', 0, 0);
@@ -925,7 +926,7 @@ class SpatialEncodingSimulator {
 
         // Y-axis phase hints
         if (this.gyEnabled) {
-            ctx.font = '9px Inter';
+            ctx.font = '11px Inter';
             ctx.textAlign = 'left';
             ctx.fillStyle = '#fbbf24';
             ctx.fillText('Phase +', offsetX - 50, offsetY + 10);
