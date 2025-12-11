@@ -416,17 +416,17 @@ input[type="range"] {
 }
 
 .equation-approx {
-    color: var(--text-secondary);
-    font-size: 0.8rem;
+    color: var(--text-primary);
+    font-size: 1.05rem;
+    font-weight: 500;
     margin-bottom: 0.5rem;
     padding-bottom: 0.5rem;
     border-bottom: 1px solid var(--border-color);
 }
 
 .equation-exact {
-    font-size: 0.9rem;
-    font-weight: 500;
-    color: var(--text-primary);
+    font-size: 0.85rem;
+    color: var(--text-secondary);
 }
 
 .equation-exact sup,
