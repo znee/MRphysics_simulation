@@ -127,9 +127,10 @@ body {
     left: 0;
     top: 0;
     bottom: 0;
-    width: 4px;
-    background: var(--tissue-color);
+    width: 10px;
+    background: var(--signal-brightness, #808080);
     border-radius: 10px 0 0 10px;
+    transition: background 0.3s ease;
 }
 
 .tissue-card:hover {

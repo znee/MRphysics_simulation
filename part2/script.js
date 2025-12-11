@@ -516,6 +516,16 @@ class MRPhysics {
 
         // Find max signal for auto-scaling (Windowing)
         const maxSignal = Math.max(...Object.values(signals));
+
+        // Update tissue card border brightness based on scaled signal
+        for (const tissue of this.tissueParams) {
+            const label = tissue.label;
+            const scaledBrightness = maxSignal > 0.001 ? Math.round((signals[label] / maxSignal) * 255) : 0;
+            const tissueCard = document.querySelector(`.tissue-card[data-tissue="${tissue.id}"]`);
+            if (tissueCard) {
+                tissueCard.style.setProperty('--signal-brightness', `rgb(${scaledBrightness}, ${scaledBrightness}, ${scaledBrightness})`);
+            }
+        }
         const scaleFactor = maxSignal > 0.001 ? (255 / maxSignal) : 0;
 
         // Render to canvas
