@@ -601,7 +601,7 @@ function init3D() {
     // Camera - Z is up (clinical MRI convention: Z = Superior-Inferior)
     // Position camera closer for better view
     camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 1000);
-    camera.position.set(-180, -160, 130);  // Closer front-left-above view
+    camera.position.set(-120, -200, 180);  // Higher angle with Z arrow pointing upward
     camera.lookAt(0, 0, 0);
     camera.up.set(0, 0, 1);  // Z is up (Superior direction)
 
