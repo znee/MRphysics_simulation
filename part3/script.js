@@ -24,7 +24,7 @@ class SpatialEncodingSimulator {
         this.gyEnabled = false;
         this.gxStrength = 5;
         this.gyStrength = 5;
-        this.gridSize = 4;
+        this.gridSize = 8;
 
         // Module B: K-space controls
         this.kxPosition = 0;
