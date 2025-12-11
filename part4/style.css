@@ -76,6 +76,10 @@ h1 {
     margin-bottom: 0.3rem;
 }
 
+.highlight {
+    color: var(--accent-color);
+}
+
 .subtitle {
     color: var(--text-secondary);
     font-weight: 300;
