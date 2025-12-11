@@ -374,9 +374,9 @@ class SpatialEncodingSimulator {
             if (spinBadge) spinBadge.textContent = 'Phase Pattern';
         } else {
             if (kspaceTitle) kspaceTitle.textContent = 'K-Space Position';
-            if (kspaceBadge) kspaceBadge.textContent = 'Spatial Frequency';
+            if (kspaceBadge) kspaceBadge.textContent = '';
             if (objectTitle) objectTitle.textContent = 'Object Density';
-            if (spinBadge) spinBadge.textContent = 'Phase Encoding';
+            if (spinBadge) spinBadge.textContent = '';
         }
     }
 
