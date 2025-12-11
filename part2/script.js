@@ -43,7 +43,6 @@ class MRPhysics {
         this.initMechanicsVisualizations();
         this.renderParams();
         this.loadBrainSegmentation();
-        this.makeDraggable();
 
         // Help button
         document.getElementById('helpBtn').addEventListener('click', () => {
@@ -102,49 +101,6 @@ class MRPhysics {
             this.updateSimulation();
         };
         img.src = brainSegBase64;
-    }
-
-    makeDraggable() {
-        const overlay = document.getElementById('equation-overlay');
-        let isDragging = false;
-        let currentX;
-        let currentY;
-        let initialX;
-        let initialY;
-
-        overlay.addEventListener('mousedown', (e) => {
-            isDragging = true;
-            initialX = e.clientX - overlay.offsetLeft;
-            initialY = e.clientY - overlay.offsetTop;
-        });
-
-        document.addEventListener('mousemove', (e) => {
-            if (!isDragging) return;
-
-            e.preventDefault();
-            currentX = e.clientX - initialX;
-            currentY = e.clientY - initialY;
-
-            // Keep within container bounds
-            const container = document.getElementById('brain-phantom-container');
-            const containerRect = container.getBoundingClientRect();
-            const overlayRect = overlay.getBoundingClientRect();
-
-            const maxX = containerRect.width - overlayRect.width;
-            const maxY = containerRect.height - overlayRect.height;
-
-            currentX = Math.max(0, Math.min(currentX, maxX));
-            currentY = Math.max(0, Math.min(currentY, maxY));
-
-            overlay.style.left = currentX + 'px';
-            overlay.style.top = currentY + 'px';
-            overlay.style.bottom = 'auto';
-            overlay.style.right = 'auto';
-        });
-
-        document.addEventListener('mouseup', () => {
-            isDragging = false;
-        });
     }
 
     initUI() {
@@ -546,6 +502,12 @@ class MRPhysics {
             }
             signalDebug[tissue.id] = { raw: s, abs: Math.abs(s) };
             signals[label] = Math.abs(s);
+
+            // Update signal display in tissue card
+            const signalEl = document.getElementById(`signal-${tissue.id}`);
+            if (signalEl) {
+                signalEl.textContent = `S: ${Math.abs(s).toFixed(2)}`;
+            }
         }
         console.log('Tissue signals:', signalDebug, 'Params:', this.params);
 
