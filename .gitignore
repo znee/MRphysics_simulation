@@ -1,0 +1,21 @@
+# Exclude macOS system files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+
+# Exclude editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Exclude development artifacts
+node_modules/
+*.log
+PLAN_PART0.md
+
+# Exclude large data files
+*.nii.gz

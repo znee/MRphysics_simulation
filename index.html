@@ -4,199 +4,367 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MR Physics Simulation</title>
-    <link rel="stylesheet" href="style.css">
-    <!-- Google Fonts -->
+    <title>MR Physics Educational Tools</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <!-- Chart.js -->
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        :root {
+            --bg-color: #0f172a;
+            --card-bg: #1e293b;
+            --text-primary: #f8fafc;
+            --text-secondary: #94a3b8;
+            --accent-blue: #3b82f6;
+            --accent-green: #10b981;
+            --border-color: #334155;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background: linear-gradient(135deg, var(--bg-color) 0%, #1e293b 100%);
+            color: var(--text-primary);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 3rem 1.5rem;
+            flex: 1;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 3rem;
+        }
+
+        h1 {
+            font-size: 2.5rem;
+            font-weight: 700;
+            margin-bottom: 0.75rem;
+            background: linear-gradient(135deg, #60a5fa, #a78bfa);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .subtitle {
+            color: var(--text-secondary);
+            font-size: 1.1rem;
+            max-width: 600px;
+            margin: 0 auto;
+            line-height: 1.6;
+        }
+
+        .cards {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 1.5rem;
+            margin-top: 2rem;
+        }
+
+        .card {
+            background: var(--card-bg);
+            border-radius: 16px;
+            padding: 2rem;
+            border: 1px solid var(--border-color);
+            transition: all 0.3s ease;
+            text-decoration: none;
+            color: inherit;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .card:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3);
+            border-color: var(--accent-blue);
+        }
+
+        .card-icon {
+            width: 60px;
+            height: 60px;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.75rem;
+            margin-bottom: 1.25rem;
+        }
+
+        .card:first-child .card-icon {
+            background: linear-gradient(135deg, rgba(59, 130, 246, 0.2), rgba(59, 130, 246, 0.1));
+            color: var(--accent-blue);
+        }
+
+        .card:last-child .card-icon {
+            background: linear-gradient(135deg, rgba(16, 185, 129, 0.2), rgba(16, 185, 129, 0.1));
+            color: var(--accent-green);
+        }
+
+        .card-badge {
+            display: inline-block;
+            padding: 0.25rem 0.75rem;
+            border-radius: 20px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-bottom: 1rem;
+            width: fit-content;
+        }
+
+        .card:first-child .card-badge {
+            background: rgba(59, 130, 246, 0.15);
+            color: #60a5fa;
+        }
+
+        .card:last-child .card-badge {
+            background: rgba(16, 185, 129, 0.15);
+            color: #34d399;
+        }
+
+        .card h2 {
+            font-size: 1.35rem;
+            font-weight: 600;
+            margin-bottom: 0.75rem;
+        }
+
+        .card p {
+            color: var(--text-secondary);
+            font-size: 0.95rem;
+            line-height: 1.6;
+            flex: 1;
+        }
+
+        .card-features {
+            margin-top: 1.25rem;
+            padding-top: 1.25rem;
+            border-top: 1px solid var(--border-color);
+        }
+
+        .card-features ul {
+            list-style: none;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+        }
+
+        .card-features li {
+            font-size: 0.8rem;
+            padding: 0.3rem 0.6rem;
+            background: rgba(148, 163, 184, 0.1);
+            border-radius: 6px;
+            color: var(--text-secondary);
+        }
+
+        .card-arrow {
+            margin-top: 1.5rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-weight: 500;
+            font-size: 0.9rem;
+        }
+
+        .card:first-child .card-arrow {
+            color: var(--accent-blue);
+        }
+
+        .card:last-child .card-arrow {
+            color: var(--accent-green);
+        }
+
+        footer {
+            text-align: center;
+            padding: 2rem;
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+            border-top: 1px solid var(--border-color);
+        }
+
+        @media (max-width: 640px) {
+            h1 {
+                font-size: 1.75rem;
+            }
+
+            .subtitle {
+                font-size: 1rem;
+            }
+
+            .container {
+                padding: 2rem 1rem;
+            }
+
+            .card {
+                padding: 1.5rem;
+            }
+        }
+    </style>
 </head>
 
 <body>
-    <div class="app-container">
-        <header class="main-header">
-            <h1>MR Physics <span class="highlight">Simulation</span></h1>
-            <p class="subtitle">Interactive educational tool for MRI signal processing and contrast mechanisms</p>
+    <div class="container">
+        <header>
+            <h1>MR Physics Educational Tools</h1>
+            <p class="subtitle">Interactive web-based simulations for understanding MRI physics fundamentals, from
+                signal generation to image reconstruction.</p>
         </header>
 
-        <main class="main-content">
-            <aside class="sidebar">
-                <div class="control-group">
-                    <h2>Presets</h2>
-                    <div class="preset-buttons">
-                        <button class="btn secondary" id="preset-t1">T1-Weighted</button>
-                        <button class="btn secondary" id="preset-t2">T2-Weighted</button>
-                        <button class="btn secondary" id="preset-t2star">T2*-Weighted</button>
-                        <button class="btn secondary" id="preset-flair">FLAIR</button>
-                        <button class="btn secondary" id="preset-stir">STIR</button>
-                    </div>
-                </div>
-
-                <div class="control-group">
-                    <h2>Global Settings</h2>
-                    <label for="sequenceType">Sequence Type</label>
-                    <select id="sequenceType">
-                        <option value="SE">Spin Echo (SE)</option>
-                        <option value="GRE">Gradient Echo (GRE)</option>
-                        <option value="IR">Inversion Recovery (IR)</option>
-                    </select>
-
-                    <label for="b0Field">B0 Field Strength (T)</label>
-                    <input type="range" id="b0Field" min="0.5" max="7.0" step="0.5" value="1.5">
-                    <span id="b0Value">1.5 T</span>
-
-                    <div id="inhomogeneity-control" style="display: none;">
-                        <label for="inhomogeneity">Field Inhomogeneity (Hz)</label>
-                        <input type="range" id="inhomogeneity" min="0" max="100" step="5" value="0">
-                        <span id="inhomogeneityValue">0 Hz</span>
-                    </div>
-                </div>
-
-                <div class="control-group">
-                    <h2>Sequence Parameters</h2>
-                    <div id="params-container">
-                        <!-- Dynamic parameters injected here -->
-                    </div>
-                </div>
-
-
-
-                <div class="control-group">
-                    <button id="helpBtn" class="btn primary">How to Read Charts?</button>
-                </div>
-            </aside>
-
-            <section class="visualization-area">
-                <div class="first-row-container">
-                    <div id="brain-phantom-container">
-                        <svg id="brain-svg" viewBox="0 0 500 500" xmlns="http://www.w3.org/2000/svg">
-                            <!-- Black background -->
-                            <rect width="500" height="500" fill="#000" />
-
-                            <!-- Fat/Scalp - outer ring -->
-                            <circle id="region-fat" cx="250" cy="250" r="200" fill="#444" />
-
-                            <!-- Gray Matter - cortex -->
-                            <circle id="region-gm" cx="250" cy="250" r="165" fill="#666" />
-
-                            <!-- White Matter - deep brain -->
-                            <circle id="region-wm" cx="250" cy="250" r="120" fill="#888" />
-
-                            <!-- CSF - ventricles (simplified) -->
-                            <g id="region-csf">
-                                <ellipse cx="220" cy="235" rx="18" ry="35" fill="#0a0a0a" />
-                                <ellipse cx="280" cy="235" rx="18" ry="35" fill="#0a0a0a" />
-                                <rect x="245" y="245" width="10" height="40" rx="5" fill="#0a0a0a" />
-                            </g>
-                        </svg>
-                        <div id="equation-overlay"></div>
-                    </div>
-
-                    <div class="tissue-table-container">
-                        <table class="tissue-table">
-                            <thead>
-                                <tr>
-                                    <th>Tissue</th>
-                                    <th>T1 (ms)</th>
-                                    <th>T2 (ms)</th>
-                                    <th>PD</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                <tr>
-                                    <td><span class="color-box" style="background-color: #e2e8f0;"></span>White Matter
-                                    </td>
-                                    <td>600</td>
-                                    <td>80</td>
-                                    <td>0.7</td>
-                                </tr>
-                                <tr>
-                                    <td><span class="color-box" style="background-color: #94a3b8;"></span>Gray Matter
-                                    </td>
-                                    <td>950</td>
-                                    <td>100</td>
-                                    <td>0.8</td>
-                                </tr>
-                                <tr>
-                                    <td><span class="color-box" style="background-color: #38bdf8;"></span>CSF</td>
-                                    <td>4500</td>
-                                    <td>2200</td>
-                                    <td>1.0</td>
-                                </tr>
-                                <tr>
-                                    <td><span class="color-box" style="background-color: #fbbf24;"></span>Fat</td>
-                                    <td>250</td>
-                                    <td>60</td>
-                                    <td>0.9</td>
-                                </tr>
-                            </tbody>
-                        </table>
-                    </div>
-                </div>
-
-                <div class="parameter-dependency-grid">
-                    <div class="chart-container" id="container-tr">
-                        <h3>Signal vs TR</h3>
-                        <canvas id="chartTR"></canvas>
-                    </div>
-                    <div class="chart-container" id="container-te">
-                        <h3>Signal vs TE</h3>
-                        <canvas id="chartTE"></canvas>
-                    </div>
-                    <div class="chart-container" id="container-ti">
-                        <h3>Signal vs TI</h3>
-                        <canvas id="chartTI"></canvas>
-                    </div>
-                    <div class="chart-container" id="container-fa">
-                        <h3>Signal vs Flip Angle</h3>
-                        <canvas id="chartFA"></canvas>
-                    </div>
-                </div>
-            </section>
-        </main>
-    </div>
-
-    <!-- Help Modal -->
-    <div id="helpModal" class="modal">
-        <div class="modal-content">
-            <span class="close-modal">&times;</span>
-            <h2>Understanding the Charts</h2>
-            <div class="modal-body">
-                <img src="schematic.png" alt="Signal vs Contrast Schematic" class="schematic-img">
-                <div class="modal-text">
-                    <p><strong>1. Signal Evolution (Left Charts):</strong> These charts visualize the magnetization
-                        dynamics <em>within</em> a single TR period.
+        <div class="cards">
+            <a href="part0/index.html" class="card">
+                <div class="card-icon">&#x269B;</div>
+                <span class="card-badge">Part 0</span>
+                <h2>NMR Signal Formation</h2>
+                <p>Watch how spinning protons create the MR signal. Visualize magnetization dynamics,
+                    FID formation, and echo mechanisms through real-time animations.</p>
+                <div class="card-features">
                     <ul>
-                        <li><strong>Mz Recovery:</strong> Shows longitudinal magnetization recovering due to T1
-                            relaxation.</li>
-                        <li><strong>Mxy Decay:</strong> Shows transverse magnetization decaying due to T2 relaxation.
-                        </li>
+                        <li>Bloch Equations</li>
+                        <li>FID & Dephasing</li>
+                        <li>Spin Echo</li>
+                        <li>Gradient Echo</li>
                     </ul>
-                    This helps you understand the underlying physics of signal generation.
-                    </p>
-                    <p><strong>2. Contrast Simulation (Right Charts):</strong> These charts simulate the <em>final
-                            signal intensity</em> across different tissues as you vary a parameter (TR, TE, TI, or Flip
-                        Angle).
-                    <ul>
-                        <li><strong>X-axis:</strong> The parameter you are varying (e.g., TR).</li>
-                        <li><strong>Y-axis:</strong> The resulting signal intensity.</li>
-                        <li><strong>Vertical Line:</strong> Indicates your current parameter setting.</li>
-                    </ul>
-                    Use these to find the optimal settings for maximizing contrast between tissues (e.g., maximizing the
-                    distance between the curves).
-                    </p>
                 </div>
-            </div>
+                <!-- Custom style for Part 0 (green/teal) -->
+                <style>
+                    .card:nth-child(1) .card-icon {
+                        background: linear-gradient(135deg, rgba(16, 185, 129, 0.2), rgba(16, 185, 129, 0.1));
+                        color: #10b981;
+                    }
+
+                    .card:nth-child(1) .card-badge {
+                        background: rgba(16, 185, 129, 0.15);
+                        color: #34d399;
+                    }
+
+                    .card:nth-child(1) .card-arrow {
+                        color: #10b981;
+                    }
+                </style>
+                <div class="card-arrow">
+                    Launch Animation <span>&rarr;</span>
+                </div>
+            </a>
+
+            <a href="part1/index.html" class="card">
+                <div class="card-icon">&#x1F9F2;</div>
+                <span class="card-badge">Part 1</span>
+                <h2>MR Signal & Contrast</h2>
+                <p>Explore how MRI sequences (SE, GRE, IR) generate tissue contrast through T1/T2 relaxation mechanisms
+                    and sequence timing parameters.</p>
+                <div class="card-features">
+                    <ul>
+                        <li>Spin Echo</li>
+                        <li>Gradient Echo</li>
+                        <li>Inversion Recovery</li>
+                        <li>T1/T2 Contrast</li>
+                    </ul>
+                </div>
+                <!-- Custom style for Part 1 (blue) -->
+                <style>
+                    .card:nth-child(2) .card-icon {
+                        background: linear-gradient(135deg, rgba(56, 189, 248, 0.2), rgba(56, 189, 248, 0.1));
+                        color: #38bdf8;
+                    }
+
+                    .card:nth-child(2) .card-badge {
+                        background: rgba(56, 189, 248, 0.15);
+                        color: #7dd3fc;
+                    }
+
+                    .card:nth-child(2) .card-arrow {
+                        color: #38bdf8;
+                    }
+                </style>
+                <div class="card-arrow">
+                    Launch Simulator <span>&rarr;</span>
+                </div>
+            </a>
+
+            <a href="part2/index.html" class="card">
+                <div class="card-icon">&#x1F4CA;</div>
+                <span class="card-badge">Part 2</span>
+                <h2>K-Space & Image Reconstruction</h2>
+                <p>Visualize the relationship between spatial frequency domain (k-space) and image domain through
+                    interactive Fourier transform demonstrations.</p>
+                <div class="card-features">
+                    <ul>
+                        <li>K-Space</li>
+                        <li>Fourier Transform</li>
+                        <li>Sampling</li>
+                        <li>Artifacts</li>
+                    </ul>
+                </div>
+                <!-- Custom style for Part 2 (purple/violet) -->
+                <style>
+                    .card:nth-child(3) .card-icon {
+                        background: linear-gradient(135deg, rgba(168, 85, 247, 0.2), rgba(168, 85, 247, 0.1));
+                        color: #a855f7;
+                    }
+
+                    .card:nth-child(3) .card-badge {
+                        background: rgba(168, 85, 247, 0.15);
+                        color: #c084fc;
+                    }
+
+                    .card:nth-child(3) .card-arrow {
+                        color: #a855f7;
+                    }
+                </style>
+                <div class="card-arrow">
+                    Launch Visualizer <span>&rarr;</span>
+                </div>
+            </a>
+
+            <a href="part3/index.html" class="card">
+                <div class="card-icon">&#x1F9E0;</div>
+                <span class="card-badge">Part 3</span>
+                <h2>QSM & Susceptibility</h2>
+                <p>Understand the physics of Quantitative Susceptibility Mapping, including the dipole field
+                    perturbation and solving the ill-posed inverse problem.</p>
+                <div class="card-features">
+                    <ul>
+                        <li>Dipole Field</li>
+                        <li>Inverse Problem</li>
+                        <li>Regularization</li>
+                        <li>3D Simulation</li>
+                    </ul>
+                </div>
+                <!-- Custom style for this card to distinguish -->
+                <style>
+                    .card:nth-child(4) .card-icon {
+                        background: linear-gradient(135deg, rgba(236, 72, 153, 0.2), rgba(236, 72, 153, 0.1));
+                        color: #ec4899;
+                    }
+
+                    .card:nth-child(4) .card-badge {
+                        background: rgba(236, 72, 153, 0.15);
+                        color: #f472b6;
+                    }
+
+                    .card:nth-child(4) .card-arrow {
+                        color: #ec4899;
+                    }
+                </style>
+                <div class="card-arrow">
+                    Launch Simulation <span>&rarr;</span>
+                </div>
+            </a>
         </div>
     </div>
-    <!-- Footer -->
-    <footer
-        style="text-align: center; padding: 2rem; color: var(--text-secondary); font-size: 0.9rem; margin-top: 2rem; border-top: 1px solid var(--border-color);">
+
+    <footer>
         <p>Jinhee Jang, MD, PhD, Department of Radiology, Seoul St. Mary's Hospital</p>
     </footer>
-    <script src="script.js"></script>
 </body>
 
 </html>

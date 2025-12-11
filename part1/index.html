@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MR Physics Simulation</title>
+    <link rel="stylesheet" href="style.css">
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+
+<body>
+    <div class="app-container">
+        <header class="main-header">
+            <a href="../index.html" class="back-link">&larr; Home</a>
+            <div class="header-titles">
+                <h1>MR Physics <span class="highlight">Simulation</span></h1>
+                <p class="subtitle">Interactive educational tool for MRI signal processing and contrast mechanisms</p>
+            </div>
+        </header>
+
+        <main class="main-content">
+            <aside class="sidebar">
+                <div class="control-group">
+                    <h2>Presets</h2>
+                    <div class="preset-buttons">
+                        <button class="btn secondary" id="preset-t1">T1-Weighted</button>
+                        <button class="btn secondary" id="preset-t2">T2-Weighted</button>
+                        <button class="btn secondary" id="preset-t2star">T2*-Weighted</button>
+                        <button class="btn secondary" id="preset-flair">FLAIR</button>
+                        <button class="btn secondary" id="preset-stir">STIR</button>
+                    </div>
+                </div>
+
+                <div class="control-group">
+                    <h2>Global Settings</h2>
+                    <label for="sequenceType">Sequence Type</label>
+                    <select id="sequenceType">
+                        <option value="SE">Spin Echo (SE)</option>
+                        <option value="GRE">Gradient Echo (GRE)</option>
+                        <option value="IR">Inversion Recovery (IR)</option>
+                    </select>
+
+                    <label for="b0Field">B0 Field Strength (T)</label>
+                    <input type="range" id="b0Field" min="0.5" max="7.0" step="0.5" value="1.5">
+                    <span id="b0Value">1.5 T</span>
+                    <div class="b0-readout">
+                        <span class="freq-label">Larmor Frequency:</span>
+                        <span class="freq-value" id="b0Freq">63.86 MHz</span>
+                    </div>
+
+                    <div id="inhomogeneity-control" style="display: none;">
+                        <label for="inhomogeneity">Field Inhomogeneity (Hz)</label>
+                        <input type="range" id="inhomogeneity" min="0" max="100" step="5" value="0">
+                        <span id="inhomogeneityValue">0 Hz</span>
+                    </div>
+                </div>
+
+                <div class="control-group">
+                    <h2>Sequence Parameters</h2>
+                    <div id="params-container">
+                        <!-- Dynamic parameters injected here -->
+                    </div>
+                </div>
+
+
+
+                <div class="control-group">
+                    <button id="helpBtn" class="btn primary">How to Read Charts?</button>
+                </div>
+
+                <div class="sidebar-footer">
+                    <p>Jinhee Jang, MD, PhD</p>
+                    <p>Department of Radiology, Seoul St. Mary's Hospital</p>
+                </div>
+            </aside>
+
+            <section class="visualization-area">
+                <div class="first-row-container">
+                    <div id="brain-phantom-container">
+                        <canvas id="brain-canvas" width="512" height="512"></canvas>
+                        <div id="equation-overlay"></div>
+                    </div>
+
+                    <div class="tissue-cards-container">
+                        <div class="tissue-card" style="--tissue-color: #e2e8f0;">
+                            <div class="tissue-icon"></div>
+                            <div class="tissue-info">
+                                <div class="tissue-name">White Matter</div>
+                                <div class="tissue-params">T1:600 T2:80 PD:0.7</div>
+                            </div>
+                        </div>
+                        <div class="tissue-card" style="--tissue-color: #94a3b8;">
+                            <div class="tissue-icon"></div>
+                            <div class="tissue-info">
+                                <div class="tissue-name">Gray Matter</div>
+                                <div class="tissue-params">T1:950 T2:100 PD:0.8</div>
+                            </div>
+                        </div>
+                        <div class="tissue-card" style="--tissue-color: #38bdf8;">
+                            <div class="tissue-icon"></div>
+                            <div class="tissue-info">
+                                <div class="tissue-name">CSF</div>
+                                <div class="tissue-params">T1:4500 T2:2200 PD:1.0</div>
+                            </div>
+                        </div>
+                        <div class="tissue-card" style="--tissue-color: #fbbf24;">
+                            <div class="tissue-icon"></div>
+                            <div class="tissue-info">
+                                <div class="tissue-name">Fat</div>
+                                <div class="tissue-params">T1:250 T2:60 PD:0.9</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Tab Navigation -->
+                <div class="tab-navigation">
+                    <button class="tab-btn active" data-tab="simulation">Simulation</button>
+                    <button class="tab-btn" data-tab="mechanics">Sequence Mechanics</button>
+                </div>
+
+                <!-- Tab Content: Simulation -->
+                <div class="tab-content active" id="tab-simulation">
+                    <div class="parameter-dependency-grid">
+                        <div class="chart-container" id="container-tr">
+                            <h3>Signal vs TR</h3>
+                            <canvas id="chartTR"></canvas>
+                        </div>
+                        <div class="chart-container" id="container-te">
+                            <h3>Signal vs TE</h3>
+                            <canvas id="chartTE"></canvas>
+                        </div>
+                        <div class="chart-container" id="container-ti">
+                            <div style="display: flex; justify-content: space-between; align-items: center;">
+                                <h3>Signal vs TI</h3>
+                                <label style="font-size: 0.8rem; display: flex; align-items: center; gap: 5px;">
+                                    <input type="checkbox" id="signedSignalToggle"> Show Signed
+                                </label>
+                            </div>
+                            <canvas id="chartTI"></canvas>
+                        </div>
+                        <div class="chart-container" id="container-fa">
+                            <h3>Signal vs Flip Angle</h3>
+                            <canvas id="chartFA"></canvas>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Tab Content: Mechanics -->
+                <div class="tab-content" id="tab-mechanics">
+                    <h2 class="section-title">Sequence Mechanics</h2>
+
+                    <div class="mechanics-grid">
+                        <!-- Phase Wheel Panel -->
+                        <div class="phase-wheel-panel">
+                            <h3>Magnetization Dynamics</h3>
+                            <svg id="phase-wheel" viewBox="0 0 300 300" xmlns="http://www.w3.org/2000/svg">
+                                <!-- Will be populated by JS -->
+                            </svg>
+                            <div class="phase-wheel-controls">
+                                <button id="prev-frame" class="btn secondary">◀</button>
+                                <span id="frame-label">Frame 1/16</span>
+                                <button id="next-frame" class="btn secondary">▶</button>
+                                <button id="play-animation" class="btn primary">▶ Play</button>
+                            </div>
+                            <div class="phase-info" id="phase-info">
+                                <!-- Educational description populated by JS -->
+                            </div>
+                            <div class="param-badge" id="phase-params">
+                                Current sequence parameters
+                            </div>
+                        </div>
+
+                        <!-- R2/R2* Comparison Chart -->
+                        <div class="r2-comparison-panel">
+                            <h3>Decay Rate Comparison</h3>
+                            <canvas id="r2Chart"></canvas>
+                            <div class="r2-annotations">
+                                <p id="se-annotation" class="annotation">SE: Only R2 contributes (180° cancels R2')</p>
+                                <p id="gre-annotation" class="annotation">GRE: R2* = R2 + R2' (static ΔB0 persists)</p>
+                            </div>
+                            <div class="param-badge" id="r2-params">
+                                Decay rate values
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- RF/Gradient Timeline -->
+                    <div class="timeline-panel">
+                        <h3>Pulse Sequence Timeline</h3>
+                        <svg id="rf-gradient-timeline" viewBox="0 0 800 200" xmlns="http://www.w3.org/2000/svg">
+                            <!-- Will be populated by JS -->
+                        </svg>
+                        <div class="param-badge" id="timeline-params">
+                            Timing parameters
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <!-- Help Modal -->
+    <div id="helpModal" class="modal">
+        <div class="modal-content">
+            <span class="close-modal">&times;</span>
+            <h2>Understanding the Charts</h2>
+            <div class="modal-body">
+                <div class="modal-text">
+                    <p><strong>Signal vs Parameter Charts</strong></p>
+                    <p>Each chart shows how signal intensity changes as you vary a sequence parameter:</p>
+                    <ul>
+                        <li><strong>X-axis:</strong> The parameter being varied (TR, TE, TI, or FA)</li>
+                        <li><strong>Y-axis:</strong> Resulting signal intensity</li>
+                        <li><strong>Dashed line:</strong> Your current parameter value</li>
+                        <li><strong>Colored curves:</strong> Different tissue types</li>
+                    </ul>
+                    <p>Maximize tissue contrast by finding where curves are most separated.</p>
+
+                    <hr style="margin: 1rem 0; border: none; border-top: 1px solid var(--border-color);">
+
+                    <p><strong>Signal vs TI (Inversion Recovery)</strong></p>
+                    <p>The "V-shaped bounce" in IR curves occurs at the <em>Null Point</em>:</p>
+                    <ul>
+                        <li>After 180° inversion, M<sub>z</sub> starts negative and recovers toward positive</li>
+                        <li>MRI displays <strong>magnitude</strong> (absolute value), so negative appears as positive</li>
+                        <li>This creates a "bounce" where signal crosses zero</li>
+                        <li>Each tissue nulls at different TI based on its T1 (e.g., CSF ~2200ms, Fat ~170ms)</li>
+                    </ul>
+                    <p><strong>Tip:</strong> Toggle "Show Signed" to see the true recovery curve without the bounce.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+    <script src="brain_seg_data.js"></script>
+    <script src="script.js"></script>
+</body>
+
+</html>
