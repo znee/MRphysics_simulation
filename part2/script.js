@@ -518,8 +518,8 @@ class MRPhysics {
         const maxSignal = Math.max(...Object.values(signals));
 
         // Update tissue card border brightness based on scaled signal
-        for (const tissue of this.tissueParams) {
-            const label = tissue.label;
+        for (const [label, tissue] of Object.entries(tissueByLabel)) {
+            if (!tissue) continue;
             const scaledBrightness = maxSignal > 0.001 ? Math.round((signals[label] / maxSignal) * 255) : 0;
             const tissueCard = document.querySelector(`.tissue-card[data-tissue="${tissue.id}"]`);
             if (tissueCard) {
