@@ -401,9 +401,10 @@ class SpatialEncodingSimulator {
                 'phase imprint. Signal magnitude is constant over time, but phase varies with y.';
         } else {
             explanation.innerHTML =
-                '<strong>Both gradients active:</strong> ' +
-                'G<sub>x</sub> creates oscillation (varies with time), ' +
-                'G<sub>y</sub> creates fixed phase offset. Signal shows frequency-modulated oscillation.';
+                '<strong>Sequential encoding:</strong> ' +
+                'G<sub>y</sub> applied first (before readout) → fixed phase offset per row. ' +
+                'Then G<sub>x</sub> during readout → spins oscillate at different frequencies. ' +
+                '<em>They are NOT applied simultaneously.</em>';
         }
     }
 
@@ -883,15 +884,15 @@ class SpatialEncodingSimulator {
         ctx.fillStyle = '#fbbf24';
         ctx.fillText(' →', 105, 27);
 
-        // Show current state
+        // Show current state - explain temporal sequence
         ctx.fillStyle = '#64748b';
-        let stateText = 'No gradients active';
+        let stateText = 'No gradients';
         if (this.gxEnabled && this.gyEnabled) {
-            stateText = 'Both active';
+            stateText = 'Gy first → then Gx during readout';
         } else if (this.gxEnabled) {
-            stateText = this.labFrameMode ? 'Gx: Different speeds!' : 'Gx active';
+            stateText = 'Gx during readout';
         } else if (this.gyEnabled) {
-            stateText = this.labFrameMode ? 'Gy: Same speed, diff start' : 'Gy active';
+            stateText = 'Gy before readout (fixed offset)';
         }
         ctx.fillText(stateText, 10, 39);
 
