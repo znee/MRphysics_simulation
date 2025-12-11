@@ -719,52 +719,35 @@ class MRPhysics {
 
     updateEquation() {
         const el = document.getElementById('equation-overlay');
-        let eqHtml = '';
-        let legendHtml = '';
-
-        const commonLegend = `
-            <span class="legend-term">S</span><span>Signal Intensity</span>
-            <span class="legend-term">PD</span><span>Proton Density</span>
-        `;
+        let approxHtml = '';
+        let exactHtml = '';
 
         if (this.params.sequence === 'SE') {
-            eqHtml = `
-        S &approx; PD &middot;
-        <span style="color: #2563eb;">(T1 Recovery)</span> &middot;
-        <span style="color: #dc2626;">(T2 Decay)</span>
-        `;
-            legendHtml = `
-                ${commonLegend}
-                <span class="legend-term" style="color: #2563eb;">T1 Recovery</span><span>Depends on TR & T1</span>
-                <span class="legend-term" style="color: #dc2626;">T2 Decay</span><span>Depends on TE & T2</span>
-        `;
+            approxHtml = `S &approx; PD &middot;
+        <span style="color: #3b82f6;">(T1 Recovery)</span> &middot;
+        <span style="color: #ef4444;">(T2 Decay)</span>`;
+            exactHtml = `S = PD &middot;
+        <span style="color: #3b82f6;">(1 - e<sup>-TR/T1</sup>)</span> &middot;
+        <span style="color: #ef4444;">e<sup>-TE/T2</sup></span>`;
         } else if (this.params.sequence === 'GRE') {
-            eqHtml = `
-        S &approx; PD &middot;
-        <span style="color: #2563eb;">(Steady State T1)</span> &middot;
-        <span style="color: #dc2626;">(T2* Decay)</span>
-        `;
-            legendHtml = `
-                ${commonLegend}
-                <span class="legend-term" style="color: #2563eb;">Steady State T1</span><span>Depends on TR, T1 & &alpha;</span>
-                <span class="legend-term" style="color: #dc2626;">T2* Decay</span><span>Depends on TE & T2*</span>
-        `;
+            approxHtml = `S &approx; PD &middot;
+        <span style="color: #3b82f6;">(Steady State)</span> &middot;
+        <span style="color: #ef4444;">(T2* Decay)</span>`;
+            exactHtml = `S = PD &middot; sin&alpha; &middot;
+        <span style="color: #3b82f6;">(1-E<sub>1</sub>)/(1-E<sub>1</sub>cos&alpha;)</span> &middot;
+        <span style="color: #ef4444;">e<sup>-TE/T2*</sup></span>`;
         } else if (this.params.sequence === 'IR') {
-            eqHtml = `
-        S &approx; PD &middot;
-        <span style="color: #2563eb;">(Inversion Recovery)</span> &middot;
-        <span style="color: #dc2626;">(T2 Decay)</span>
-        `;
-            legendHtml = `
-                ${commonLegend}
-                <span class="legend-term" style="color: #2563eb;">Inversion Recovery</span><span>Depends on TI, TR & T1</span>
-                <span class="legend-term" style="color: #dc2626;">T2 Decay</span><span>Depends on TE & T2</span>
-        `;
+            approxHtml = `S &approx; PD &middot;
+        <span style="color: #3b82f6;">(Inversion Recovery)</span> &middot;
+        <span style="color: #ef4444;">(T2 Decay)</span>`;
+            exactHtml = `S = PD &middot;
+        <span style="color: #3b82f6;">|1 - 2e<sup>-TI/T1</sup> + e<sup>-TR/T1</sup>|</span> &middot;
+        <span style="color: #ef4444;">e<sup>-TE/T2</sup></span>`;
         }
 
         el.innerHTML = `
-            <div class="equation-main">${eqHtml}</div>
-                <div class="equation-legend">${legendHtml}</div>
+            <div class="equation-approx">${approxHtml}</div>
+            <div class="equation-exact">${exactHtml}</div>
         `;
     }
 
