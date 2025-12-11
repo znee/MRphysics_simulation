@@ -31,7 +31,7 @@ Watch how spinning protons create the MR signal. Visualize magnetization dynamic
 
 ---
 
-## Part 2: MR Signal & Contrast Simulator
+## Part 2: MR Parameters & Contrast
 
 **[Launch Part 2](https://znee.github.io/MRphysics_simulation/part2/)**
 
@@ -93,7 +93,7 @@ Visualizes the relationship between spatial frequency domain (k-space) and image
 - **Acceleration Techniques**:
   - Partial Fourier (6/8, 5/8) with zero-fill or conjugate synthesis reconstruction
   - Parallel Imaging demo (SENSE R=2, R=4) with g-factor SNR penalty
-- **Multiple Phantoms**: Circle, Square, Simulated Brain, Real Brain MRI
+- **Multiple Phantoms**: Circle, Square, Brain MRI (+ hidden easter egg)
 
 ### Physics Model
 - 2D FFT/IFFT for image ↔ k-space transformation
