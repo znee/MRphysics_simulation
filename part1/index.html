@@ -4,14 +4,21 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MR Physics Simulation</title>
+    <title>Part 0: NMR Signal | MR Physics Simulation</title>
     <link rel="stylesheet" href="style.css">
     <!-- Google Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <!-- Three.js -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <!-- Chart.js -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- Chart.js Annotation Plugin -->
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation"></script>
+    <!-- MathJax -->
+    <script src="https://polyfill.io/v3/polyfill.min.js?features=es6"></script>
+    <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
 </head>
 
 <body>
@@ -19,59 +26,253 @@
         <header class="main-header">
             <a href="../index.html" class="back-link">&larr; Home</a>
             <div class="header-titles">
-                <h1>MR Physics <span class="highlight">Simulation</span></h1>
-                <p class="subtitle">Interactive educational tool for MRI signal processing and contrast mechanisms</p>
+                <h1>NMR <span class="highlight">Signal</span> Formation</h1>
+                <p class="subtitle">From spinning protons to the MR signal - watch magnetization evolve in real-time</p>
             </div>
         </header>
 
         <main class="main-content">
             <aside class="sidebar">
+                <!-- Module Selection -->
+                <div class="module-tabs">
+                    <button class="module-tab active" data-module="A">A: Spin</button>
+                    <button class="module-tab" data-module="B">B: FID</button>
+                    <button class="module-tab" data-module="C">C: Echo</button>
+                    <button class="module-tab" data-module="D">D: GRE</button>
+                </div>
+
+                <!-- Animation Controls -->
                 <div class="control-group">
-                    <h2>Presets</h2>
-                    <div class="preset-buttons">
-                        <button class="btn secondary" id="preset-t1">T1-Weighted</button>
-                        <button class="btn secondary" id="preset-t2">T2-Weighted</button>
-                        <button class="btn secondary" id="preset-t2star">T2*-Weighted</button>
-                        <button class="btn secondary" id="preset-flair">FLAIR</button>
-                        <button class="btn secondary" id="preset-stir">STIR</button>
+                    <h2>Animation</h2>
+                    <div class="animation-controls">
+                        <button class="btn primary" id="btn-play">Play</button>
+                        <button class="btn secondary" id="btn-pause">Pause</button>
+                        <button class="btn secondary" id="btn-reset">Reset</button>
+                    </div>
+                    <div class="speed-control">
+                        <label>Speed:</label>
+                        <input type="range" id="speed-slider" min="0.1" max="3" step="0.1" value="1">
+                        <span id="speed-val">1.0x</span>
+                    </div>
+                    <div class="time-display">
+                        <span class="label">Time</span>
+                        <span class="value" id="time-val">0.00 ms</span>
                     </div>
                 </div>
 
-                <div class="control-group">
-                    <h2>Global Settings</h2>
-                    <label for="sequenceType">Sequence Type</label>
-                    <select id="sequenceType">
-                        <option value="SE">Spin Echo (SE)</option>
-                        <option value="GRE">Gradient Echo (GRE)</option>
-                        <option value="IR">Inversion Recovery (IR)</option>
+                <!-- Module A: Spin Alignment - B0 Turn-On -->
+                <div class="control-group module-controls" id="controls-A">
+                    <h2>Spin Alignment (B0 Effect)</h2>
+
+                    <label for="num-spins-A">Number of Spins</label>
+                    <input type="range" id="num-spins-A" min="10" max="200" step="10" value="100">
+                    <span id="num-spins-A-val">100 spins</span>
+
+                    <label for="T1-val">T1 Relaxation (ms)</label>
+                    <input type="range" id="T1-val" min="100" max="2000" step="50" value="500">
+                    <span id="T1-display">500 ms</span>
+
+                    <label for="B0-val">B0 Field (T) <em style="font-size: 0.7rem; opacity: 0.7;">(display only)</em></label>
+                    <input type="range" id="B0-val" min="0.5" max="7" step="0.5" value="1.5">
+                    <span id="B0-display">1.5 T (63.9 MHz)</span>
+                    <em style="font-size: 0.65rem; opacity: 0.6; display: block; margin-top: 2px;">
+                        Rotating frame at ω₀ - physics normalized to M₀=1
+                    </em>
+
+                    <button class="btn primary" id="btn-b0-on" style="width: 100%; margin-top: 15px;">
+                        Turn B0 ON
+                    </button>
+                    <button class="btn secondary" id="btn-b0-off" style="width: 100%; margin-top: 8px;">
+                        Turn B0 OFF (Randomize)
+                    </button>
+
+                    <div class="alignment-display">
+                        <div class="alignment-bar">
+                            <div class="alignment-fill" id="alignment-fill" style="width: 0%;"></div>
+                        </div>
+                        <span class="alignment-label">Net Magnetization: <span id="net-mz">0%</span></span>
+                    </div>
+
+                    <div class="vector-display">
+                        <div class="vector-component x">
+                            <div class="axis">Mx</div>
+                            <div class="value" id="Mx-val">0.00</div>
+                        </div>
+                        <div class="vector-component y">
+                            <div class="axis">My</div>
+                            <div class="value" id="My-val">0.00</div>
+                        </div>
+                        <div class="vector-component z">
+                            <div class="axis">Mz</div>
+                            <div class="value" id="Mz-val">0.00</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Module B: FID - RF Excitation & Dephasing -->
+                <div class="control-group module-controls" id="controls-B" style="display: none;">
+                    <h2>FID Parameters</h2>
+
+                    <label for="flip-angle">Flip Angle (α)</label>
+                    <input type="range" id="flip-angle" min="10" max="180" step="5" value="90">
+                    <span id="flip-angle-val">90°</span>
+
+                    <label for="num-spins">Number of Spins</label>
+                    <input type="range" id="num-spins" min="10" max="200" step="10" value="100">
+                    <span id="num-spins-val">100 spins</span>
+
+                    <label for="freq-spread">Frequency Spread (Hz) - T2*</label>
+                    <input type="range" id="freq-spread" min="0" max="100" step="5" value="30">
+                    <span id="freq-spread-val">30 Hz</span>
+
+                    <label for="T2-ensemble">Intrinsic T2 (ms)</label>
+                    <input type="range" id="T2-ensemble" min="50" max="300" step="10" value="100">
+                    <span id="T2-ensemble-val">100 ms</span>
+
+                    <button class="btn primary" id="btn-excite" style="width: 100%; margin-top: 15px;">
+                        Apply RF Pulse
+                    </button>
+
+                    <label style="margin-top: 15px;">
+                        <input type="checkbox" id="show-individual" checked>
+                        Show Individual Spins
+                    </label>
+
+                    <div class="spin-counter">
+                        <span class="count" id="coherent-count">0%</span>
+                        <span class="label">Phase Coherence</span>
+                    </div>
+                </div>
+
+                <!-- Module C: Echo Controls -->
+                <div class="control-group module-controls" id="controls-C" style="display: none;">
+                    <h2>Echo Formation</h2>
+
+                    <label for="echo-type">Echo Type</label>
+                    <select id="echo-type">
+                        <option value="spin">Spin Echo (180° refocus)</option>
+                        <option value="gradient">Gradient Echo</option>
                     </select>
 
-                    <label for="b0Field">B0 Field Strength (T)</label>
-                    <input type="range" id="b0Field" min="0.5" max="7.0" step="0.5" value="1.5">
-                    <span id="b0Value">1.5 T</span>
-                    <div class="b0-readout">
-                        <span class="freq-label">Larmor Frequency:</span>
-                        <span class="freq-value" id="b0Freq">63.86 MHz</span>
-                    </div>
+                    <label for="num-spins-C">Number of Spins</label>
+                    <input type="range" id="num-spins-C" min="10" max="200" step="10" value="100">
+                    <span id="num-spins-C-val">100 spins</span>
 
-                    <div id="inhomogeneity-control" style="display: none;">
-                        <label for="inhomogeneity">Field Inhomogeneity (Hz)</label>
-                        <input type="range" id="inhomogeneity" min="0" max="100" step="5" value="0">
-                        <span id="inhomogeneityValue">0 Hz</span>
+                    <label for="TE-val">Echo Time TE (ms)</label>
+                    <input type="range" id="TE-val" min="20" max="200" step="5" value="60">
+                    <span id="TE-display">60 ms</span>
+
+                    <label for="T2-echo">T2 (ms)</label>
+                    <input type="range" id="T2-echo" min="50" max="500" step="10" value="200">
+                    <span id="T2-echo-val">200 ms</span>
+
+                    <label for="T2star-echo">T2* (ms)</label>
+                    <input type="range" id="T2star-echo" min="10" max="100" step="5" value="30">
+                    <span id="T2star-echo-val">30 ms</span>
+
+                    <button class="btn primary" id="btn-run-sequence" style="width: 100%; margin-top: 15px;">
+                        Run Sequence
+                    </button>
+
+                    <label style="margin-top: 15px;">
+                        <input type="checkbox" id="show-individual-C" checked>
+                        Show Individual Spins
+                    </label>
+
+                    <div class="legend">
+                        <div class="legend-item">
+                            <span class="legend-color" style="background: #f59e0b;"></span>
+                            <span>90° RF</span>
+                        </div>
+                        <div class="legend-item">
+                            <span class="legend-color" style="background: #ef4444;"></span>
+                            <span>180° RF</span>
+                        </div>
+                        <div class="legend-item">
+                            <span class="legend-color" style="background: #8b5cf6;"></span>
+                            <span>Gradient</span>
+                        </div>
+                        <div class="legend-item">
+                            <span class="legend-color" style="background: #22c55e;"></span>
+                            <span>Echo</span>
+                        </div>
                     </div>
                 </div>
 
-                <div class="control-group">
-                    <h2>Sequence Parameters</h2>
-                    <div id="params-container">
-                        <!-- Dynamic parameters injected here -->
+                <!-- Module D: GRE Variants - Spoiled vs SSFP -->
+                <div class="control-group module-controls" id="controls-D" style="display: none;">
+                    <h2>GRE Variants (Multi-TR)</h2>
+
+                    <label for="gre-type">Sequence Type</label>
+                    <select id="gre-type">
+                        <option value="spoiled">Spoiled GRE (SPGR/FLASH)</option>
+                        <option value="ssfp">SSFP (bSSFP/TrueFISP)</option>
+                    </select>
+
+                    <label for="flip-angle-D">Flip Angle (α)</label>
+                    <input type="range" id="flip-angle-D" min="5" max="90" step="5" value="30">
+                    <span id="flip-angle-D-val">30°</span>
+
+                    <label for="TR-val">TR (ms)</label>
+                    <input type="range" id="TR-val" min="5" max="100" step="5" value="25">
+                    <span id="TR-display">25 ms</span>
+
+                    <label for="T1-D">T1 (ms)</label>
+                    <input type="range" id="T1-D" min="100" max="2000" step="50" value="600">
+                    <span id="T1-D-val">600 ms</span>
+
+                    <label for="T2-D">T2 (ms)</label>
+                    <input type="range" id="T2-D" min="20" max="500" step="10" value="80">
+                    <span id="T2-D-val">80 ms</span>
+
+                    <label for="num-TR">Number of TRs</label>
+                    <input type="range" id="num-TR" min="3" max="20" step="1" value="8">
+                    <span id="num-TR-val">8 TRs</span>
+
+                    <button class="btn primary" id="btn-run-gre" style="width: 100%; margin-top: 15px;">
+                        Run Sequence
+                    </button>
+
+                    <div class="ernst-angle-display" style="margin-top: 15px; padding: 10px; background: rgba(0,0,0,0.2); border-radius: 6px;">
+                        <div style="font-size: 0.75rem; color: var(--text-secondary); margin-bottom: 4px;">Ernst Angle (optimal α)</div>
+                        <div style="font-size: 1.1rem; font-weight: 600; color: var(--accent-color);" id="ernst-angle-val">--°</div>
+                        <div style="font-size: 0.7rem; color: var(--text-secondary); margin-top: 4px;">α<sub>E</sub> = arccos(e<sup>-TR/T1</sup>)</div>
+                    </div>
+
+                    <div class="steady-state-display" style="margin-top: 10px; padding: 10px; background: rgba(0,0,0,0.2); border-radius: 6px;">
+                        <div style="font-size: 0.75rem; color: var(--text-secondary); margin-bottom: 4px;">Steady-State Signal</div>
+                        <div style="font-size: 1.1rem; font-weight: 600; color: #22c55e;" id="steady-state-val">--</div>
+                    </div>
+
+                    <label style="margin-top: 15px;">
+                        <input type="checkbox" id="show-individual-D" checked>
+                        Show Individual Spins
+                    </label>
+
+                    <div class="legend" style="margin-top: 10px;">
+                        <div class="legend-item">
+                            <span class="legend-color" style="background: #f59e0b;"></span>
+                            <span>RF pulse</span>
+                        </div>
+                        <div class="legend-item">
+                            <span class="legend-color" style="background: #8b5cf6;"></span>
+                            <span>Spoiler</span>
+                        </div>
+                        <div class="legend-item">
+                            <span class="legend-color" style="background: #22c55e;"></span>
+                            <span>Signal</span>
+                        </div>
                     </div>
                 </div>
 
-
-
-                <div class="control-group">
-                    <button id="helpBtn" class="btn primary">How to Read Charts?</button>
+                <!-- Info Panel -->
+                <div class="info-panel" id="info-panel">
+                    <h4>Module A: Bloch Equations</h4>
+                    <p id="info-text">
+                        A single proton's magnetization precesses around B0 at the Larmor frequency
+                        \(\omega_0 = \gamma B_0\). After an RF pulse tips the magnetization,
+                        T1 recovery restores Mz while T2 decay reduces Mxy.
+                    </p>
                 </div>
 
                 <div class="sidebar-footer">
@@ -81,124 +282,40 @@
             </aside>
 
             <section class="visualization-area">
-                <div class="first-row-container">
-                    <div id="brain-phantom-container">
-                        <canvas id="brain-canvas" width="512" height="512"></canvas>
-                        <div id="equation-overlay"></div>
+                <!-- 3D Spin Visualization -->
+                <div class="spin-view-container">
+                    <div id="canvas-3d"></div>
+                    <div class="spin-view-label">
+                        <span id="view-label">Rotating Frame (ω₀)</span>
                     </div>
-
-                    <div class="tissue-cards-container">
-                        <div class="tissue-card" style="--tissue-color: #e2e8f0;">
-                            <div class="tissue-icon"></div>
-                            <div class="tissue-info">
-                                <div class="tissue-name">White Matter</div>
-                                <div class="tissue-params">T1:600 T2:80 PD:0.7</div>
-                            </div>
-                        </div>
-                        <div class="tissue-card" style="--tissue-color: #94a3b8;">
-                            <div class="tissue-icon"></div>
-                            <div class="tissue-info">
-                                <div class="tissue-name">Gray Matter</div>
-                                <div class="tissue-params">T1:950 T2:100 PD:0.8</div>
-                            </div>
-                        </div>
-                        <div class="tissue-card" style="--tissue-color: #38bdf8;">
-                            <div class="tissue-icon"></div>
-                            <div class="tissue-info">
-                                <div class="tissue-name">CSF</div>
-                                <div class="tissue-params">T1:4500 T2:2200 PD:1.0</div>
-                            </div>
-                        </div>
-                        <div class="tissue-card" style="--tissue-color: #fbbf24;">
-                            <div class="tissue-icon"></div>
-                            <div class="tissue-info">
-                                <div class="tissue-name">Fat</div>
-                                <div class="tissue-params">T1:250 T2:60 PD:0.9</div>
-                            </div>
-                        </div>
+                    <div class="spin-view-legend">
+                        <div class="legend-row"><span class="color-dot" style="background: #10b981;"></span> Individual spins</div>
+                        <div class="legend-row"><span class="color-dot" style="background: #ffffff;"></span> Net M (total)</div>
+                        <div class="legend-row"><span class="color-dot" style="background: #22d3ee;"></span> Mxy (transverse)</div>
+                        <div class="legend-row"><span class="color-dot" style="background: #3b82f6;"></span> Mz (longitudinal)</div>
+                        <div class="legend-row"><span class="color-dot" style="background: #ffff00;"></span> B₀ field</div>
+                        <div class="legend-row"><span class="color-dot" style="background: #6366f1;"></span> xy plane</div>
                     </div>
                 </div>
 
-                <!-- Tab Navigation -->
-                <div class="tab-navigation">
-                    <button class="tab-btn active" data-tab="simulation">Simulation</button>
-                    <button class="tab-btn" data-tab="mechanics">Sequence Mechanics</button>
-                </div>
-
-                <!-- Tab Content: Simulation -->
-                <div class="tab-content active" id="tab-simulation">
-                    <div class="parameter-dependency-grid">
-                        <div class="chart-container" id="container-tr">
-                            <h3>Signal vs TR</h3>
-                            <canvas id="chartTR"></canvas>
-                        </div>
-                        <div class="chart-container" id="container-te">
-                            <h3>Signal vs TE</h3>
-                            <canvas id="chartTE"></canvas>
-                        </div>
-                        <div class="chart-container" id="container-ti">
-                            <div style="display: flex; justify-content: space-between; align-items: center;">
-                                <h3>Signal vs TI</h3>
-                                <label style="font-size: 0.8rem; display: flex; align-items: center; gap: 5px;">
-                                    <input type="checkbox" id="signedSignalToggle"> Show Signed
-                                </label>
-                            </div>
-                            <canvas id="chartTI"></canvas>
-                        </div>
-                        <div class="chart-container" id="container-fa">
-                            <h3>Signal vs Flip Angle</h3>
-                            <canvas id="chartFA"></canvas>
+                <!-- Signal Plots -->
+                <div class="signal-panels">
+                    <div class="signal-panel">
+                        <h3>Transverse Magnetization <span class="equation">\(M_{xy}(t)\)</span></h3>
+                        <div class="chart-container">
+                            <canvas id="chart-mxy"></canvas>
                         </div>
                     </div>
-                </div>
-
-                <!-- Tab Content: Mechanics -->
-                <div class="tab-content" id="tab-mechanics">
-                    <h2 class="section-title">Sequence Mechanics</h2>
-
-                    <div class="mechanics-grid">
-                        <!-- Phase Wheel Panel -->
-                        <div class="phase-wheel-panel">
-                            <h3>Magnetization Dynamics</h3>
-                            <svg id="phase-wheel" viewBox="0 0 300 300" xmlns="http://www.w3.org/2000/svg">
-                                <!-- Will be populated by JS -->
-                            </svg>
-                            <div class="phase-wheel-controls">
-                                <button id="prev-frame" class="btn secondary">◀</button>
-                                <span id="frame-label">Frame 1/16</span>
-                                <button id="next-frame" class="btn secondary">▶</button>
-                                <button id="play-animation" class="btn primary">▶ Play</button>
-                            </div>
-                            <div class="phase-info" id="phase-info">
-                                <!-- Educational description populated by JS -->
-                            </div>
-                            <div class="param-badge" id="phase-params">
-                                Current sequence parameters
-                            </div>
-                        </div>
-
-                        <!-- R2/R2* Comparison Chart -->
-                        <div class="r2-comparison-panel">
-                            <h3>Decay Rate Comparison</h3>
-                            <canvas id="r2Chart"></canvas>
-                            <div class="r2-annotations">
-                                <p id="se-annotation" class="annotation">SE: Only R2 contributes (180° cancels R2')</p>
-                                <p id="gre-annotation" class="annotation">GRE: R2* = R2 + R2' (static ΔB0 persists)</p>
-                            </div>
-                            <div class="param-badge" id="r2-params">
-                                Decay rate values
-                            </div>
+                    <div class="signal-panel">
+                        <h3>Longitudinal Recovery <span class="equation">\(M_z(t)\)</span></h3>
+                        <div class="chart-container">
+                            <canvas id="chart-mz"></canvas>
                         </div>
                     </div>
-
-                    <!-- RF/Gradient Timeline -->
-                    <div class="timeline-panel">
-                        <h3>Pulse Sequence Timeline</h3>
-                        <svg id="rf-gradient-timeline" viewBox="0 0 800 200" xmlns="http://www.w3.org/2000/svg">
-                            <!-- Will be populated by JS -->
-                        </svg>
-                        <div class="param-badge" id="timeline-params">
-                            Timing parameters
+                    <div class="signal-panel">
+                        <h3>Signal / FID <span class="equation">\(S(t) = M_{xy} e^{i\phi}\)</span></h3>
+                        <div class="chart-container">
+                            <canvas id="chart-signal"></canvas>
                         </div>
                     </div>
                 </div>
@@ -206,39 +323,6 @@
         </main>
     </div>
 
-    <!-- Help Modal -->
-    <div id="helpModal" class="modal">
-        <div class="modal-content">
-            <span class="close-modal">&times;</span>
-            <h2>Understanding the Charts</h2>
-            <div class="modal-body">
-                <div class="modal-text">
-                    <p><strong>Signal vs Parameter Charts</strong></p>
-                    <p>Each chart shows how signal intensity changes as you vary a sequence parameter:</p>
-                    <ul>
-                        <li><strong>X-axis:</strong> The parameter being varied (TR, TE, TI, or FA)</li>
-                        <li><strong>Y-axis:</strong> Resulting signal intensity</li>
-                        <li><strong>Dashed line:</strong> Your current parameter value</li>
-                        <li><strong>Colored curves:</strong> Different tissue types</li>
-                    </ul>
-                    <p>Maximize tissue contrast by finding where curves are most separated.</p>
-
-                    <hr style="margin: 1rem 0; border: none; border-top: 1px solid var(--border-color);">
-
-                    <p><strong>Signal vs TI (Inversion Recovery)</strong></p>
-                    <p>The "V-shaped bounce" in IR curves occurs at the <em>Null Point</em>:</p>
-                    <ul>
-                        <li>After 180° inversion, M<sub>z</sub> starts negative and recovers toward positive</li>
-                        <li>MRI displays <strong>magnitude</strong> (absolute value), so negative appears as positive</li>
-                        <li>This creates a "bounce" where signal crosses zero</li>
-                        <li>Each tissue nulls at different TI based on its T1 (e.g., CSF ~2200ms, Fat ~170ms)</li>
-                    </ul>
-                    <p><strong>Tip:</strong> Toggle "Show Signed" to see the true recovery curve without the bounce.</p>
-                </div>
-            </div>
-        </div>
-    </div>
-    <script src="brain_seg_data.js"></script>
     <script src="script.js"></script>
 </body>
 

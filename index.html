@@ -35,7 +35,7 @@
         }
 
         .container {
-            max-width: 900px;
+            max-width: 1100px;
             margin: 0 auto;
             padding: 3rem 1.5rem;
             flex: 1;
@@ -66,15 +66,15 @@
 
         .cards {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-            gap: 1.5rem;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 1.25rem;
             margin-top: 2rem;
         }
 
         .card {
             background: var(--card-bg);
             border-radius: 16px;
-            padding: 2rem;
+            padding: 1.5rem;
             border: 1px solid var(--border-color);
             transition: all 0.3s ease;
             text-decoration: none;
@@ -90,64 +90,44 @@
         }
 
         .card-icon {
-            width: 60px;
-            height: 60px;
-            border-radius: 12px;
+            width: 50px;
+            height: 50px;
+            border-radius: 10px;
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 1.75rem;
-            margin-bottom: 1.25rem;
-        }
-
-        .card:first-child .card-icon {
-            background: linear-gradient(135deg, rgba(59, 130, 246, 0.2), rgba(59, 130, 246, 0.1));
-            color: var(--accent-blue);
-        }
-
-        .card:last-child .card-icon {
-            background: linear-gradient(135deg, rgba(16, 185, 129, 0.2), rgba(16, 185, 129, 0.1));
-            color: var(--accent-green);
+            font-size: 1.5rem;
+            margin-bottom: 1rem;
         }
 
         .card-badge {
             display: inline-block;
-            padding: 0.25rem 0.75rem;
+            padding: 0.2rem 0.6rem;
             border-radius: 20px;
-            font-size: 0.75rem;
+            font-size: 0.7rem;
             font-weight: 600;
             text-transform: uppercase;
             letter-spacing: 0.05em;
-            margin-bottom: 1rem;
+            margin-bottom: 0.75rem;
             width: fit-content;
         }
 
-        .card:first-child .card-badge {
-            background: rgba(59, 130, 246, 0.15);
-            color: #60a5fa;
-        }
-
-        .card:last-child .card-badge {
-            background: rgba(16, 185, 129, 0.15);
-            color: #34d399;
-        }
-
         .card h2 {
-            font-size: 1.35rem;
+            font-size: 1.15rem;
             font-weight: 600;
-            margin-bottom: 0.75rem;
+            margin-bottom: 0.5rem;
         }
 
         .card p {
             color: var(--text-secondary);
-            font-size: 0.95rem;
-            line-height: 1.6;
+            font-size: 0.85rem;
+            line-height: 1.5;
             flex: 1;
         }
 
         .card-features {
-            margin-top: 1.25rem;
-            padding-top: 1.25rem;
+            margin-top: 1rem;
+            padding-top: 1rem;
             border-top: 1px solid var(--border-color);
         }
 
@@ -155,32 +135,89 @@
             list-style: none;
             display: flex;
             flex-wrap: wrap;
-            gap: 0.5rem;
+            gap: 0.4rem;
         }
 
         .card-features li {
-            font-size: 0.8rem;
-            padding: 0.3rem 0.6rem;
+            font-size: 0.7rem;
+            padding: 0.2rem 0.5rem;
             background: rgba(148, 163, 184, 0.1);
             border-radius: 6px;
             color: var(--text-secondary);
         }
 
         .card-arrow {
-            margin-top: 1.5rem;
+            margin-top: 1rem;
             display: flex;
             align-items: center;
             gap: 0.5rem;
             font-weight: 500;
-            font-size: 0.9rem;
+            font-size: 0.85rem;
         }
 
-        .card:first-child .card-arrow {
-            color: var(--accent-blue);
+        /* Part 1 - Green/Teal */
+        .card:nth-child(1) .card-icon {
+            background: linear-gradient(135deg, rgba(16, 185, 129, 0.2), rgba(16, 185, 129, 0.1));
+            color: #10b981;
+        }
+        .card:nth-child(1) .card-badge {
+            background: rgba(16, 185, 129, 0.15);
+            color: #34d399;
+        }
+        .card:nth-child(1) .card-arrow {
+            color: #10b981;
         }
 
-        .card:last-child .card-arrow {
-            color: var(--accent-green);
+        /* Part 2 - Blue */
+        .card:nth-child(2) .card-icon {
+            background: linear-gradient(135deg, rgba(56, 189, 248, 0.2), rgba(56, 189, 248, 0.1));
+            color: #38bdf8;
+        }
+        .card:nth-child(2) .card-badge {
+            background: rgba(56, 189, 248, 0.15);
+            color: #7dd3fc;
+        }
+        .card:nth-child(2) .card-arrow {
+            color: #38bdf8;
+        }
+
+        /* Part 3 - Amber/Orange */
+        .card:nth-child(3) .card-icon {
+            background: linear-gradient(135deg, rgba(245, 158, 11, 0.2), rgba(245, 158, 11, 0.1));
+            color: #f59e0b;
+        }
+        .card:nth-child(3) .card-badge {
+            background: rgba(245, 158, 11, 0.15);
+            color: #fbbf24;
+        }
+        .card:nth-child(3) .card-arrow {
+            color: #f59e0b;
+        }
+
+        /* Part 4 - Purple */
+        .card:nth-child(4) .card-icon {
+            background: linear-gradient(135deg, rgba(168, 85, 247, 0.2), rgba(168, 85, 247, 0.1));
+            color: #a855f7;
+        }
+        .card:nth-child(4) .card-badge {
+            background: rgba(168, 85, 247, 0.15);
+            color: #c084fc;
+        }
+        .card:nth-child(4) .card-arrow {
+            color: #a855f7;
+        }
+
+        /* Part 5 - Pink */
+        .card:nth-child(5) .card-icon {
+            background: linear-gradient(135deg, rgba(236, 72, 153, 0.2), rgba(236, 72, 153, 0.1));
+            color: #ec4899;
+        }
+        .card:nth-child(5) .card-badge {
+            background: rgba(236, 72, 153, 0.15);
+            color: #f472b6;
+        }
+        .card:nth-child(5) .card-arrow {
+            color: #ec4899;
         }
 
         footer {
@@ -205,7 +242,7 @@
             }
 
             .card {
-                padding: 1.5rem;
+                padding: 1.25rem;
             }
         }
     </style>
@@ -220,9 +257,9 @@
         </header>
 
         <div class="cards">
-            <a href="part0/index.html" class="card">
+            <a href="part1/index.html" class="card">
                 <div class="card-icon">&#x269B;</div>
-                <span class="card-badge">Part 0</span>
+                <span class="card-badge">Part 1</span>
                 <h2>NMR Signal Formation</h2>
                 <p>Watch how spinning protons create the MR signal. Visualize magnetization dynamics,
                     FID formation, and echo mechanisms through real-time animations.</p>
@@ -234,30 +271,14 @@
                         <li>Gradient Echo</li>
                     </ul>
                 </div>
-                <!-- Custom style for Part 0 (green/teal) -->
-                <style>
-                    .card:nth-child(1) .card-icon {
-                        background: linear-gradient(135deg, rgba(16, 185, 129, 0.2), rgba(16, 185, 129, 0.1));
-                        color: #10b981;
-                    }
-
-                    .card:nth-child(1) .card-badge {
-                        background: rgba(16, 185, 129, 0.15);
-                        color: #34d399;
-                    }
-
-                    .card:nth-child(1) .card-arrow {
-                        color: #10b981;
-                    }
-                </style>
                 <div class="card-arrow">
                     Launch Animation <span>&rarr;</span>
                 </div>
             </a>
 
-            <a href="part1/index.html" class="card">
+            <a href="part2/index.html" class="card">
                 <div class="card-icon">&#x1F9F2;</div>
-                <span class="card-badge">Part 1</span>
+                <span class="card-badge">Part 2</span>
                 <h2>MR Signal & Contrast</h2>
                 <p>Explore how MRI sequences (SE, GRE, IR) generate tissue contrast through T1/T2 relaxation mechanisms
                     and sequence timing parameters.</p>
@@ -269,31 +290,33 @@
                         <li>T1/T2 Contrast</li>
                     </ul>
                 </div>
-                <!-- Custom style for Part 1 (blue) -->
-                <style>
-                    .card:nth-child(2) .card-icon {
-                        background: linear-gradient(135deg, rgba(56, 189, 248, 0.2), rgba(56, 189, 248, 0.1));
-                        color: #38bdf8;
-                    }
-
-                    .card:nth-child(2) .card-badge {
-                        background: rgba(56, 189, 248, 0.15);
-                        color: #7dd3fc;
-                    }
-
-                    .card:nth-child(2) .card-arrow {
-                        color: #38bdf8;
-                    }
-                </style>
                 <div class="card-arrow">
                     Launch Simulator <span>&rarr;</span>
                 </div>
             </a>
 
-            <a href="part2/index.html" class="card">
+            <a href="part3/index.html" class="card">
+                <div class="card-icon">&#x1F300;</div>
+                <span class="card-badge">Part 3</span>
+                <h2>Spatial Encoding</h2>
+                <p>Understand how gradients encode spatial position into signal phase - the foundation of all MRI imaging.</p>
+                <div class="card-features">
+                    <ul>
+                        <li>Frequency Encoding</li>
+                        <li>Phase Encoding</li>
+                        <li>K-Space Sampling</li>
+                        <li>Signal Formation</li>
+                    </ul>
+                </div>
+                <div class="card-arrow">
+                    Launch Visualizer <span>&rarr;</span>
+                </div>
+            </a>
+
+            <a href="part4/index.html" class="card">
                 <div class="card-icon">&#x1F4CA;</div>
-                <span class="card-badge">Part 2</span>
-                <h2>K-Space & Image Reconstruction</h2>
+                <span class="card-badge">Part 4</span>
+                <h2>K-Space & Reconstruction</h2>
                 <p>Visualize the relationship between spatial frequency domain (k-space) and image domain through
                     interactive Fourier transform demonstrations.</p>
                 <div class="card-features">
@@ -304,30 +327,14 @@
                         <li>Artifacts</li>
                     </ul>
                 </div>
-                <!-- Custom style for Part 2 (purple/violet) -->
-                <style>
-                    .card:nth-child(3) .card-icon {
-                        background: linear-gradient(135deg, rgba(168, 85, 247, 0.2), rgba(168, 85, 247, 0.1));
-                        color: #a855f7;
-                    }
-
-                    .card:nth-child(3) .card-badge {
-                        background: rgba(168, 85, 247, 0.15);
-                        color: #c084fc;
-                    }
-
-                    .card:nth-child(3) .card-arrow {
-                        color: #a855f7;
-                    }
-                </style>
                 <div class="card-arrow">
                     Launch Visualizer <span>&rarr;</span>
                 </div>
             </a>
 
-            <a href="part3/index.html" class="card">
+            <a href="part5/index.html" class="card">
                 <div class="card-icon">&#x1F9E0;</div>
-                <span class="card-badge">Part 3</span>
+                <span class="card-badge">Part 5</span>
                 <h2>QSM & Susceptibility</h2>
                 <p>Understand the physics of Quantitative Susceptibility Mapping, including the dipole field
                     perturbation and solving the ill-posed inverse problem.</p>
@@ -339,22 +346,6 @@
                         <li>3D Simulation</li>
                     </ul>
                 </div>
-                <!-- Custom style for this card to distinguish -->
-                <style>
-                    .card:nth-child(4) .card-icon {
-                        background: linear-gradient(135deg, rgba(236, 72, 153, 0.2), rgba(236, 72, 153, 0.1));
-                        color: #ec4899;
-                    }
-
-                    .card:nth-child(4) .card-badge {
-                        background: rgba(236, 72, 153, 0.15);
-                        color: #f472b6;
-                    }
-
-                    .card:nth-child(4) .card-arrow {
-                        color: #ec4899;
-                    }
-                </style>
                 <div class="card-arrow">
                     Launch Simulation <span>&rarr;</span>
                 </div>

@@ -6,9 +6,9 @@ Interactive web-based educational tools for understanding MRI physics fundamenta
 
 ---
 
-## Part 0: NMR Signal Formation
+## Part 1: NMR Signal Formation
 
-**[Launch Part 0](https://znee.github.io/MRphysics_simulation/part0/)**
+**[Launch Part 1](https://znee.github.io/MRphysics_simulation/part1/)**
 
 Watch how spinning protons create the MR signal. Visualize magnetization dynamics, FID formation, and echo mechanisms through real-time animations.
 
@@ -31,9 +31,9 @@ Watch how spinning protons create the MR signal. Visualize magnetization dynamic
 
 ---
 
-## Part 1: MR Signal & Contrast Simulator
+## Part 2: MR Signal & Contrast Simulator
 
-**[Launch Part 1](https://znee.github.io/MRphysics_simulation/part1/)**
+**[Launch Part 2](https://znee.github.io/MRphysics_simulation/part2/)**
 
 Demonstrates how MRI sequences produce different tissue contrasts based on T1, T2, and proton density.
 
@@ -51,9 +51,30 @@ Demonstrates how MRI sequences produce different tissue contrasts based on T1, T
 
 ---
 
-## Part 2: K-Space & Image Reconstruction
+## Part 3: Spatial Encoding
 
-**[Launch Part 2](https://znee.github.io/MRphysics_simulation/part2/)**
+**[Launch Part 3](https://znee.github.io/MRphysics_simulation/part3/)**
+
+Understand how gradients encode spatial position into signal phase - the foundation of all MRI imaging.
+
+### Features
+- **Module A - Gradient Encoding**: Visualize frequency (Gx) and phase (Gy) encoding
+- **Module B - K-Space & Signal**: See how k-space samples are formed
+- **Lab Frame vs Rotating Frame**: Toggle to see precession animation
+- **Visual Encoding**: Circle color = frequency contribution, Arrow direction = actual phase
+- **Vector Sum**: Watch how individual spins combine into net signal
+
+### Physics Model
+- **Phase Equation**: φ(x,y) = γ · (Gx·x + Gy·y) · t
+- **K-Space Sampling**: S(kx,ky) = Σ ρ(x,y) · e^(-i2π(kx·x + ky·y))
+- **Frequency Encoding**: Applied during readout → continuous phase accumulation
+- **Phase Encoding**: Applied before readout → fixed phase imprint
+
+---
+
+## Part 4: K-Space & Image Reconstruction
+
+**[Launch Part 4](https://znee.github.io/MRphysics_simulation/part4/)**
 
 Visualizes the relationship between spatial frequency domain (k-space) and image domain.
 
@@ -91,9 +112,9 @@ This simplified demo shows the **concept** that parallel imaging can recover mis
 
 ---
 
-## Part 3: QSM & Susceptibility Simulation
+## Part 5: QSM & Susceptibility Simulation
 
-**[Launch Part 3](https://znee.github.io/MRphysics_simulation/part3/)**
+**[Launch Part 5](https://znee.github.io/MRphysics_simulation/part5/)**
 
 Explores Quantitative Susceptibility Mapping (QSM) physics, including dipole field perturbation and solving the ill-posed inverse problem.
 
@@ -130,18 +151,18 @@ See [QSM Consensus Organization Committee, MRM 2024](https://onlinelibrary.wiley
 ## How to Use
 
 ### Online
-Visit the [Live Demo](https://znee.github.io/MRphysics_simulation/) and select Part 0, 1, 2, or 3.
+Visit the [Live Demo](https://znee.github.io/MRphysics_simulation/) and select Part 1-5.
 
 ### Local
 1. Clone this repository
 2. Open `index.html` in a modern browser, or
-3. Navigate directly to `part0/index.html`, `part1/index.html`, `part2/index.html`, or `part3/index.html`
+3. Navigate directly to `part1/index.html`, `part2/index.html`, `part3/index.html`, `part4/index.html`, or `part5/index.html`
 
 ## Technologies
 
 - Pure HTML/CSS/JavaScript (no frameworks)
 - [Chart.js](https://www.chartjs.org/) for interactive plotting
-- [Three.js](https://threejs.org/) for 3D visualization (Part 3)
+- [Three.js](https://threejs.org/) for 3D visualization (Part 5)
 - [MathJax](https://www.mathjax.org/) for LaTeX rendering
 - Canvas API for image processing
 - SVG for anatomical visualization

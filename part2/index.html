@@ -4,239 +4,241 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MRI K-Space Visualization</title>
+    <title>MR Physics Simulation</title>
     <link rel="stylesheet" href="style.css">
     <!-- Google Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 
 <body>
     <div class="app-container">
-        <header>
-            <div class="header-row">
-                <a href="../index.html" class="back-link">&larr; Home</a>
-                <div class="header-titles">
-                    <h1>MRI K-Space & Image Reconstruction</h1>
-                    <p class="subtitle">Visualizing the relationship between Spatial Frequency and Image Domain</p>
-                </div>
+        <header class="main-header">
+            <a href="../index.html" class="back-link">&larr; Home</a>
+            <div class="header-titles">
+                <h1>MR Physics <span class="highlight">Simulation</span></h1>
+                <p class="subtitle">Interactive educational tool for MRI signal processing and contrast mechanisms</p>
             </div>
         </header>
 
-        <main class="visualization-grid">
-            <!-- Visualization Grid -->
-            <div class="column-group" id="image-space-col">
-                <!-- Top Left: Original Image -->
-                <div class="panel">
-                    <div class="panel-header">
-                        <h2>Original Object</h2>
-                    </div>
-                    <div class="canvas-container" style="position: relative;">
-                        <canvas id="originalCanvas" width="512" height="512"></canvas>
-                        <div class="encoding-guide phase-guide">
-                            <span class="arrow">↓</span>
-                            <span class="label">Phase (PE)</span>
-                        </div>
-                        <div class="encoding-guide freq-guide">
-                            <span class="arrow">→</span>
-                            <span class="label">Freq (FE)</span>
-                        </div>
+        <main class="main-content">
+            <aside class="sidebar">
+                <div class="control-group">
+                    <h2>Presets</h2>
+                    <div class="preset-buttons">
+                        <button class="btn secondary" id="preset-t1">T1-Weighted</button>
+                        <button class="btn secondary" id="preset-t2">T2-Weighted</button>
+                        <button class="btn secondary" id="preset-t2star">T2*-Weighted</button>
+                        <button class="btn secondary" id="preset-flair">FLAIR</button>
+                        <button class="btn secondary" id="preset-stir">STIR</button>
                     </div>
                 </div>
-                <!-- Bottom Left: K-Space Magnitude -->
-                <div class="panel">
-                    <div class="panel-header">
-                        <h2>K-Space Magnitude</h2>
+
+                <div class="control-group">
+                    <h2>Global Settings</h2>
+                    <label for="sequenceType">Sequence Type</label>
+                    <select id="sequenceType">
+                        <option value="SE">Spin Echo (SE)</option>
+                        <option value="GRE">Gradient Echo (GRE)</option>
+                        <option value="IR">Inversion Recovery (IR)</option>
+                    </select>
+
+                    <label for="b0Field">B0 Field Strength (T)</label>
+                    <input type="range" id="b0Field" min="0.5" max="7.0" step="0.5" value="1.5">
+                    <span id="b0Value">1.5 T</span>
+                    <div class="b0-readout">
+                        <span class="freq-label">Larmor Frequency:</span>
+                        <span class="freq-value" id="b0Freq">63.86 MHz</span>
                     </div>
-                    <div class="canvas-container">
-                        <canvas id="kspaceMagCanvas" width="512" height="512"></canvas>
+
+                    <div id="inhomogeneity-control" style="display: none;">
+                        <label for="inhomogeneity">Field Inhomogeneity (Hz)</label>
+                        <input type="range" id="inhomogeneity" min="0" max="100" step="5" value="0">
+                        <span id="inhomogeneityValue">0 Hz</span>
                     </div>
                 </div>
-            </div>
 
-            <div class="column-group" id="k-space-col">
-                <!-- Top Right: Reconstructed Image -->
-                <div class="panel">
-                    <div class="panel-header">
-                        <h2>Reconstructed Image</h2>
-                    </div>
-                    <div class="canvas-container">
-                        <canvas id="reconstructedCanvas" width="512" height="512"></canvas>
+                <div class="control-group">
+                    <h2>Sequence Parameters</h2>
+                    <div id="params-container">
+                        <!-- Dynamic parameters injected here -->
                     </div>
                 </div>
-                <!-- Bottom Right: K-Space Phase -->
-                <div class="panel">
-                    <div class="panel-header">
-                        <h2>K-Space Phase</h2>
-                    </div>
-                    <div class="canvas-container">
-                        <canvas id="kspacePhaseCanvas" width="512" height="512"></canvas>
-                    </div>
+
+
+
+                <div class="control-group">
+                    <button id="helpBtn" class="btn primary">How to Read Charts?</button>
                 </div>
-            </div>
 
-            <!-- Controls & Explanations -->
-            <section class="panel controls-panel">
-                <div class="panel-header">
-                    <h2>Controls</h2>
+                <div class="sidebar-footer">
+                    <p>Jinhee Jang, MD, PhD</p>
+                    <p>Department of Radiology, Seoul St. Mary's Hospital</p>
                 </div>
-                <div class="controls-content">
-                    <div class="control-group">
-                        <h3>Phantom</h3>
-                        <select id="phantomSelect">
-                            <option value="circle">Circle</option>
-                            <option value="square">Square</option>
-                            <option value="brain">Brain (Simulated)</option>
-                            <option value="brain-real" selected>Brain (Real)</option>
-                        </select>
+            </aside>
+
+            <section class="visualization-area">
+                <div class="first-row-container">
+                    <div id="brain-phantom-container">
+                        <canvas id="brain-canvas" width="512" height="512"></canvas>
+                        <div id="equation-overlay"></div>
                     </div>
 
-                    <div class="control-group">
-                        <label>Animation Speed</label>
-                        <input type="range" id="speedRange" min="1" max="20" value="5">
-                    </div>
-
-                    <div class="control-group">
-                        <label>Noise Level</label>
-                        <input type="range" id="noiseRange" min="0" max="100" value="0">
-                    </div>
-
-                    <div class="control-group">
-                        <label>Motion Artifacts</label>
-                        <input type="range" id="motionRange" min="0" max="100" value="0">
-                    </div>
-
-                    <div class="control-group">
-                        <label>Spike Noise (Bad Pixel)</label>
-                        <div class="sub-control">
-                            <input type="checkbox" id="spikeCheck">
-                            <label for="spikeCheck">Enable</label>
-                        </div>
-                    </div>
-
-                    <div class="control-group">
-                        <label>Undersampling (Skip Lines)</label>
-                        <div class="sub-control">
-                            <label>Phase (Y): <span id="skipYVal">1</span>x</label>
-                            <input type="range" id="skipYRange" min="1" max="8" value="1" step="1">
-                        </div>
-                    </div>
-
-                    <div class="control-group">
-                        <h3>Acceleration Techniques</h3>
-                        <label>Partial Fourier</label>
-                        <select id="partialFourierSelect">
-                            <option value="1.0" selected>Full (100%)</option>
-                            <option value="0.75">6/8 (75%)</option>
-                            <option value="0.625">5/8 (62.5%)</option>
-                        </select>
-                        <div class="sub-control" id="pfReconControl" style="display: none; margin-top: 5px;">
-                            <label>Reconstruction:</label>
-                            <select id="pfReconSelect" style="margin-left: 5px;">
-                                <option value="zerofill">Zero-fill</option>
-                                <option value="conjugate">Conjugate Synthesis</option>
-                            </select>
-                        </div>
-
-                        <label style="margin-top: 10px;">Parallel Imaging (Demo)</label>
-                        <select id="parallelImagingSelect">
-                            <option value="1" selected>Off (1 coil)</option>
-                            <option value="2">SENSE R=2 (2 coils)</option>
-                            <option value="4">SENSE R=4 (4 coils)</option>
-                        </select>
-                        <em style="font-size: 0.65rem; opacity: 0.7; display: block; margin-top: 3px;">
-                            Simplified demo - interpolates missing k-space lines
-                        </em>
-                    </div>
-
-                    <div class="control-group resolution-group">
-                        <h3>Resolution & SNR</h3>
-                        <label>Matrix Size: <span id="matrixSizeVal">256</span> x <span id="matrixSizeVal2">256</span></label>
-                        <input type="range" id="matrixSizeRange" min="32" max="512" value="256" step="32">
-                        <div class="sub-control">
-                            <input type="checkbox" id="simulateSNRCheck" checked>
-                            <label for="simulateSNRCheck">Simulate SNR effect</label>
-                        </div>
-                        <div class="resolution-info">
-                            <div class="info-row">
-                                <span class="info-label">Pixel Size:</span>
-                                <span id="pixelSizeVal" class="info-value">1.0x</span>
+                    <div class="tissue-cards-container">
+                        <div class="tissue-card" style="--tissue-color: #e2e8f0;">
+                            <div class="tissue-icon"></div>
+                            <div class="tissue-info">
+                                <div class="tissue-name">White Matter</div>
+                                <div class="tissue-params">T1:600 T2:80 PD:0.7</div>
                             </div>
-                            <div class="info-row">
-                                <span class="info-label">K-Space Coverage:</span>
-                                <span id="kspaceCoverageVal" class="info-value">100%</span>
+                        </div>
+                        <div class="tissue-card" style="--tissue-color: #94a3b8;">
+                            <div class="tissue-icon"></div>
+                            <div class="tissue-info">
+                                <div class="tissue-name">Gray Matter</div>
+                                <div class="tissue-params">T1:950 T2:100 PD:0.8</div>
                             </div>
-                            <div class="info-row">
-                                <span class="info-label">Relative SNR:</span>
-                                <span id="snrVal" class="info-value">1.00</span>
+                        </div>
+                        <div class="tissue-card" style="--tissue-color: #38bdf8;">
+                            <div class="tissue-icon"></div>
+                            <div class="tissue-info">
+                                <div class="tissue-name">CSF</div>
+                                <div class="tissue-params">T1:4500 T2:2200 PD:1.0</div>
                             </div>
-                            <div class="snr-bar-container">
-                                <div class="snr-bar" id="snrBar"></div>
+                        </div>
+                        <div class="tissue-card" style="--tissue-color: #fbbf24;">
+                            <div class="tissue-icon"></div>
+                            <div class="tissue-info">
+                                <div class="tissue-name">Fat</div>
+                                <div class="tissue-params">T1:250 T2:60 PD:0.9</div>
                             </div>
                         </div>
                     </div>
+                </div>
 
-                    <div class="control-group">
-                        <button id="btnStartFill" class="primary-btn">Start Filling Animation</button>
-                        <button id="btnStopFill" class="secondary-btn">Stop</button>
-                        <button id="btnAcquireAll" class="secondary-btn">Acquire All</button>
-                        <button id="btnClear" class="danger-btn">Clear K-Space</button>
+                <!-- Tab Navigation -->
+                <div class="tab-navigation">
+                    <button class="tab-btn active" data-tab="simulation">Simulation</button>
+                    <button class="tab-btn" data-tab="mechanics">Sequence Mechanics</button>
+                </div>
+
+                <!-- Tab Content: Simulation -->
+                <div class="tab-content active" id="tab-simulation">
+                    <div class="parameter-dependency-grid">
+                        <div class="chart-container" id="container-tr">
+                            <h3>Signal vs TR</h3>
+                            <canvas id="chartTR"></canvas>
+                        </div>
+                        <div class="chart-container" id="container-te">
+                            <h3>Signal vs TE</h3>
+                            <canvas id="chartTE"></canvas>
+                        </div>
+                        <div class="chart-container" id="container-ti">
+                            <div style="display: flex; justify-content: space-between; align-items: center;">
+                                <h3>Signal vs TI</h3>
+                                <label style="font-size: 0.8rem; display: flex; align-items: center; gap: 5px;">
+                                    <input type="checkbox" id="signedSignalToggle"> Show Signed
+                                </label>
+                            </div>
+                            <canvas id="chartTI"></canvas>
+                        </div>
+                        <div class="chart-container" id="container-fa">
+                            <h3>Signal vs Flip Angle</h3>
+                            <canvas id="chartFA"></canvas>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Tab Content: Mechanics -->
+                <div class="tab-content" id="tab-mechanics">
+                    <h2 class="section-title">Sequence Mechanics</h2>
+
+                    <div class="mechanics-grid">
+                        <!-- Phase Wheel Panel -->
+                        <div class="phase-wheel-panel">
+                            <h3>Magnetization Dynamics</h3>
+                            <svg id="phase-wheel" viewBox="0 0 300 300" xmlns="http://www.w3.org/2000/svg">
+                                <!-- Will be populated by JS -->
+                            </svg>
+                            <div class="phase-wheel-controls">
+                                <button id="prev-frame" class="btn secondary">◀</button>
+                                <span id="frame-label">Frame 1/16</span>
+                                <button id="next-frame" class="btn secondary">▶</button>
+                                <button id="play-animation" class="btn primary">▶ Play</button>
+                            </div>
+                            <div class="phase-info" id="phase-info">
+                                <!-- Educational description populated by JS -->
+                            </div>
+                            <div class="param-badge" id="phase-params">
+                                Current sequence parameters
+                            </div>
+                        </div>
+
+                        <!-- R2/R2* Comparison Chart -->
+                        <div class="r2-comparison-panel">
+                            <h3>Decay Rate Comparison</h3>
+                            <canvas id="r2Chart"></canvas>
+                            <div class="r2-annotations">
+                                <p id="se-annotation" class="annotation">SE: Only R2 contributes (180° cancels R2')</p>
+                                <p id="gre-annotation" class="annotation">GRE: R2* = R2 + R2' (static ΔB0 persists)</p>
+                            </div>
+                            <div class="param-badge" id="r2-params">
+                                Decay rate values
+                            </div>
+                        </div>
                     </div>
 
-                    <div class="info-box">
-                        <h3>Current Status</h3>
-                        <p id="statusText">Ready</p>
-                    </div>
-
-                    <div class="info-box explanation-box">
-                        <h3>Resolution & K-Space</h3>
-                        <p class="explanation-text">
-                            <strong>Baseline (256):</strong> Uses 25% of full k-space. SNR = 1.0.
-                        </p>
-                        <p class="explanation-text">
-                            <strong>Lower Resolution:</strong> Truncates more k-space. Larger voxels → higher SNR.
-                        </p>
-                        <p class="explanation-text">
-                            <strong>Higher Resolution:</strong> Uses more k-space. Smaller voxels → lower SNR. 512×512 = 0.25× SNR.
-                        </p>
-                    </div>
-
-                    <div class="info-box explanation-box">
-                        <h3>K-Space Inspection</h3>
-                        <p class="explanation-text">
-                            <strong>Hover over K-Space Magnitude</strong> to see the corresponding spatial frequency pattern.
-                        </p>
-                        <p class="explanation-text">
-                            Each k-space point represents a 2D sinusoidal wave. <strong>Center</strong> = low frequency (contrast), <strong>Edges</strong> = high frequency (fine detail).
-                        </p>
-                    </div>
-
-                    <div class="info-box explanation-box">
-                        <h3>Acceleration Techniques</h3>
-                        <p class="explanation-text">
-                            <strong>Partial Fourier:</strong> Exploits k-space conjugate symmetry. Acquires ~60-75% of ky lines. Faster scan, slight blur/artifacts.
-                        </p>
-                        <p class="explanation-text">
-                            <strong>Parallel Imaging:</strong> Uses multiple coils to unfold aliased images. SENSE/GRAPPA recover missing data. SNR ∝ 1/(g·√R).
-                        </p>
-                        <p class="explanation-text" style="margin-top: 8px; font-size: 0.7rem;">
-                            <strong>K-Space Colors:</strong> <span style="color: #fff;">White</span> = acquired, <span style="color: #4dd;">Cyan</span> = PI-recovered, <span style="color: #666;">Dark</span> = missing.
-                        </p>
-                        <p class="explanation-text" style="margin-top: 8px; font-size: 0.65rem; opacity: 0.8; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 8px;">
-                            <strong>Note:</strong> This PI demo uses k-space interpolation to fill skipped lines, which shows the SNR penalty (g-factor noise) but not true wrap-around aliasing artifacts. Real SENSE/GRAPPA reconstructs aliased images first, then unfolds using coil sensitivity maps.
-                        </p>
-                    </div>
-
-                    <div class="sidebar-footer">
-                        <p>Jinhee Jang, MD, PhD</p>
-                        <p>Department of Radiology, Seoul St. Mary's Hospital</p>
+                    <!-- RF/Gradient Timeline -->
+                    <div class="timeline-panel">
+                        <h3>Pulse Sequence Timeline</h3>
+                        <svg id="rf-gradient-timeline" viewBox="0 0 800 200" xmlns="http://www.w3.org/2000/svg">
+                            <!-- Will be populated by JS -->
+                        </svg>
+                        <div class="param-badge" id="timeline-params">
+                            Timing parameters
+                        </div>
                     </div>
                 </div>
             </section>
         </main>
     </div>
-    <script src="brain_data.js"></script>
+
+    <!-- Help Modal -->
+    <div id="helpModal" class="modal">
+        <div class="modal-content">
+            <span class="close-modal">&times;</span>
+            <h2>Understanding the Charts</h2>
+            <div class="modal-body">
+                <div class="modal-text">
+                    <p><strong>Signal vs Parameter Charts</strong></p>
+                    <p>Each chart shows how signal intensity changes as you vary a sequence parameter:</p>
+                    <ul>
+                        <li><strong>X-axis:</strong> The parameter being varied (TR, TE, TI, or FA)</li>
+                        <li><strong>Y-axis:</strong> Resulting signal intensity</li>
+                        <li><strong>Dashed line:</strong> Your current parameter value</li>
+                        <li><strong>Colored curves:</strong> Different tissue types</li>
+                    </ul>
+                    <p>Maximize tissue contrast by finding where curves are most separated.</p>
+
+                    <hr style="margin: 1rem 0; border: none; border-top: 1px solid var(--border-color);">
+
+                    <p><strong>Signal vs TI (Inversion Recovery)</strong></p>
+                    <p>The "V-shaped bounce" in IR curves occurs at the <em>Null Point</em>:</p>
+                    <ul>
+                        <li>After 180° inversion, M<sub>z</sub> starts negative and recovers toward positive</li>
+                        <li>MRI displays <strong>magnitude</strong> (absolute value), so negative appears as positive</li>
+                        <li>This creates a "bounce" where signal crosses zero</li>
+                        <li>Each tissue nulls at different TI based on its T1 (e.g., CSF ~2200ms, Fat ~170ms)</li>
+                    </ul>
+                    <p><strong>Tip:</strong> Toggle "Show Signed" to see the true recovery curve without the bounce.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+    <script src="brain_seg_data.js"></script>
     <script src="script.js"></script>
 </body>
 

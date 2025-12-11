@@ -4,17 +4,15 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>QSM Simulation - MR Physics</title>
+    <title>Part 1.5: Spatial Encoding | MR Physics Simulation</title>
     <link rel="stylesheet" href="style.css">
-    <!-- Three.js -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-    <!-- MathJax -->
-    <script src="https://polyfill.io/v3/polyfill.min.js?features=es6"></script>
-    <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
     <!-- Google Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <!-- MathJax -->
+    <script src="https://polyfill.io/v3/polyfill.min.js?features=es6"></script>
+    <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
 </head>
 
 <body>
@@ -22,94 +20,178 @@
         <header class="main-header">
             <a href="../index.html" class="back-link">&larr; Home</a>
             <div class="header-titles">
-                <h1>QSM <span class="highlight">Simulation</span></h1>
-                <p class="subtitle">Explore Magnetic Susceptibility, Dipole Fields, and Inverse Problems</p>
+                <h1>Spatial <span class="highlight">Encoding</span></h1>
+                <p class="subtitle">How gradients encode position into signal phase - the foundation of MRI</p>
             </div>
         </header>
 
         <main class="main-content">
             <aside class="sidebar">
-                <div class="control-group">
-                    <h2>Slice Selection</h2>
-                    <label for="scan-plane">Scan Plane</label>
-                    <select id="scan-plane">
-                        <option value="axial" selected>Axial (XY)</option>
-                        <option value="coronal">Coronal (XZ)</option>
-                        <option value="sagittal">Sagittal (YZ)</option>
-                    </select>
+                <!-- Module Selection -->
+                <div class="module-tabs">
+                    <button class="module-tab active" data-module="A">A: Gradient Encoding</button>
+                    <button class="module-tab" data-module="B">B: K-Space & Signal</button>
                 </div>
 
-                <div class="control-group">
-                    <h2>Source Objects</h2>
+                <!-- Module A: Gradient Encoding -->
+                <div class="control-group module-controls" id="controls-A">
+                    <h2>Gradient Controls</h2>
 
-                    <button id="add-random-btn" class="btn primary" style="font-size: 1.1rem; padding: 14px; margin-bottom: 15px;">+ Add Random Object</button>
-
-                    <details style="margin-bottom: 10px;">
-                        <summary style="cursor: pointer; color: var(--text-secondary); font-size: 0.85rem;">Custom Object Settings</summary>
-                        <div style="margin-top: 10px;">
-                            <label for="obj-shape">Shape</label>
-                            <select id="obj-shape">
-                                <option value="sphere">Sphere</option>
-                                <option value="cube">Cube</option>
-                                <option value="cylinder">Cylinder (Random Orientation)</option>
-                                <option value="ellipsoid">Ellipsoid</option>
-                            </select>
-
-                            <label for="obj-size">Size (Radius/Half-Width)</label>
-                            <input type="range" id="obj-size" min="3" max="30" step="1" value="12">
-                            <span id="obj-size-val">12 px</span>
-
-                            <label for="obj-chi">Susceptibility (\(\chi\))</label>
-                            <input type="range" id="obj-chi" min="-1.0" max="1.0" step="0.1" value="1.0">
-                            <span id="obj-chi-val">+1.0 ppm (Paramagnetic)</span>
-
-                            <button id="add-object-btn" class="btn secondary" style="margin-top: 10px;">Add Custom Object</button>
+                    <div class="toggle-group">
+                        <label class="toggle-label">
+                            <input type="checkbox" id="gx-toggle">
+                            <span class="toggle-text">Frequency Gradient (G<sub>x</sub>)</span>
+                        </label>
+                        <div class="gradient-strength" id="gx-strength-container" style="display: none;">
+                            <input type="range" id="gx-strength" min="1" max="10" value="5">
+                            <span id="gx-strength-val">5</span>
                         </div>
-                    </details>
+                    </div>
 
-                    <button id="clear-canvas" class="btn warning">Clear All Objects</button>
-                </div>
+                    <div class="toggle-group">
+                        <label class="toggle-label">
+                            <input type="checkbox" id="gy-toggle">
+                            <span class="toggle-text">Phase Gradient (G<sub>y</sub>)</span>
+                        </label>
+                        <div class="gradient-strength" id="gy-strength-container" style="display: none;">
+                            <input type="range" id="gy-strength" min="1" max="10" value="5">
+                            <span id="gy-strength-val">5</span>
+                        </div>
+                    </div>
 
-                <div class="control-group">
-                    <h2>B₀ Field Direction</h2>
-                    <label for="b0-angle">B₀ Tilt Angle from Z-axis</label>
-                    <input type="range" id="b0-angle" min="-90" max="90" step="5" value="0">
-                    <span id="b0-angle-val">0° (Standard: B₀ ∥ Z)</span>
-                    <em style="font-size: 0.65rem; opacity: 0.7; display: block; margin-top: 4px;">
-                        0° = Standard (B₀ along S/I).<br>
-                        ±55° = Magic angle.<br>
-                        ±90° = B₀ perpendicular to Z.
-                    </em>
-                </div>
-
-                <div class="control-group" id="recon-controls">
-                    <h2>Reconstruction</h2>
-                    <label for="reg-lambda">Regularization (\(\lambda\))</label>
-                    <input type="range" id="reg-lambda" min="0" max="0.1" step="0.001" value="0.01">
-                    <span id="reg-lambda-val">0.01</span>
-
-                    <div style="margin-top: 10px;">
-                        <label>Method:</label>
-                        <select id="recon-method">
-                            <option value="tikhonov">Tikhonov Regularization</option>
-                            <option value="tkd">Truncated K-Space (TKD)</option>
+                    <div class="control-row">
+                        <label for="grid-size">Grid Size</label>
+                        <select id="grid-size">
+                            <option value="4" selected>4 × 4</option>
+                            <option value="8">8 × 8</option>
+                            <option value="12">12 × 12</option>
+                            <option value="16">16 × 16</option>
                         </select>
+                    </div>
+
+                    <div class="toggle-group">
+                        <label class="toggle-label">
+                            <input type="checkbox" id="random-signal-toggle">
+                            <span class="toggle-text">Random signal per voxel</span>
+                        </label>
+                        <div class="gradient-strength" id="random-seed-container" style="display: none;">
+                            <button id="reshuffle-btn" class="small-btn">Reshuffle</button>
+                        </div>
+                    </div>
+
+                    <div class="toggle-group frame-toggle">
+                        <label class="toggle-label">
+                            <input type="checkbox" id="lab-frame-toggle">
+                            <span class="toggle-text">Show Lab Frame (animate precession)</span>
+                        </label>
+                    </div>
+
+                    <div class="info-panel">
+                        <h4>What You're Seeing</h4>
+                        <p id="encoding-explanation">
+                            Without gradients, all spins have the same phase (pointing same direction).
+                            Toggle gradients to see how they create position-dependent phase patterns.
+                        </p>
+                    </div>
+
+                    <div class="equation-box">
+                        <div id="equation-display">
+                            \(\phi(x,y) = \gamma \cdot (G_x \cdot x + G_y \cdot y) \cdot t\)
+                        </div>
+                    </div>
+
+                    <div class="info-panel secondary">
+                        <h4>Key Difference</h4>
+                        <p><strong>G<sub>x</sub> (Frequency)</strong>: ON during readout → phase accumulates continuously → oscillating signal<br>
+                        <strong>G<sub>y</sub> (Phase)</strong>: ON before readout, then OFF → fixed phase imprint → constant magnitude</p>
                     </div>
                 </div>
 
-                <div class="control-group">
-                    <div class="info-box" id="mode-info">
-                        <h3>3D Volume Simulation</h3>
-                        <p class="explanation-text">
-                            <strong>Reference</strong>: Ground Truth \(\chi\) (3D volume).<br>
-                            <strong>Phase</strong>: 3D dipole convolution \(\phi = \mathcal{F}^{-1}\{D \cdot \mathcal{F}\{\chi\}\}\).<br>
-                            <strong>Recon</strong>: Regularized inverse \(\chi = \mathcal{F}^{-1}\{\frac{D}{D^2+\lambda} \cdot \mathcal{F}\{\phi\}\}\).<br>
-                            <em style="font-size: 0.7rem; opacity: 0.8;">Full 3D dipole kernel: D(k) = 1/3 - k<sub>B₀</sub>²/|k|².</em>
-                        </p>
-                        <p class="explanation-text" style="margin-top: 8px; font-size: 0.65rem; opacity: 0.7;">
-                            <strong>Note:</strong> Phase unwrapping, background field removal, and multi-echo combination are omitted.
-                            See <a href="https://onlinelibrary.wiley.com/doi/full/10.1002/mrm.30006" target="_blank" style="color: var(--accent-color);">QSM Consensus Organization Committee, MRM 2024</a> for details.
-                        </p>
+                <!-- Module B: K-Space & Signal -->
+                <div class="control-group module-controls" id="controls-B" style="display: none;">
+                    <h2>K-Space Encoding</h2>
+
+                    <div class="info-panel" style="background: rgba(239, 68, 68, 0.1); border-color: rgba(239, 68, 68, 0.3);">
+                        <h4 style="color: #ef4444;">k<sub>y</sub> = Phase Encoding Line</h4>
+                        <p>Each TR acquires ONE line. G<sub>y</sub> sets which line.<br>
+                        <em>Repeat for all k<sub>y</sub> values to fill k-space.</em></p>
+                    </div>
+
+                    <div class="control-row">
+                        <label for="ky-position">k<sub>y</sub> Line (Phase Encode Step)</label>
+                        <input type="range" id="ky-position" min="-8" max="8" value="0">
+                        <span id="ky-val">0</span>
+                    </div>
+
+                    <div class="info-panel" style="background: rgba(168, 85, 247, 0.1); border-color: rgba(168, 85, 247, 0.3);">
+                        <h4 style="color: #a855f7;">k<sub>x</sub> = Frequency (Readout)</h4>
+                        <p>During readout, k<sub>x</sub> sweeps from -max to +max.<br>
+                        <em>Slide to see signal at each k<sub>x</sub> point.</em></p>
+                    </div>
+
+                    <div class="control-row">
+                        <label for="kx-position">k<sub>x</sub> Point (During Readout)</label>
+                        <input type="range" id="kx-position" min="-8" max="8" value="0">
+                        <span id="kx-val">0</span>
+                    </div>
+
+                    <div class="control-row">
+                        <label for="grid-size-b">Grid Size</label>
+                        <select id="grid-size-b">
+                            <option value="4" selected>4 × 4</option>
+                            <option value="8">8 × 8</option>
+                            <option value="12">12 × 12</option>
+                            <option value="16">16 × 16</option>
+                        </select>
+                    </div>
+
+                    <div class="control-row">
+                        <label for="object-select">Object</label>
+                        <select id="object-select">
+                            <option value="uniform">Uniform Square</option>
+                            <option value="circle">Circle</option>
+                            <option value="two-dots">Two Dots</option>
+                            <option value="line-h">Horizontal Line</option>
+                            <option value="line-v">Vertical Line</option>
+                        </select>
+                    </div>
+
+                    <div class="toggle-group">
+                        <label class="toggle-label">
+                            <input type="checkbox" id="random-signal-toggle-b">
+                            <span class="toggle-text">Random signal per voxel</span>
+                        </label>
+                        <div class="gradient-strength" id="random-seed-container-b" style="display: none;">
+                            <button id="reshuffle-btn-b" class="small-btn">Reshuffle</button>
+                        </div>
+                    </div>
+
+                    <div class="equation-box">
+                        \(S(k_x, k_y) = \sum_{x,y} \rho(x,y) \cdot e^{-i 2\pi (k_x x + k_y y)}\)
+                    </div>
+
+                    <div class="signal-display">
+                        <h4>Signal = Sum of All Spins</h4>
+                        <div class="signal-values">
+                            <div class="signal-item">
+                                <span class="signal-label">Real:</span>
+                                <span class="signal-value" id="signal-real">0.00</span>
+                            </div>
+                            <div class="signal-item">
+                                <span class="signal-label">Imag:</span>
+                                <span class="signal-value" id="signal-imag">0.00</span>
+                            </div>
+                            <div class="signal-item">
+                                <span class="signal-label">Mag:</span>
+                                <span class="signal-value" id="signal-mag">0.00</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="info-panel secondary">
+                        <h4>Connection to Module A</h4>
+                        <p>k<sub>x</sub> = Frequency encoding (G<sub>x</sub> × time)<br>
+                        k<sub>y</sub> = Phase encoding (G<sub>y</sub> strength)</p>
                     </div>
                 </div>
 
@@ -120,76 +202,49 @@
             </aside>
 
             <section class="visualization-area">
-                <!-- Control Bar for Slice (Global) -->
-                <div class="maps-control-bar">
-                    <label for="slice-slider">Slice Position: <span id="slice-val">0</span> <span id="slice-axis-label">(Z)</span></label>
-                    <input type="range" id="slice-slider" min="-128" max="128" value="0">
-                </div>
-
-                <!-- 2x2 Grid -->
-                <div class="grid-2x2">
-                    <!-- Top Left: 3D Phantom -->
-                    <div class="panel-wrapper">
-                        <div class="canvas-header">
-                            <h2>3D Phantom</h2>
-                            <select id="slice-texture-select" style="margin-left: 10px; font-size: 0.7rem; padding: 2px 5px;">
-                                <option value="chi">Reference χ</option>
-                                <option value="phase">Phase φ</option>
-                                <option value="recon">Recon χ</option>
-                            </select>
+                <!-- Main visualization panels -->
+                <div class="viz-grid">
+                    <!-- 2D Spin Array -->
+                    <div class="viz-panel" id="spin-panel">
+                        <div class="panel-header">
+                            <h2>2D Spin Array</h2>
+                            <span class="panel-badge" id="spin-badge">Phase Pattern</span>
                         </div>
-                        <div id="canvas-3d" class="panel-content"></div>
-                        <p class="viewport-instruction">Left: Rotate | Right: Pan | Yellow: B₀ (↑Z)</p>
-                    </div>
-
-                    <!-- Top Right: Phase Image -->
-                    <div class="panel-wrapper slice-view">
-                        <div class="canvas-header">
-                            <h2>Phase \(\phi\) [rad]</h2>
-                        </div>
-                        <div class="canvas-container panel-content">
-                            <canvas id="simCanvasField" width="256" height="256"></canvas>
-                            <span class="axis-label axis-x slice-axis-h">X</span>
-                            <span class="axis-label axis-y slice-axis-v">Y</span>
-                        </div>
-                        <div class="colorbar-container">
-                            <span class="cb-label">\(-\pi\)</span>
-                            <div class="colorbar field-colorbar"></div>
-                            <span class="cb-label">\(+\pi\)</span>
+                        <div class="panel-content">
+                            <canvas id="spin-canvas"></canvas>
+                            <div class="axis-label axis-x">x (Frequency Encode Direction)</div>
+                            <div class="axis-label axis-y">y (Phase Encode Direction)</div>
                         </div>
                     </div>
 
-                    <!-- Bottom Left: Reference Chi -->
-                    <div class="panel-wrapper slice-view">
-                        <div class="canvas-header">
-                            <h2>Reference \(\chi\) [ppm]</h2>
+                    <!-- Phase Colorwheel / Legend -->
+                    <div class="viz-panel small" id="legend-panel">
+                        <div class="panel-header">
+                            <h2>Phase Legend</h2>
                         </div>
-                        <div class="canvas-container panel-content">
-                            <canvas id="simCanvasChi" width="256" height="256"></canvas>
-                            <span class="axis-label axis-x slice-axis-h">X</span>
-                            <span class="axis-label axis-y slice-axis-v">Y</span>
-                        </div>
-                        <div class="colorbar-container">
-                            <span class="cb-label" id="chi-min-label">-1.0</span>
-                            <div class="colorbar chi-colorbar"></div>
-                            <span class="cb-label" id="chi-max-label">+1.0</span>
+                        <div class="panel-content centered">
+                            <canvas id="legend-canvas"></canvas>
                         </div>
                     </div>
 
-                    <!-- Bottom Right: Reconstruction -->
-                    <div class="panel-wrapper slice-view">
-                        <div class="canvas-header">
-                            <h2>Reconstruction \(\chi_{recon}\) [ppm]</h2>
+                    <!-- Signal / K-Space Panel -->
+                    <div class="viz-panel" id="kspace-panel">
+                        <div class="panel-header">
+                            <h2 id="kspace-title">Signal Over Time</h2>
+                            <span class="panel-badge" id="kspace-badge">Rotating Frame</span>
                         </div>
-                        <div class="canvas-container panel-content">
-                            <canvas id="simCanvasRecon" width="256" height="256"></canvas>
-                            <span class="axis-label axis-x slice-axis-h">X</span>
-                            <span class="axis-label axis-y slice-axis-v">Y</span>
+                        <div class="panel-content">
+                            <canvas id="kspace-canvas"></canvas>
                         </div>
-                        <div class="colorbar-container">
-                            <span class="cb-label" id="recon-min-label">-1.0</span>
-                            <div class="colorbar chi-colorbar"></div>
-                            <span class="cb-label" id="recon-max-label">+1.0</span>
+                    </div>
+
+                    <!-- Object / Result -->
+                    <div class="viz-panel small" id="object-panel">
+                        <div class="panel-header">
+                            <h2 id="object-title">Vector Sum</h2>
+                        </div>
+                        <div class="panel-content centered">
+                            <canvas id="object-canvas"></canvas>
                         </div>
                     </div>
                 </div>

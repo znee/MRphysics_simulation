@@ -1,1415 +1,1915 @@
 /**
- * K-Space Visualization App
- * 
- * Core components:
- * 1. Complex Number handling
- * 2. 2D FFT/IFFT implementation
- * 3. Phantom generation
- * 4. Visualization logic (Canvas rendering)
+ * MR Physics Simulation Logic
  */
 
-// --- Constants ---
-const N = 512; // Matrix size (512x512 for full resolution range)
+class MRPhysics {
+    constructor() {
+        // Fixed Tissues for Brain Schematic
+        this.tissues = [
+            { id: 'fat', name: 'Fat', t1: 250, t2: 60, pd: 0.9, color: '#fbbf24', regionId: 'region-fat' },
+            { id: 'gm', name: 'Gray Matter', t1: 950, t2: 100, pd: 0.8, color: '#94a3b8', regionId: 'region-gm' },
+            { id: 'wm', name: 'White Matter', t1: 600, t2: 80, pd: 0.7, color: '#e2e8f0', regionId: 'region-wm' },
+            { id: 'csf', name: 'CSF', t1: 4500, t2: 2200, pd: 1.0, color: '#38bdf8', regionId: 'region-csf' }
+        ];
 
-// --- State ---
-let kSpaceData = null; // Full K-space (Ground Truth)
-let acquiredKSpace = null; // Currently acquired K-space
-let reconstructedImage = null; // Image from acquired K-space
-let groundTruthImage = null; // Original phantom image
-let phantomType = 'brain-real';
-let isAnimating = false;
-let animationSpeed = 5;
-let noiseLevel = 0;
-let motionLevel = 0;
-let hasSpike = false;
-let skipY = 1;
-let matrixSize = 256; // Effective matrix size (resolution)
-let simulateSNR = true; // Whether to visually simulate SNR effect (default: on)
-let currentLine = 0;
+        this.params = {
+            sequence: 'SE',
+            b0: 1.5,
+            inhomogeneity: 0, // Hz
+            tr: 500,    // ms
+            te: 20,     // ms
+            ti: 0,      // ms (for IR)
+            fa: 90      // degrees (for GRE/SE)
+        };
 
-// Partial Fourier settings
-let partialFourierFraction = 1.0; // 1.0 = full, 0.75, 0.625
-let partialFourierRecon = 'zerofill'; // 'zerofill' or 'conjugate'
+        this.charts = {};
 
-// Parallel Imaging settings (simplified demo)
-let numCoils = 1; // 1 = no parallel imaging, 2 or 4 coils
-let parallelAcceleration = 1; // R factor (1, 2, or 4)
+        // Phase Wheel State
+        this.phaseWheelFrame = 0;
+        this.phaseWheelPlaying = false;
+        this.phaseWheelInterval = null;
 
-// Displayed k-space (after PF/PI processing) for visualization
-let displayedKSpace = null;
-let globalMaxMag = 0;
-let spikeX = 0;
-let spikeY = 0;
-let animationFrameId = null;
-let isInspecting = false; // Is user hovering over K-space?
+        // Chart State
+        this.showSigned = false;
 
-// --- Complex Number Class ---
-class Complex {
-    constructor(re, im) {
-        this.re = re;
-        this.im = im;
+        // Brain segmentation data
+        this.brainSegData = null;
+        this.canvasSize = 512;
     }
 
-    add(other) {
-        return new Complex(this.re + other.re, this.im + other.im);
+    init() {
+        this.initUI();
+        this.initCharts();
+        this.initMechanicsVisualizations();
+        this.renderParams();
+        this.loadBrainSegmentation();
+        this.makeDraggable();
+
+        // Help button
+        document.getElementById('helpBtn').addEventListener('click', () => {
+            document.getElementById('helpModal').style.display = 'flex';
+        });
+
+        document.getElementById('closeModal').addEventListener('click', () => {
+            document.getElementById('helpModal').style.display = 'none';
+        });
     }
 
-    sub(other) {
-        return new Complex(this.re - other.re, this.im - other.im);
-    }
-
-    mul(other) {
-        return new Complex(
-            this.re * other.re - this.im * other.im,
-            this.re * other.im + this.im * other.re
-        );
-    }
-
-    get magnitude() {
-        return Math.sqrt(this.re * this.re + this.im * this.im);
-    }
-
-    get phase() {
-        return Math.atan2(this.im, this.re);
-    }
-}
-
-// --- Initialization ---
-document.addEventListener('DOMContentLoaded', () => {
-    console.log('K-Space App Initialized');
-    initApp();
-});
-
-function initApp() {
-    // Initialize data structures
-    initDataStructures();
-
-    // Initialize resolution info display
-    updateResolutionInfo();
-
-    // Bind events first (so UI is responsive during image load)
-    bindEvents();
-
-    // Generate initial phantom (will call renderAll when ready)
-    generatePhantom(phantomType);
-}
-
-function initDataStructures() {
-    // Create NxN arrays of Complex numbers
-    kSpaceData = new Array(N).fill(0).map(() => new Array(N).fill(0).map(() => new Complex(0, 0)));
-    acquiredKSpace = new Array(N).fill(0).map(() => new Array(N).fill(0).map(() => new Complex(0, 0)));
-    reconstructedImage = new Array(N).fill(0).map(() => new Array(N).fill(0).map(() => new Complex(0, 0)));
-    groundTruthImage = new Array(N).fill(0).map(() => new Array(N).fill(0).map(() => new Complex(0, 0)));
-}
-
-function generatePhantom(type) {
-    // Reset acquisition
-    resetAcquisition();
-
-    if (type === 'brain-real') {
+    loadBrainSegmentation() {
+        // Load the brain segmentation image
         const img = new Image();
         img.onload = () => {
-            console.log('Brain image loaded successfully');
+            // Extract pixel data from segmentation at original size
             const tempCanvas = document.createElement('canvas');
-            tempCanvas.width = N;
-            tempCanvas.height = N;
-            const ctx = tempCanvas.getContext('2d');
-            ctx.drawImage(img, 0, 0, N, N);
-            const imgData = ctx.getImageData(0, 0, N, N);
+            tempCanvas.width = this.canvasSize;
+            tempCanvas.height = this.canvasSize;
+            const tempCtx = tempCanvas.getContext('2d');
+            tempCtx.imageSmoothingEnabled = false;
+            tempCtx.drawImage(img, 0, 0, this.canvasSize, this.canvasSize);
 
-            for (let y = 0; y < N; y++) {
-                for (let x = 0; x < N; x++) {
-                    const idx = (y * N + x) * 4;
-                    // Use red channel (grayscale image) and normalize to 0-1
-                    const val = imgData.data[idx] / 255;
-                    groundTruthImage[y][x] = new Complex(val, 0);
-                }
+            const imageData = tempCtx.getImageData(0, 0, this.canvasSize, this.canvasSize);
+            this.brainSegData = new Uint8Array(this.canvasSize * this.canvasSize);
+
+            // Extract tissue labels from red channel
+            // The PNG stores grayscale values - need to map to discrete labels
+            // First, collect all unique values to understand the encoding
+            const uniqueValues = new Set();
+            for (let i = 0; i < this.canvasSize * this.canvasSize; i++) {
+                uniqueValues.add(imageData.data[i * 4]);
             }
-            computeFullKSpace();
-            renderAll();
-            updateStatus('Brain image loaded. Ready to acquire.');
+            console.log('Unique pixel values in segmentation:', Array.from(uniqueValues).sort((a,b) => a-b));
+
+            // Map raw grayscale values to tissue labels
+            // Expected: 0=background, distinct values for CSF, GM, WM, Fat
+            const sortedValues = Array.from(uniqueValues).sort((a, b) => a - b);
+            const valueToLabel = {};
+            sortedValues.forEach((val, idx) => {
+                valueToLabel[val] = Math.min(idx, 4); // Map to 0-4
+            });
+            console.log('Value to label mapping:', valueToLabel);
+
+            for (let i = 0; i < this.brainSegData.length; i++) {
+                const rawValue = imageData.data[i * 4]; // Red channel
+                // Map the raw grayscale value to a tissue label
+                this.brainSegData[i] = valueToLabel[rawValue] !== undefined ? valueToLabel[rawValue] : 0;
+            }
+
+            console.log('Brain segmentation loaded');
+            this.updateSimulation();
         };
-        img.onerror = (e) => {
-            console.error("Failed to load brain image:", e);
-            updateStatus('Error loading brain image. Try another phantom.');
+        img.onerror = () => {
+            console.error('Failed to load brain segmentation');
+            this.updateSimulation();
         };
-        // Set crossOrigin before src for CORS compatibility
-        img.crossOrigin = 'anonymous';
-        img.src = brainBase64;
-        return; // Async update will trigger render
+        img.src = brainSegBase64;
     }
 
-    const cx = N / 2;
-    const cy = N / 2;
+    makeDraggable() {
+        const overlay = document.getElementById('equation-overlay');
+        let isDragging = false;
+        let currentX;
+        let currentY;
+        let initialX;
+        let initialY;
 
-    for (let y = 0; y < N; y++) {
-        for (let x = 0; x < N; x++) {
-            let val = 0;
+        overlay.addEventListener('mousedown', (e) => {
+            isDragging = true;
+            initialX = e.clientX - overlay.offsetLeft;
+            initialY = e.clientY - overlay.offsetTop;
+        });
 
-            if (type === 'circle') {
-                const r = N / 4;
-                if ((x - cx) ** 2 + (y - cy) ** 2 <= r ** 2) {
-                    val = 1;
-                }
-            } else if (type === 'square') {
-                const s = N / 4;
-                if (Math.abs(x - cx) <= s && Math.abs(y - cy) <= s) {
-                    val = 1;
-                }
-            } else if (type === 'brain') {
-                // Simple simulated brain (ellipses)
-                // Main ellipse
-                if (((x - cx) / 40) ** 2 + ((y - cy) / 50) ** 2 <= 1) val += 0.5;
-                // "Ventricles"
-                if (((x - cx - 10) / 5) ** 2 + ((y - cy) / 15) ** 2 <= 1) val -= 0.3;
-                if (((x - cx + 10) / 5) ** 2 + ((y - cy) / 15) ** 2 <= 1) val -= 0.3;
-                val = Math.max(0, val);
+        document.addEventListener('mousemove', (e) => {
+            if (!isDragging) return;
+
+            e.preventDefault();
+            currentX = e.clientX - initialX;
+            currentY = e.clientY - initialY;
+
+            // Keep within container bounds
+            const container = document.getElementById('brain-phantom-container');
+            const containerRect = container.getBoundingClientRect();
+            const overlayRect = overlay.getBoundingClientRect();
+
+            const maxX = containerRect.width - overlayRect.width;
+            const maxY = containerRect.height - overlayRect.height;
+
+            currentX = Math.max(0, Math.min(currentX, maxX));
+            currentY = Math.max(0, Math.min(currentY, maxY));
+
+            overlay.style.left = currentX + 'px';
+            overlay.style.top = currentY + 'px';
+            overlay.style.bottom = 'auto';
+            overlay.style.right = 'auto';
+        });
+
+        document.addEventListener('mouseup', () => {
+            isDragging = false;
+        });
+    }
+
+    initUI() {
+        // Tab Navigation
+        document.querySelectorAll('.tab-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                const targetTab = e.target.getAttribute('data-tab');
+
+                // Update active tab button
+                document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+                e.target.classList.add('active');
+
+                // Update active tab content
+                document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
+                document.getElementById(`tab-${targetTab}`).classList.add('active');
+            });
+        });
+
+        // Presets
+        document.getElementById('preset-t1').addEventListener('click', () => this.applyPreset('T1'));
+        document.getElementById('preset-t2').addEventListener('click', () => this.applyPreset('T2'));
+        document.getElementById('preset-t2star').addEventListener('click', () => this.applyPreset('T2*'));
+        document.getElementById('preset-flair').addEventListener('click', () => this.applyPreset('FLAIR'));
+        document.getElementById('preset-stir').addEventListener('click', () => this.applyPreset('STIR'));
+
+        // Sequence Selector
+        document.getElementById('sequenceType').addEventListener('change', (e) => {
+            this.params.sequence = e.target.value;
+            this.renderParams();
+            this.updateSimulation();
+            this.updateInhomogeneityVisibility();
+        });
+
+        // B0 Slider with frequency update
+        const b0Slider = document.getElementById('b0Field');
+        b0Slider.addEventListener('input', (e) => {
+            this.params.b0 = parseFloat(e.target.value);
+            document.getElementById('b0Value').textContent = `${this.params.b0} T`;
+            this.updateB0Frequency();
+            this.updateSimulation();
+        });
+        // Initialize frequency display
+        this.updateB0Frequency();
+
+        // Inhomogeneity Slider
+        const inhoSlider = document.getElementById('inhomogeneity');
+        inhoSlider.addEventListener('input', (e) => {
+            this.params.inhomogeneity = parseFloat(e.target.value);
+            document.getElementById('inhomogeneityValue').textContent = `${this.params.inhomogeneity} Hz`;
+            this.updateSimulation();
+        });
+
+        // Help Modal
+        const modal = document.getElementById('helpModal');
+        const btn = document.getElementById('helpBtn');
+        const span = document.getElementsByClassName('close-modal')[0];
+
+        btn.onclick = () => modal.style.display = 'block';
+        span.onclick = () => modal.style.display = 'none';
+        window.onclick = (event) => {
+            if (event.target == modal) {
+                modal.style.display = 'none';
             }
+        }
 
-            groundTruthImage[y][x] = new Complex(val, 0);
+        // Signed Signal Toggle
+        const signedToggle = document.getElementById('signedSignalToggle');
+        if (signedToggle) {
+            signedToggle.addEventListener('change', (e) => {
+                this.showSigned = e.target.checked;
+                this.updateContrastCharts();
+            });
+        }
+
+        this.renderParams();
+    }
+
+    applyPreset(type) {
+        if (type === 'T1') {
+            this.params.sequence = 'SE';
+            this.params.tr = 500;
+            this.params.te = 20;
+            this.params.inhomogeneity = 0; // SE doesn't use inhomogeneity
+        } else if (type === 'T2') {
+            this.params.sequence = 'SE';
+            this.params.tr = 3000;
+            this.params.te = 100;
+            this.params.inhomogeneity = 0; // SE doesn't use inhomogeneity
+        } else if (type === 'T2*') {
+            this.params.sequence = 'GRE';
+            this.params.tr = 500;
+            this.params.te = 20;
+            this.params.fa = 20; // Low flip angle for GRE T2*
+            this.params.inhomogeneity = 20; // Add some inhomogeneity to show T2* effect
+        } else if (type === 'FLAIR') {
+            this.params.sequence = 'IR';
+            this.params.tr = 9000;
+            this.params.te = 100;
+            // CSF nulling: TI = T1_CSF * ln(2) = 4500 * 0.693 ≈ 3120ms
+            this.params.ti = 3120;
+            this.params.fa = 90; // Standard readout
+            this.params.inhomogeneity = 0; // IR doesn't use inhomogeneity
+        } else if (type === 'STIR') {
+            this.params.sequence = 'IR';
+            this.params.tr = 4000;
+            this.params.te = 50;
+            this.params.ti = 170; // Null Fat (T1 ~250ms -> TI ~ 0.69*T1)
+            this.params.fa = 90; // Standard readout
+            this.params.inhomogeneity = 0; // IR doesn't use inhomogeneity
+        }
+
+        // Update UI - highlight active preset
+        document.querySelectorAll('.preset-buttons .btn').forEach(btn => btn.classList.remove('active'));
+        const presetMap = { 'T1': 'preset-t1', 'T2': 'preset-t2', 'T2*': 'preset-t2star', 'FLAIR': 'preset-flair', 'STIR': 'preset-stir' };
+        const activeBtn = document.getElementById(presetMap[type]);
+        if (activeBtn) {
+            activeBtn.classList.add('active');
+            // Add pulse animation
+            activeBtn.style.animation = 'pulse 0.3s ease-out';
+            setTimeout(() => activeBtn.style.animation = '', 300);
+        }
+
+        document.getElementById('sequenceType').value = this.params.sequence;
+
+        // Update sliders if they exist (need to re-render params first to create elements)
+        this.renderParams();
+
+        // Always sync inhomogeneity slider with current params
+        const inhoSlider = document.getElementById('inhomogeneity');
+        if (inhoSlider) {
+            inhoSlider.value = this.params.inhomogeneity;
+            document.getElementById('inhomogeneityValue').textContent = `${this.params.inhomogeneity} Hz`;
+        }
+
+        this.updateSimulation();
+        this.updateInhomogeneityVisibility();
+    }
+
+    updateInhomogeneityVisibility() {
+        const inhoCtrl = document.getElementById('inhomogeneity-control');
+        if (this.params.sequence === 'GRE') {
+            inhoCtrl.style.display = 'block';
+        } else {
+            inhoCtrl.style.display = 'none';
         }
     }
 
-    // Compute full K-space from the image
-    computeFullKSpace();
-
-    // Auto-acquire removed for initial empty state
-    // acquireAllLines();
-    renderAll(); // Ensure render happens for synchronous types
-}
-
-function resetAcquisition() {
-    acquiredKSpace = new Array(N).fill(0).map(() => new Array(N).fill(0).map(() => new Complex(0, 0)));
-    reconstructedImage = new Array(N).fill(0).map(() => new Array(N).fill(0).map(() => new Complex(0, 0)));
-    currentLine = 0;
-    updateStatus(`Ready. Lines acquired: 0/${matrixSize}`);
-}
-
-function computeFullKSpace() {
-    // 1. Copy image data to kSpaceData (as a starting point)
-    // We want to transform Image -> K-Space (FFT)
-    // Note: MRI usually considers K-space as the acquired data and Image as the IFFT.
-    // But for simulation, we start with Image -> FFT -> K-Space.
-
-    // Deep copy ground truth
-    const temp = new Array(N).fill(0).map((_, y) =>
-        new Array(N).fill(0).map((_, x) =>
-            new Complex(groundTruthImage[y][x].re, groundTruthImage[y][x].im)
-        )
-    );
-
-    // 2. Perform 2D FFT
-    fft2D(temp);
-
-    // 3. FFT Shift (center low frequencies)
-    kSpaceData = fftShift(temp);
-
-    // 4. Calculate Global Max Magnitude (for spike scaling)
-    globalMaxMag = 0;
-    for (let y = 0; y < N; y++) {
-        for (let x = 0; x < N; x++) {
-            const mag = kSpaceData[y][x].magnitude;
-            if (mag > globalMaxMag) globalMaxMag = mag;
-        }
-    }
-}
-
-// --- FFT Implementation ---
-
-function fft2D(data) {
-    // FFT rows
-    for (let y = 0; y < N; y++) {
-        fft1D(data[y]);
-    }
-
-    // FFT columns
-    const col = new Array(N);
-    for (let x = 0; x < N; x++) {
-        for (let y = 0; y < N; y++) col[y] = data[y][x];
-        fft1D(col);
-        for (let y = 0; y < N; y++) data[y][x] = col[y];
-    }
-}
-
-function fft1D(arr) {
-    const n = arr.length;
-    if (n <= 1) return;
-
-    const even = new Array(n / 2);
-    const odd = new Array(n / 2);
-
-    for (let i = 0; i < n / 2; i++) {
-        even[i] = arr[2 * i];
-        odd[i] = arr[2 * i + 1];
-    }
-
-    fft1D(even);
-    fft1D(odd);
-
-    for (let k = 0; k < n / 2; k++) {
-        const t = odd[k].mul(Complex.fromPolar(1, -2 * Math.PI * k / n));
-        arr[k] = even[k].add(t);
-        arr[k + n / 2] = even[k].sub(t);
-    }
-}
-
-// Helper for complex exponential
-Complex.fromPolar = function (r, theta) {
-    return new Complex(r * Math.cos(theta), r * Math.sin(theta));
-};
-
-function fftShift(data) {
-    const shifted = new Array(N).fill(0).map(() => new Array(N));
-    const half = N / 2;
-
-    for (let y = 0; y < N; y++) {
-        for (let x = 0; x < N; x++) {
-            const newY = (y + half) % N;
-            const newX = (x + half) % N;
-            shifted[newY][newX] = data[y][x];
-        }
-    }
-    return shifted;
-}
-
-function ifft2D(data) {
-    // IFFT is similar to FFT but with conjugate and scaling
-    // 1. Conjugate
-    for (let y = 0; y < N; y++) {
-        for (let x = 0; x < N; x++) {
-            data[y][x].im = -data[y][x].im;
+    updateB0Frequency() {
+        // Larmor frequency: f = gamma * B0
+        // gamma for 1H = 42.576 MHz/T
+        const gamma = 42.576;
+        const freq = (gamma * this.params.b0).toFixed(2);
+        const freqEl = document.getElementById('b0Freq');
+        if (freqEl) {
+            freqEl.textContent = `${freq} MHz`;
         }
     }
 
-    // 2. FFT
-    fft2D(data);
+    renderParams() {
+        const container = document.getElementById('params-container');
+        container.innerHTML = '';
 
-    // 3. Conjugate again and Scale
-    for (let y = 0; y < N; y++) {
-        for (let x = 0; x < N; x++) {
-            data[y][x].im = -data[y][x].im;
-            data[y][x].re /= (N * N);
-            data[y][x].im /= (N * N);
+        const createInput = (id, label, value, min, max, step) => {
+            const div = document.createElement('div');
+            div.innerHTML = `
+                <label for="${id}">${label}</label>
+                <input type="range" id="${id}" min="${min}" max="${max}" step="${step}" value="${value}">
+                <span id="${id}-val">${value}</span>
+            `;
+            const input = div.querySelector('input');
+            input.addEventListener('input', (e) => {
+                let newValue = parseFloat(e.target.value);
+
+                // Safeguard: TI must be less than TR
+                if (id === 'ti' && newValue >= this.params.tr) {
+                    newValue = Math.max(10, this.params.tr - 10);
+                    e.target.value = newValue;
+                }
+                // Also check when TR changes - adjust TI if needed
+                if (id === 'tr' && this.params.ti && this.params.ti >= newValue) {
+                    this.params.ti = Math.max(10, newValue - 10);
+                    const tiInput = document.querySelector('input[type="range"][step="10"][min="10"][max="2000"]');
+                    if (tiInput) {
+                        tiInput.value = this.params.ti;
+                        const tiSpan = tiInput.parentElement.querySelector('span');
+                        if (tiSpan) tiSpan.textContent = this.params.ti;
+                    }
+                }
+
+                this.params[id] = newValue;
+                div.querySelector('span').textContent = newValue;
+                this.updateSimulation();
+            });
+            return div;
+        };
+
+        // TR and TE are common
+        container.appendChild(createInput('tr', 'TR (ms)', this.params.tr, 10, 12000, 10));
+        container.appendChild(createInput('te', 'TE (ms)', this.params.te, 1, 300, 1));
+
+        if (this.params.sequence === 'IR') {
+            // Extended TI range to 4000ms to support FLAIR (CSF nulling ~3100ms at 3T)
+            container.appendChild(createInput('ti', 'TI (ms)', this.params.ti || 150, 10, 4000, 10));
+            this.params.ti = this.params.ti || 150;
+        }
+
+        // FA only applies to GRE and IR (SE uses fixed 90°/180° pulses)
+        if (this.params.sequence === 'GRE' || this.params.sequence === 'IR') {
+            container.appendChild(createInput('fa', 'Flip Angle (°)', this.params.fa || 90, 1, 180, 1));
+            this.params.fa = this.params.fa || 90;
         }
     }
-}
 
-function ifftShift(data) {
-    // Inverse shift is the same as shift for even N
-    return fftShift(data);
-}
-
-/**
- * Partial Fourier Reconstruction
- * Fills missing k-space using conjugate symmetry: S(-k) = S*(k) for real images
- */
-function applyPartialFourierRecon(kspace, size) {
-    const centerY = size / 2;
-    const halfRes = matrixSize / 2;
-
-    // Calculate the boundary of acquired data
-    const acquiredFraction = partialFourierFraction;
-    const overlapFraction = (acquiredFraction - 0.5) * 2;
-    const minKyAcquired = Math.floor(centerY - halfRes * overlapFraction);
-
-    if (partialFourierRecon === 'zerofill') {
-        // Zero-fill: just leave missing data as zeros (already done during acquisition)
-        return kspace;
-    } else if (partialFourierRecon === 'conjugate') {
-        // Conjugate synthesis: use S(-k) = S*(k) to fill missing data
-        // This assumes the image is real (or nearly real)
-        const result = new Array(size).fill(0).map((_, y) =>
-            new Array(size).fill(0).map((_, x) =>
-                new Complex(kspace[y][x].re, kspace[y][x].im)
-            )
-        );
-
-        // Fill missing lines in top half using conjugate of bottom half
-        for (let y = 0; y < size; y++) {
-            const kyRelative = y - centerY;
-
-            // Check if this line is in the missing region (top of k-space)
-            if (kyRelative < -halfRes * overlapFraction) {
-                for (let x = 0; x < size; x++) {
-                    // Find conjugate point: (-ky, -kx) -> (size-y, size-x)
-                    const conjY = (size - y) % size;
-                    const conjX = (size - x) % size;
-
-                    // Check if conjugate point was acquired
-                    if (kspace[conjY][conjX].re !== 0 || kspace[conjY][conjX].im !== 0) {
-                        // S(-k) = S*(k)
-                        result[y][x] = new Complex(kspace[conjY][conjX].re, -kspace[conjY][conjX].im);
+    initCharts() {
+        // Modern dark theme for charts
+        const darkTheme = {
+            responsive: true,
+            maintainAspectRatio: false,
+            animation: false,
+            elements: {
+                point: { radius: 0 },
+                line: { borderWidth: 2.5 }
+            },
+            plugins: {
+                legend: {
+                    display: true,
+                    position: 'top',
+                    labels: {
+                        color: '#94a3b8',
+                        usePointStyle: true,
+                        pointStyle: 'circle',
+                        padding: 15,
+                        font: { size: 10 }
+                    }
+                }
+            },
+            scales: {
+                x: {
+                    type: 'linear',
+                    grid: {
+                        color: 'rgba(148, 163, 184, 0.1)',
+                        drawBorder: false
+                    },
+                    ticks: { color: '#94a3b8', font: { size: 10 } },
+                    title: {
+                        display: true,
+                        color: '#94a3b8',
+                        font: { size: 11, weight: '500' }
+                    }
+                },
+                y: {
+                    grid: {
+                        color: 'rgba(148, 163, 184, 0.1)',
+                        drawBorder: false
+                    },
+                    ticks: { color: '#94a3b8', font: { size: 10 } },
+                    title: {
+                        display: true,
+                        text: 'Signal',
+                        color: '#94a3b8',
+                        font: { size: 11, weight: '500' }
                     }
                 }
             }
-        }
-        return result;
+        };
+
+        // Helper to create contrast charts with dark theme
+        const createContrastChart = (id, xLabel) => {
+            const ctx = document.getElementById(id).getContext('2d');
+            const options = JSON.parse(JSON.stringify(darkTheme));
+            options.scales.x.title.text = xLabel;
+            return new Chart(ctx, {
+                type: 'line',
+                data: { datasets: [] },
+                options: options
+            });
+        };
+
+        this.charts.tr = createContrastChart('chartTR', 'TR (ms)');
+        this.charts.te = createContrastChart('chartTE', 'TE (ms)');
+        this.charts.ti = createContrastChart('chartTI', 'TI (ms)');
+        this.charts.fa = createContrastChart('chartFA', 'Flip Angle (°)');
     }
-    return kspace;
-}
 
-/**
- * Simplified Parallel Imaging Reconstruction (SENSE-like concept demo)
- * In real SENSE: aliased image is unfolded using coil sensitivity maps
- * Here we simulate the effect by reducing aliasing artifacts from undersampling
- *
- * Key physics: SNR_SENSE = SNR_full / (g * sqrt(R))
- * where g = geometry factor (typically 1.0-1.5 for modern coils)
- * We simulate g-factor noise penalty even when recovering aliasing
- */
-function applyParallelImagingRecon(kspace, size) {
-    // For the demo, we show the concept that parallel imaging can
-    // recover information from undersampled data, but with SNR penalty
-    //
-    // Real SENSE: Combines aliased coil images using sensitivity maps
-    // Our simplification: When parallel imaging is "on", we reduce the
-    // aliasing effect by partially filling skipped lines from interpolation
-    // BUT we add g-factor noise to show the SNR penalty
+    updateSimulation() {
+        this.updatePhantom();
+        this.updateContrastCharts();
+        this.updateVisibility();
+        this.updateEquation();
 
-    if (numCoils <= 1) return kspace;
+        // Update mechanics visualizations
+        this.updatePhaseWheel();
+        this.updateR2Chart();
+        this.updateRFTimeline();
+    }
 
-    // The acceleration factor from parallel imaging
-    const R = parallelAcceleration;
+    updateVisibility() {
+        const seq = this.params.sequence;
 
-    // If undersampling (skipY) is used, parallel imaging can help recover
-    // For demo purposes, we interpolate missing lines when R >= skipY
-    if (skipY > 1 && R >= skipY) {
-        const result = new Array(size).fill(0).map((_, y) =>
-            new Array(size).fill(0).map((_, x) =>
-                new Complex(kspace[y][x].re, kspace[y][x].im)
-            )
-        );
+        // Helper to show/hide
+        const setVisible = (id, visible) => {
+            const el = document.getElementById(id);
+            if (el) el.style.display = visible ? 'block' : 'none';
+        };
 
-        // Fill skipped lines using weighted average of neighbors
-        // This simulates how SENSE can recover missing k-space lines
-        const centerY = size / 2;
-        const halfRes = matrixSize / 2;
+        // TR and TE are always relevant
+        setVisible('container-tr', true);
+        setVisible('container-te', true);
 
-        // g-factor: geometry factor that increases with R
-        // Typical values: R=2 -> g~1.1, R=4 -> g~1.3
-        const gFactor = 1.0 + 0.1 * (R - 1);
+        // TI only for IR
+        setVisible('container-ti', seq === 'IR');
 
-        // Calculate noise to add (simulates g-factor SNR penalty)
-        // Find max magnitude for noise scaling
-        let maxMag = 0;
-        for (let y = 0; y < size; y++) {
-            for (let x = 0; x < size; x++) {
-                const mag = Math.sqrt(kspace[y][x].re * kspace[y][x].re + kspace[y][x].im * kspace[y][x].im);
-                if (mag > maxMag) maxMag = mag;
+        // FA for GRE and IR only (not SE - we use fixed 90°/180°)
+        setVisible('container-fa', seq === 'GRE' || seq === 'IR');
+    }
+
+    // Physics Equations
+    getSignalSE(t1, t2, pd, tr, te, faDeg = 90) {
+        const b0Factor = this.params.b0 / 1.5;
+
+        // True 90°/180° Spin Echo
+        // T1 recovery is INDEPENDENT of TE (no Ernst angle effects)
+        // S = PD * (1 - exp(-TR/T1)) * exp(-TE/T2)
+        const t1Factor = (1 - Math.exp(-tr / t1));
+        const t2Factor = Math.exp(-te / t2);
+
+        return b0Factor * pd * t1Factor * t2Factor;
+    }
+
+    getSignalGRE(t1, t2, pd, tr, te, faDeg, inhomogeneity = this.params.inhomogeneity) {
+        const fa = faDeg * Math.PI / 180;
+        const e1 = Math.exp(-tr / t1);
+
+        // T2* calculation
+        // R2* = R2 + R2'
+        // R2' = 2 * PI * delta_f
+        const r2 = 1000 / t2; // s^-1
+        const r2prime = 2 * Math.PI * inhomogeneity; // s^-1
+        const r2star = r2 + r2prime;
+        const t2star = 1000 / r2star; // ms
+
+        const b0Factor = this.params.b0 / 1.5;
+
+        // Steady state GRE (SPGR/FLASH)
+        // S = PD * sin(α) * (1-E1) / (1 - E1*cos(α)) * exp(-TE/T2*)
+        const t1Factor = (1 - e1) / (1 - e1 * Math.cos(fa));
+        const t2starFactor = Math.exp(-te / t2star);
+
+        return b0Factor * pd * Math.sin(fa) * t1Factor * t2starFactor;
+    }
+
+    getSignalIR(t1, t2, pd, tr, te, ti, faDeg = 90) {
+        const b0Factor = this.params.b0 / 1.5;
+        const fa = faDeg * Math.PI / 180;
+
+        // General Steady State IR with readout alpha
+        // Sequence: 180 -> TI -> alpha -> (TR-TI)
+        const e_ti = Math.exp(-ti / t1);
+        const e_rem = Math.exp(-(tr - ti) / t1);
+        const e1 = Math.exp(-tr / t1); // e_ti * e_rem
+
+        // M_ss (just before 180)
+        // M_ss = M0 * [1 - E_rem + (E_rem - E1)*cos(alpha)] / (1 + E1*cos(alpha))
+        const num = 1 - e_rem + (e_rem - e1) * Math.cos(fa);
+        const den = 1 + e1 * Math.cos(fa);
+        const m_ss_start = num / den;
+
+        // M(TI) just before readout
+        // M(TI) = M0*(1 - E_ti) - M_ss_start * E_ti
+        const mz_ti = (1 - e_ti) - m_ss_start * e_ti;
+
+        // Return SIGNED value (caller handles magnitude if needed)
+        return b0Factor * pd * mz_ti * Math.sin(fa) * Math.exp(-te / t2);
+    }
+
+    updatePhantom() {
+        // Calculate signal for each tissue
+        // Tissue mapping: segmentation label -> tissue
+        // 0=background, 1=CSF, 2=GM, 3=WM, 4=Fat
+        const tissueByLabel = {
+            1: this.tissues.find(t => t.id === 'csf'),
+            2: this.tissues.find(t => t.id === 'gm'),
+            3: this.tissues.find(t => t.id === 'wm'),
+            4: this.tissues.find(t => t.id === 'fat')
+        };
+
+        // Calculate signal for each tissue type
+        const signals = {};
+        const signalDebug = {};
+        for (const [label, tissue] of Object.entries(tissueByLabel)) {
+            if (!tissue) continue;
+            let s = 0;
+            if (this.params.sequence === 'SE') {
+                s = this.getSignalSE(tissue.t1, tissue.t2, tissue.pd, this.params.tr, this.params.te, this.params.fa);
+            } else if (this.params.sequence === 'GRE') {
+                s = this.getSignalGRE(tissue.t1, tissue.t2, tissue.pd, this.params.tr, this.params.te, this.params.fa, this.params.inhomogeneity);
+            } else if (this.params.sequence === 'IR') {
+                s = this.getSignalIR(tissue.t1, tissue.t2, tissue.pd, this.params.tr, this.params.te, this.params.ti, this.params.fa);
             }
+            signalDebug[tissue.id] = { raw: s, abs: Math.abs(s) };
+            signals[label] = Math.abs(s);
         }
-        // Noise level proportional to g-factor and sqrt(R)
-        const noiseSigma = maxMag * 0.02 * gFactor * Math.sqrt(R);
+        console.log('Tissue signals:', signalDebug, 'Params:', this.params);
 
-        for (let y = 0; y < size; y++) {
-            // Check if this line was skipped
-            if (y % skipY !== 0) {
-                const kyFromCenter = Math.abs(y - centerY);
-                if (kyFromCenter < halfRes) {
-                    // Find nearest acquired lines
-                    const prevLine = Math.floor(y / skipY) * skipY;
-                    const nextLine = Math.min(prevLine + skipY, size - 1);
+        // Find max signal for auto-scaling (Windowing)
+        const maxSignal = Math.max(...Object.values(signals));
+        const scaleFactor = maxSignal > 0.001 ? (255 / maxSignal) : 0;
 
-                    // Interpolate
-                    const t = (y - prevLine) / skipY;
-                    for (let x = 0; x < size; x++) {
-                        const re = (1 - t) * kspace[prevLine][x].re + t * kspace[nextLine][x].re;
-                        const im = (1 - t) * kspace[prevLine][x].im + t * kspace[nextLine][x].im;
-
-                        // Add g-factor noise to recovered lines
-                        const noiseRe = gaussianRandom() * noiseSigma;
-                        const noiseIm = gaussianRandom() * noiseSigma;
-
-                        result[y][x] = new Complex(re + noiseRe, im + noiseIm);
-                    }
-                }
-            } else {
-                // Acquired lines also get some g-factor noise penalty
-                const kyFromCenter = Math.abs(y - centerY);
-                if (kyFromCenter < halfRes) {
-                    for (let x = 0; x < size; x++) {
-                        const noiseRe = gaussianRandom() * noiseSigma * 0.5; // Less noise on acquired lines
-                        const noiseIm = gaussianRandom() * noiseSigma * 0.5;
-                        result[y][x] = new Complex(
-                            kspace[y][x].re + noiseRe,
-                            kspace[y][x].im + noiseIm
-                        );
-                    }
-                }
-            }
-        }
-        return result;
+        // Render to canvas
+        this.renderBrainCanvas(signals, scaleFactor);
     }
 
-    return kspace;
-}
+    renderBrainCanvas(signals, scaleFactor) {
+        const canvas = document.getElementById('brain-canvas');
+        if (!canvas) return;
 
-// Simple Gaussian random number generator (Box-Muller, single value)
-function gaussianRandom() {
-    const u1 = Math.random();
-    const u2 = Math.random();
-    return Math.sqrt(-2.0 * Math.log(u1 || 0.0001)) * Math.cos(2.0 * Math.PI * u2);
-}
+        const srcSize = this.canvasSize; // 512
 
-function reconstructImage() {
-    // Handle zero-padding for higher resolution (matrixSize > N)
-    // or truncation for lower resolution (matrixSize < N)
-
-    if (matrixSize <= N) {
-        // Standard reconstruction at native or lower resolution
-        // 1. Copy acquired K-space
-        let temp = new Array(N).fill(0).map((_, y) =>
-            new Array(N).fill(0).map((_, x) =>
-                new Complex(acquiredKSpace[y][x].re, acquiredKSpace[y][x].im)
-            )
-        );
-
-        // 1b. Apply Partial Fourier reconstruction if needed
-        if (partialFourierFraction < 1.0) {
-            temp = applyPartialFourierRecon(temp, N);
-        }
-
-        // 1c. Apply Parallel Imaging reconstruction if needed
-        if (numCoils > 1) {
-            temp = applyParallelImagingRecon(temp, N);
-        }
-
-        // Store displayed k-space (after PF/PI processing) for visualization
-        displayedKSpace = new Array(N).fill(0).map((_, y) =>
-            new Array(N).fill(0).map((_, x) =>
-                new Complex(temp[y][x].re, temp[y][x].im)
-            )
-        );
-
-        // 2. IFFT Shift (undo centering)
-        const unshifted = ifftShift(temp);
-
-        // 3. IFFT
-        ifft2D(unshifted);
-
-        reconstructedImage = unshifted;
-    } else {
-        // Zero-padding reconstruction for higher resolution (interpolation)
-        // FFT requires power-of-2 sizes, so round up to next power of 2
-        const nextPow2 = (n) => Math.pow(2, Math.ceil(Math.log2(n)));
-        const fftSize = nextPow2(matrixSize);
-
-        // Create FFT-sized k-space array with zeros
-        const padded = new Array(fftSize).fill(0).map(() =>
-            new Array(fftSize).fill(0).map(() => new Complex(0, 0))
-        );
-
-        // Copy acquired k-space data to center of padded array
-        // This keeps the same FOV but adds interpolated samples between voxels
-        const offset = (fftSize - N) / 2;
-        for (let y = 0; y < N; y++) {
-            for (let x = 0; x < N; x++) {
-                padded[y + offset][x + offset] = new Complex(
-                    acquiredKSpace[y][x].re,
-                    acquiredKSpace[y][x].im
-                );
-            }
-        }
-
-        // Store displayedKSpace for visualization (use acquiredKSpace for N×N display)
-        displayedKSpace = new Array(N).fill(0).map((_, y) =>
-            new Array(N).fill(0).map((_, x) =>
-                new Complex(acquiredKSpace[y][x].re, acquiredKSpace[y][x].im)
-            )
-        );
-
-        // IFFT Shift on padded data
-        const unshifted = ifftShiftVariable(padded, fftSize);
-
-        // IFFT on padded data
-        ifft2DVariable(unshifted, fftSize);
-
-        // Compensate for zero-padding scaling
-        // IFFT divides by fftSize^2, but we want signal level consistent with N^2
-        // Scale factor = (fftSize/N)^2
-        const scaleFactor = (fftSize / N) * (fftSize / N);
-        for (let y = 0; y < fftSize; y++) {
-            for (let x = 0; x < fftSize; x++) {
-                unshifted[y][x].re *= scaleFactor;
-                unshifted[y][x].im *= scaleFactor;
-            }
-        }
-
-        // Store the full padded result
-        reconstructedImagePadded = unshifted;
-        reconstructedImagePaddedSize = fftSize;
-
-        // Downsample to N×N for display using bilinear interpolation
-        // Zero-padding keeps the same FOV, so we sample the full fftSize grid
-        // and map it back to N×N display
-        reconstructedImage = new Array(N).fill(0).map((_, y) =>
-            new Array(N).fill(0).map((_, x) => {
-                // Map display pixel [0,N) to padded grid [0,fftSize)
-                const srcY = y * fftSize / N;
-                const srcX = x * fftSize / N;
-
-                // Bilinear interpolation
-                const y0 = Math.floor(srcY);
-                const x0 = Math.floor(srcX);
-                const y1 = Math.min(y0 + 1, fftSize - 1);
-                const x1 = Math.min(x0 + 1, fftSize - 1);
-                const fy = srcY - y0;
-                const fx = srcX - x0;
-
-                // Interpolate real and imaginary parts separately
-                const v00 = unshifted[y0][x0];
-                const v01 = unshifted[y0][x1];
-                const v10 = unshifted[y1][x0];
-                const v11 = unshifted[y1][x1];
-
-                const re = (1 - fy) * ((1 - fx) * v00.re + fx * v01.re) +
-                           fy * ((1 - fx) * v10.re + fx * v11.re);
-                const im = (1 - fy) * ((1 - fx) * v00.im + fx * v01.im) +
-                           fy * ((1 - fx) * v10.im + fx * v11.im);
-
-                return new Complex(re, im);
-            })
-        );
-    }
-}
-
-// Variable-size FFT shift
-function ifftShiftVariable(data, size) {
-    const shifted = new Array(size).fill(0).map(() => new Array(size));
-    const half = size / 2;
-
-    for (let y = 0; y < size; y++) {
-        for (let x = 0; x < size; x++) {
-            const newY = (y + half) % size;
-            const newX = (x + half) % size;
-            shifted[newY][newX] = data[y][x];
-        }
-    }
-    return shifted;
-}
-
-// Variable-size 2D IFFT
-function ifft2DVariable(data, size) {
-    // Conjugate
-    for (let y = 0; y < size; y++) {
-        for (let x = 0; x < size; x++) {
-            data[y][x].im = -data[y][x].im;
-        }
-    }
-
-    // FFT
-    fft2DVariable(data, size);
-
-    // Conjugate again and Scale
-    for (let y = 0; y < size; y++) {
-        for (let x = 0; x < size; x++) {
-            data[y][x].im = -data[y][x].im;
-            data[y][x].re /= (size * size);
-            data[y][x].im /= (size * size);
-        }
-    }
-}
-
-// Variable-size 2D FFT
-function fft2DVariable(data, size) {
-    // FFT rows
-    for (let y = 0; y < size; y++) {
-        fft1DVariable(data[y], size);
-    }
-
-    // FFT columns
-    const col = new Array(size);
-    for (let x = 0; x < size; x++) {
-        for (let y = 0; y < size; y++) col[y] = data[y][x];
-        fft1DVariable(col, size);
-        for (let y = 0; y < size; y++) data[y][x] = col[y];
-    }
-}
-
-// Variable-size 1D FFT (Iterative Cooley-Tukey radix-2)
-// Iterative version to avoid stack overflow for large sizes
-function fft1DVariable(arr, n) {
-    if (n <= 1) return;
-
-    // Bit-reversal permutation
-    const bits = Math.log2(n);
-    for (let i = 0; i < n; i++) {
-        const j = reverseBits(i, bits);
-        if (j > i) {
-            const temp = arr[i];
-            arr[i] = arr[j];
-            arr[j] = temp;
-        }
-    }
-
-    // Iterative FFT
-    for (let size = 2; size <= n; size *= 2) {
-        const halfSize = size / 2;
-        const tableStep = n / size;
-
-        for (let i = 0; i < n; i += size) {
-            for (let j = 0; j < halfSize; j++) {
-                const angle = -2 * Math.PI * j / size;
-                const twiddle = Complex.fromPolar(1, angle);
-                const even = arr[i + j];
-                const odd = arr[i + j + halfSize].mul(twiddle);
-
-                arr[i + j] = even.add(odd);
-                arr[i + j + halfSize] = even.sub(odd);
-            }
-        }
-    }
-}
-
-// Helper function to reverse bits
-function reverseBits(x, bits) {
-    let result = 0;
-    for (let i = 0; i < bits; i++) {
-        result = (result << 1) | (x & 1);
-        x >>= 1;
-    }
-    return result;
-}
-
-// Storage for padded reconstruction
-let reconstructedImagePadded = null;
-let reconstructedImagePaddedSize = N;
-
-// --- Animation ---
-
-function startAnimation() {
-    if (isAnimating) return;
-    isAnimating = true;
-    animate();
-}
-
-function stopAnimation() {
-    isAnimating = false;
-    if (animationFrameId) cancelAnimationFrame(animationFrameId);
-}
-
-function animate() {
-    if (!isAnimating) return;
-
-    // Calculate the k-space region to acquire based on current resolution
-    // Only acquire lines within the matrixSize boundary (centered)
-    const halfRes = matrixSize / 2;
-    const startLine = Math.floor(N / 2 - halfRes);
-    const endLine = Math.floor(N / 2 + halfRes);
-    const totalLines = endLine - startLine;
-
-    // Calculate actual acquired lines considering undersampling
-    const acquiredLines = Math.ceil(totalLines / skipY);
-
-    // Acquire lines based on speed
-    const linesPerFrame = Math.max(1, Math.floor(animationSpeed / 2));
-
-    for (let i = 0; i < linesPerFrame; i++) {
-        // Map currentLine (0 to totalLines) to actual k-space line (startLine to endLine)
-        if (currentLine >= totalLines) {
-            stopAnimation();
-            const completionMsg = skipY > 1
-                ? `Acquisition Complete (${acquiredLines}/${totalLines} lines, ${skipY}x undersampling)`
-                : 'Acquisition Complete';
-            updateStatus(completionMsg);
+        // If segmentation not loaded yet, show loading
+        if (!this.brainSegData) {
+            canvas.width = srcSize;
+            canvas.height = srcSize;
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = '#000';
+            ctx.fillRect(0, 0, srcSize, srcSize);
+            ctx.fillStyle = '#333';
+            ctx.font = '16px Inter';
+            ctx.textAlign = 'center';
+            ctx.fillText('Loading brain...', srcSize / 2, srcSize / 2);
             return;
         }
 
-        const actualLine = startLine + currentLine;
-        acquireLine(actualLine);
-        currentLine++;
-    }
-
-    reconstructImage();
-    renderAll();
-
-    // Show progress with undersampling info
-    const currentAcquired = Math.ceil(currentLine / skipY);
-    const progressMsg = skipY > 1
-        ? `Acquiring... ${currentAcquired}/${acquiredLines} lines (${skipY}x skip)`
-        : `Acquiring... Line ${currentLine}/${totalLines}`
-    updateStatus(progressMsg);
-
-    animationFrameId = requestAnimationFrame(animate);
-}
-
-// Helper for Gaussian Noise (Box-Muller)
-function gaussianNoise(sigma) {
-    const u1 = Math.random();
-    const u2 = Math.random();
-    const z0 = Math.sqrt(-2.0 * Math.log(u1)) * Math.cos(2.0 * Math.PI * u2);
-    const z1 = Math.sqrt(-2.0 * Math.log(u1)) * Math.sin(2.0 * Math.PI * u2);
-    return new Complex(z0 * sigma, z1 * sigma);
-}
-
-function acquireLine(lineIndex) {
-    // 1. Noise Sigma (Object-Independent)
-    // Reference signal is N*N (theoretical max for all-ones image).
-    // We scale noise relative to this fixed reference.
-    const referenceSignal = N * N;
-    // Use effective noise level (considers SNR simulation)
-    const effectiveNoise = getEffectiveNoiseLevel();
-    // Calibrated: Reduced factor from 0.002 to 0.0005 based on user feedback
-    const sigma = (effectiveNoise / 100) * (referenceSignal * 0.0005);
-
-    // 2. Motion Parameters (Deterministic/Periodic)
-    // Simulate respiration: Sine wave displacement in Y
-    let dy = 0;
-    if (motionLevel > 0) {
-        // Calibrated: Increased max displacement from 5 to 15 pixels
-        const maxDisp = (motionLevel / 100) * 15;
-        const period = N / 4; // 4 cycles per image
-        // Phase of respiration depends on time (lineIndex)
-        dy = maxDisp * Math.sin(2 * Math.PI * lineIndex / period);
-    }
-
-    // Is this line acquired? (undersampling)
-    const isAcquired = (lineIndex % skipY === 0);
-
-    // Resolution mask: only acquire within the effective matrix size
-    // K-space center is at N/2, so we mask based on distance from center
-    // For matrixSize > N: acquire all k-space (will be zero-padded in reconstruction)
-    // For matrixSize <= N: truncate outer k-space for lower resolutions
-    const effectiveMatrixForAcquisition = Math.min(matrixSize, N);
-    const halfRes = effectiveMatrixForAcquisition / 2;
-    const centerY = N / 2;
-    const centerX = N / 2;
-
-    // Check if this line is within the resolution boundary
-    const kyFromCenter = Math.abs(lineIndex - centerY);
-    const lineInResolution = kyFromCenter < halfRes;
-
-    // Partial Fourier: only acquire fraction of ky (asymmetric about center)
-    // Acquire from center to +ky edge, plus small margin into -ky for phase estimation
-    let lineInPartialFourier = true;
-    if (partialFourierFraction < 1.0) {
-        const kyRelative = lineIndex - centerY; // Negative = top half, positive = bottom half
-        // Acquire: full positive ky + small overlap into negative ky
-        // e.g., 75% = acquire from -25% to +50% (relative to halfRes)
-        const acquiredFraction = partialFourierFraction;
-        const overlapFraction = (acquiredFraction - 0.5) * 2; // Overlap into negative ky
-        const minKy = -halfRes * overlapFraction;
-        const maxKy = halfRes;
-        lineInPartialFourier = (kyRelative >= minKy && kyRelative < maxKy);
-    }
-
-    for (let x = 0; x < N; x++) {
-        let val = new Complex(0, 0);
-
-        // Check if this x position is within resolution boundary
-        const kxFromCenter = Math.abs(x - centerX);
-        const pointInResolution = lineInResolution && (kxFromCenter < halfRes);
-
-        // Combined check: undersampling + resolution + partial Fourier
-        const shouldAcquire = isAcquired && pointInResolution && lineInPartialFourier;
-
-        if (shouldAcquire) {
-            val = kSpaceData[lineIndex][x];
-
-            // Apply Motion: Phase Ramp in Y
-            if (motionLevel > 0) {
-                const ky = lineIndex - N / 2;
-                const phaseShift = -2 * Math.PI * ky * dy / N;
-                val = val.mul(Complex.fromPolar(1, phaseShift));
-            }
+        // Create/reuse offscreen canvas at native 512×512
+        if (!this.offscreenCanvas) {
+            this.offscreenCanvas = document.createElement('canvas');
+            this.offscreenCanvas.width = srcSize;
+            this.offscreenCanvas.height = srcSize;
         }
 
-        // Add Gaussian Noise only to actually acquired samples
-        if (effectiveNoise > 0 && shouldAcquire) {
-            val = val.add(gaussianNoise(sigma));
+        // Render grayscale image at native resolution
+        const offCtx = this.offscreenCanvas.getContext('2d');
+        const imageData = offCtx.createImageData(srcSize, srcSize);
+        const data = imageData.data;
+
+        for (let i = 0; i < this.brainSegData.length; i++) {
+            const label = this.brainSegData[i]; // Already mapped to 0-4 in loadBrainSegmentation
+            const signal = signals[label] || 0;
+            const grayVal = Math.floor(Math.min(signal * scaleFactor, 255));
+            const idx = i * 4;
+            data[idx] = grayVal;
+            data[idx + 1] = grayVal;
+            data[idx + 2] = grayVal;
+            data[idx + 3] = 255;
         }
+        offCtx.putImageData(imageData, 0, 0);
 
-        acquiredKSpace[lineIndex][x] = val;
+        // Set display canvas to fixed 512×512 - let browser handle scaling with CSS
+        canvas.width = srcSize;
+        canvas.height = srcSize;
+
+        // Draw offscreen canvas to display canvas
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(this.offscreenCanvas, 0, 0);
     }
 
-    // Spike Noise: Inject a single bad point (only if within resolution)
-    if (hasSpike) {
-        if (lineIndex === spikeY) {
-            const kxFromCenter = Math.abs(spikeX - centerX);
-            const kyFromCenter = Math.abs(spikeY - centerY);
-            if (kxFromCenter < halfRes && kyFromCenter < halfRes) {
-                // Scale spike relative to TRUE global max
-                // Calibrated: Reduced from 2 to 0.5 to prevent image corruption
-                const spikeAmp = globalMaxMag * 0.5;
-                // Add to existing value
-                acquiredKSpace[lineIndex][spikeX] = acquiredKSpace[lineIndex][spikeX].add(new Complex(spikeAmp, spikeAmp));
-            }
-        }
-    }
-}
+    updateContrastCharts() {
+        // We need to update ALL visible charts
+        // Helper to generate data for a specific varying parameter
+        const generateData = (paramKey, min, max, step) => {
+            return this.tissues.map(tissue => {
+                const data = [];
+                for (let x = min; x <= max; x += step) {
+                    let s = 0;
+                    let p = { ...this.params };
+                    p[paramKey] = x; // Override
 
-// Calculate and update resolution info display
-function updateResolutionInfo() {
-    // SNR baseline is 256×256 for educational clarity
-    const SNR_BASELINE = 256;
+                    if (p.sequence === 'SE') {
+                        s = this.getSignalSE(tissue.t1, tissue.t2, tissue.pd, p.tr, p.te, p.fa);
+                    } else if (p.sequence === 'GRE') {
+                        s = this.getSignalGRE(tissue.t1, tissue.t2, tissue.pd, p.tr, p.te, p.fa, p.inhomogeneity);
+                    } else if (p.sequence === 'IR') {
+                        s = this.getSignalIR(tissue.t1, tissue.t2, tissue.pd, p.tr, p.te, p.ti, p.fa);
+                    }
 
-    // Pixel size ratio relative to baseline (256×256)
-    const pixelSizeRatio = SNR_BASELINE / matrixSize;
+                    // Apply magnitude unless "Show Signed" is enabled (only relevant for IR)
+                    if (!this.showSigned) {
+                        s = Math.abs(s);
+                    }
 
-    // Calculate total acceleration factor
-    // R_total = R_undersampling × R_partial_fourier
-    const R_undersampling = skipY;
-    const R_partial_fourier = 1 / partialFourierFraction;
-    const R_total = R_undersampling * R_partial_fourier;
-
-    // K-space coverage: percentage of k-space AREA relative to full N×N
-    // Must account for undersampling factor (skipY) and partial Fourier
-    const kspaceCoverageArea = (matrixSize / N) * (matrixSize / N) * partialFourierFraction * (1 / skipY) * 100;
-
-    // SNR relationship for 2D imaging with constant FOV:
-    // Signal per voxel ∝ voxel_area = (pixel_size)^2
-    // Noise per voxel is constant (thermal noise in receiver)
-    // Therefore: SNR ∝ (pixel_size)^2 = (baseline/matrixSize)^2
-    //
-    // With acceleration (undersampling + partial Fourier):
-    // SNR_accelerated = SNR_full / √R_total
-    //
-    // Parallel imaging can recover some SNR loss (g-factor dependent)
-    // For demo: assume perfect recovery up to R = numCoils
-    //
-    // Lower resolution (128x128): 2x pixels vs baseline → SNR = 4.00
-    // Baseline resolution (256x256): 1x pixels → SNR = 1.00
-    // Higher resolution (512x512): 0.5x pixels → SNR = 0.25
-    // With 4x undersampling: SNR reduced by factor of 2 (√4)
-    //
-    // This demonstrates the fundamental resolution-SNR tradeoff!
-    const resolutionSNR = pixelSizeRatio * pixelSizeRatio;
-
-    // SNR penalty from acceleration:
-    // - Undersampling alone (no PI): SNR ∝ 1/√R (fewer samples = more noise)
-    // - With Parallel Imaging: SNR ∝ 1/(g·√R) where g is geometry factor
-    //   PI reduces aliasing but doesn't recover the lost SNR from fewer samples
-    //   In fact, g-factor adds additional penalty (g ≥ 1)
-    //
-    // g-factor: geometry factor that increases with R
-    // Typical values: R=2 -> g~1.1, R=4 -> g~1.3
-    const gFactor = numCoils > 1 ? (1.0 + 0.1 * (numCoils - 1)) : 1.0;
-
-    // Total acceleration penalty (always present regardless of PI)
-    // PI helps with aliasing artifacts but SNR penalty remains
-    const accelerationPenalty = 1 / (gFactor * Math.sqrt(R_total));
-    const relativeSNR = resolutionSNR * accelerationPenalty;
-
-    document.getElementById('matrixSizeVal').innerText = matrixSize;
-    document.getElementById('matrixSizeVal2').innerText = matrixSize;
-    document.getElementById('pixelSizeVal').innerText = pixelSizeRatio.toFixed(2) + 'x';
-
-    // Show coverage as area percentage of full k-space (N×N), accounting for undersampling
-    document.getElementById('kspaceCoverageVal').innerText = kspaceCoverageArea.toFixed(1) + '%';
-
-    document.getElementById('snrVal').innerText = relativeSNR.toFixed(2);
-
-    // Update SNR bar visualization
-    // Map SNR from range 0.25 (512) to 64 (32) to bar width
-    // Use log scale: log2(SNR) maps 0.25->-2, 1->0, 64->6
-    // Normalize to 0-100% range
-    const logSNR = Math.log2(relativeSNR);
-    const snrBarWidth = Math.min(100, Math.max(5, ((logSNR + 2) / 8) * 100));
-    const snrBar = document.getElementById('snrBar');
-    snrBar.style.width = snrBarWidth + '%';
-
-    // Color code: green for high SNR, cyan for baseline, red for low
-    if (relativeSNR >= 4) {
-        snrBar.style.backgroundColor = 'rgba(74, 222, 128, 0.8)'; // Green - high SNR
-    } else if (relativeSNR >= 0.5) {
-        snrBar.style.backgroundColor = 'rgba(56, 189, 248, 0.8)'; // Cyan - baseline
-    } else {
-        snrBar.style.backgroundColor = 'rgba(248, 113, 113, 0.8)'; // Red - low SNR
-    }
-}
-
-// Get the effective noise level considering SNR simulation
-function getEffectiveNoiseLevel() {
-    if (!simulateSNR) return noiseLevel;
-
-    // SNR baseline is 256×256
-    const SNR_BASELINE = 256;
-
-    // When simulating SNR, noise scales inversely with voxel area
-    // SNR ∝ (pixel_size)^2 = (baseline/matrixSize)^2
-    // Noise ∝ 1/SNR = (matrixSize/baseline)^2
-    const snrFactor = (matrixSize / SNR_BASELINE) * (matrixSize / SNR_BASELINE);
-
-    // At 256x256 (baseline), snrFactor = 1, noise = base
-    // At 128x128, snrFactor = 0.25 (less noise, 4x SNR)
-    // At 512x512, snrFactor = 4 (more noise, 0.25x SNR)
-    //
-    // Higher resolution = smaller voxels = less signal = more visible noise
-    const baseSimulatedNoise = 25;
-    const simulatedNoise = baseSimulatedNoise * snrFactor;
-
-    // Combine with user-set noise level
-    return Math.max(noiseLevel, simulatedNoise);
-}
-
-function acquireAllLines() {
-    // Only acquire lines within the matrixSize boundary (centered)
-    const halfRes = matrixSize / 2;
-    const startLine = Math.floor(N / 2 - halfRes);
-    const endLine = Math.floor(N / 2 + halfRes);
-
-    for (let i = startLine; i < endLine; i++) {
-        acquireLine(i);
-    }
-    currentLine = endLine - startLine; // Total lines acquired
-    reconstructImage();
-}
-
-function updateStatus(text) {
-    document.getElementById('statusText').innerText = text;
-}
-
-function renderAll() {
-    if (!isInspecting) {
-        renderImage();
-    }
-    renderKSpace();
-}
-
-function renderImage() {
-    // Render Original Object (Ground Truth Magnitude)
-    const origCanvas = document.getElementById('originalCanvas');
-    const origCtx = origCanvas.getContext('2d');
-    const origImgData = origCtx.createImageData(N, N);
-
-    // Render Reconstructed Image (Magnitude)
-    const reconCanvas = document.getElementById('reconstructedCanvas');
-    const reconCtx = reconCanvas.getContext('2d');
-    const reconImgData = reconCtx.createImageData(N, N);
-
-    // Find max for normalization (use Ground Truth max for consistency)
-    let maxMag = 0;
-    for (let y = 0; y < N; y++) {
-        for (let x = 0; x < N; x++) {
-            const mag = groundTruthImage[y][x].magnitude;
-            if (mag > maxMag) maxMag = mag;
-        }
-    }
-
-    for (let y = 0; y < N; y++) {
-        for (let x = 0; x < N; x++) {
-            const idx = (y * N + x) * 4;
-
-            // Original
-            const origMag = groundTruthImage[y][x].magnitude;
-            const origNorm = maxMag > 0 ? (origMag / maxMag) * 255 : 0;
-            origImgData.data[idx] = origNorm;
-            origImgData.data[idx + 1] = origNorm;
-            origImgData.data[idx + 2] = origNorm;
-            origImgData.data[idx + 3] = 255;
-
-            // Reconstructed
-            const reconMag = reconstructedImage[y][x].magnitude;
-            const reconNorm = maxMag > 0 ? (reconMag / maxMag) * 255 : 0;
-            reconImgData.data[idx] = reconNorm;
-            reconImgData.data[idx + 1] = reconNorm;
-            reconImgData.data[idx + 2] = reconNorm;
-            reconImgData.data[idx + 3] = 255;
-        }
-    }
-
-    origCtx.putImageData(origImgData, 0, 0);
-    reconCtx.putImageData(reconImgData, 0, 0);
-}
-
-function renderKSpace() {
-    // Render Magnitude
-    const magCanvas = document.getElementById('kspaceMagCanvas');
-    const magCtx = magCanvas.getContext('2d');
-    const magImgData = magCtx.createImageData(N, N);
-
-    // Render Phase
-    const phaseCanvas = document.getElementById('kspacePhaseCanvas');
-    const phaseCtx = phaseCanvas.getContext('2d');
-    const phaseImgData = phaseCtx.createImageData(N, N);
-
-    // Use displayedKSpace if available (shows PF/PI processing), otherwise acquiredKSpace
-    const kspaceToShow = displayedKSpace || acquiredKSpace;
-
-    // Calculate max from displayed k-space
-    let maxMag = 0;
-    for (let y = 0; y < N; y++) {
-        for (let x = 0; x < N; x++) {
-            const mag = kspaceToShow[y][x].magnitude;
-            if (mag > maxMag) maxMag = mag;
-        }
-    }
-
-    // Define acquired region boundary
-    const halfRes = matrixSize / 2;
-    const centerX = N / 2;
-    const centerY = N / 2;
-
-    for (let y = 0; y < N; y++) {
-        for (let x = 0; x < N; x++) {
-            const idx = (y * N + x) * 4;
-
-            // Check if this point is within the acquired region
-            const inAcquiredRegion = Math.abs(x - centerX) < halfRes && Math.abs(y - centerY) < halfRes;
-
-            // Check if this line was actually acquired (for undersampling visualization)
-            const lineAcquired = (y % skipY === 0);
-            // When PI is on and can recover, show interpolated lines differently
-            const lineRecovered = (numCoils > 1 && skipY > 1 && numCoils >= skipY);
-
-            if (inAcquiredRegion && maxMag > 0) {
-                // Magnitude (Log scaled)
-                const magVal = kspaceToShow[y][x].magnitude;
-                const magNorm = (Math.log(1 + magVal) / Math.log(1 + maxMag)) * 255;
-
-                // Color coding for k-space visualization:
-                // - White: directly acquired lines
-                // - Cyan: PI-interpolated lines (recovered by parallel imaging)
-                // - Dark: skipped lines (when PI is off or can't recover)
-                if (!lineAcquired && !lineRecovered) {
-                    // Skipped line without PI recovery - show as dark/zero
-                    magImgData.data[idx] = 0;
-                    magImgData.data[idx + 1] = 0;
-                    magImgData.data[idx + 2] = 0;
-                    magImgData.data[idx + 3] = 255;
-
-                    phaseImgData.data[idx] = 0;
-                    phaseImgData.data[idx + 1] = 0;
-                    phaseImgData.data[idx + 2] = 0;
-                    phaseImgData.data[idx + 3] = 255;
-                } else if (!lineAcquired && lineRecovered) {
-                    // PI-interpolated line - show in cyan tint
-                    magImgData.data[idx] = magNorm * 0.3;      // Less red
-                    magImgData.data[idx + 1] = magNorm * 0.8;  // Moderate green
-                    magImgData.data[idx + 2] = magNorm;        // Full blue (cyan tint)
-                    magImgData.data[idx + 3] = 255;
-
-                    const phaseVal = kspaceToShow[y][x].phase;
-                    const phaseNorm = ((phaseVal + Math.PI) / (2 * Math.PI)) * 255;
-                    phaseImgData.data[idx] = phaseNorm * 0.3;
-                    phaseImgData.data[idx + 1] = phaseNorm * 0.8;
-                    phaseImgData.data[idx + 2] = phaseNorm;
-                    phaseImgData.data[idx + 3] = 255;
-                } else {
-                    // Directly acquired line - show in white/gray
-                    magImgData.data[idx] = magNorm;
-                    magImgData.data[idx + 1] = magNorm;
-                    magImgData.data[idx + 2] = magNorm;
-                    magImgData.data[idx + 3] = 255;
-
-                    // Phase
-                    const phaseVal = kspaceToShow[y][x].phase;
-                    const phaseNorm = ((phaseVal + Math.PI) / (2 * Math.PI)) * 255;
-                    phaseImgData.data[idx] = phaseNorm;
-                    phaseImgData.data[idx + 1] = phaseNorm;
-                    phaseImgData.data[idx + 2] = phaseNorm;
-                    phaseImgData.data[idx + 3] = 255;
+                    data.push({ x: x, y: s });
                 }
+                // Create semi-transparent version of color for fill
+                const hexToRgba = (hex, alpha) => {
+                    const r = parseInt(hex.slice(1, 3), 16);
+                    const g = parseInt(hex.slice(3, 5), 16);
+                    const b = parseInt(hex.slice(5, 7), 16);
+                    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+                };
+
+                return {
+                    label: tissue.name,
+                    data: data,
+                    borderColor: tissue.color,
+                    backgroundColor: hexToRgba(tissue.color, 0.1),
+                    borderWidth: 2.5,
+                    pointRadius: 0,
+                    fill: true,
+                    tension: 0.1
+                };
+            });
+        };
+
+        // Helper to add vertical indicator line with glow effect
+        const addIndicator = (chart, value, color = '#ef4444') => {
+            // Find max Y in current datasets to scale the indicator
+            let maxY = 0;
+            chart.data.datasets.forEach(ds => {
+                if (ds.data) {
+                    const dsMax = Math.max(...ds.data.map(p => p.y));
+                    if (dsMax > maxY) maxY = dsMax;
+                }
+            });
+
+            // If no data or max is 0, default to 1.0
+            if (maxY === 0) maxY = 1.0;
+
+            // Add a margin (e.g. 10%)
+            const indicatorHeight = maxY * 1.1;
+
+            // Add glow line (thicker, semi-transparent)
+            chart.data.datasets.push({
+                label: '',
+                data: [{ x: value, y: 0 }, { x: value, y: indicatorHeight }],
+                borderColor: 'rgba(239, 68, 68, 0.3)',
+                borderWidth: 8,
+                pointRadius: 0,
+                showLine: true,
+                order: -1,
+                fill: false
+            });
+
+            // Add main indicator line
+            chart.data.datasets.push({
+                label: 'Current',
+                data: [{ x: value, y: 0 }, { x: value, y: indicatorHeight }],
+                borderColor: color,
+                borderWidth: 2,
+                borderDash: [6, 4],
+                pointRadius: 0,
+                showLine: true,
+                order: 0,
+                fill: false
+            });
+        };
+
+        // Update TR Chart
+        const maxTR = Math.max(5000, this.params.tr * 1.1);
+        this.charts.tr.data.datasets = generateData('tr', 0, maxTR, maxTR / 100);
+        addIndicator(this.charts.tr, this.params.tr);
+        // Update scale to match data
+        this.charts.tr.options.scales.x.max = maxTR;
+        this.charts.tr.update();
+
+        // Update TE Chart
+        this.charts.te.data.datasets = generateData('te', 0, 300, 5);
+
+        // If GRE, add T2 reference curve (dotted) for White Matter (or first tissue)
+        if (this.params.sequence === 'GRE' && this.tissues.length > 0) {
+            const refTissue = this.tissues[0]; // Use first tissue as reference
+            const data = [];
+            for (let x = 0; x <= 300; x += 5) {
+                // Pure T2 decay: PD * exp(-TE/T2) * (saturation term)
+                // Saturation term depends on TR/T1/FA.
+                // S_GRE_steady = M0 * sin(a)*(1-E1)/(1-E1*cos(a)) * exp(-TE/T2)
+                // We use T2 instead of T2*
+                const s = this.getSignalGRE(refTissue.t1, refTissue.t2, refTissue.pd, this.params.tr, x, this.params.fa, 0); // Inhomogeneity = 0
+                data.push({ x: x, y: s });
+            }
+            this.charts.te.data.datasets.push({
+                label: `${refTissue.name} (Pure T2)`,
+                data: data,
+                borderColor: refTissue.color,
+                borderWidth: 2,
+                borderDash: [2, 2], // Dotted
+                pointRadius: 0
+            });
+        }
+
+        addIndicator(this.charts.te, this.params.te);
+        this.charts.te.update();
+
+        // Update TI Chart (only if IR)
+        if (this.params.sequence === 'IR') {
+            const maxTI = Math.max(2000, this.params.ti * 1.1);
+            this.charts.ti.data.datasets = generateData('ti', 0, maxTI, maxTI / 100);
+            addIndicator(this.charts.ti, this.params.ti);
+            // Update scale to match data
+            this.charts.ti.options.scales.x.max = maxTI;
+            this.charts.ti.update();
+        }
+
+        // Update FA Chart (for all sequences)
+        this.charts.fa.data.datasets = generateData('fa', 0, 180, 1);
+        addIndicator(this.charts.fa, this.params.fa);
+        this.charts.fa.update();
+    }
+
+    updateEquation() {
+        const el = document.getElementById('equation-overlay');
+        let eqHtml = '';
+        let legendHtml = '';
+
+        const commonLegend = `
+            <span class="legend-term">S</span><span>Signal Intensity</span>
+            <span class="legend-term">PD</span><span>Proton Density</span>
+        `;
+
+        if (this.params.sequence === 'SE') {
+            eqHtml = `
+        S &approx; PD &middot;
+        <span style="color: #2563eb;">(T1 Recovery)</span> &middot;
+        <span style="color: #dc2626;">(T2 Decay)</span>
+        `;
+            legendHtml = `
+                ${commonLegend}
+                <span class="legend-term" style="color: #2563eb;">T1 Recovery</span><span>Depends on TR & T1</span>
+                <span class="legend-term" style="color: #dc2626;">T2 Decay</span><span>Depends on TE & T2</span>
+        `;
+        } else if (this.params.sequence === 'GRE') {
+            eqHtml = `
+        S &approx; PD &middot;
+        <span style="color: #2563eb;">(Steady State T1)</span> &middot;
+        <span style="color: #dc2626;">(T2* Decay)</span>
+        `;
+            legendHtml = `
+                ${commonLegend}
+                <span class="legend-term" style="color: #2563eb;">Steady State T1</span><span>Depends on TR, T1 & &alpha;</span>
+                <span class="legend-term" style="color: #dc2626;">T2* Decay</span><span>Depends on TE & T2*</span>
+        `;
+        } else if (this.params.sequence === 'IR') {
+            eqHtml = `
+        S &approx; PD &middot;
+        <span style="color: #2563eb;">(Inversion Recovery)</span> &middot;
+        <span style="color: #dc2626;">(T2 Decay)</span>
+        `;
+            legendHtml = `
+                ${commonLegend}
+                <span class="legend-term" style="color: #2563eb;">Inversion Recovery</span><span>Depends on TI, TR & T1</span>
+                <span class="legend-term" style="color: #dc2626;">T2 Decay</span><span>Depends on TE & T2</span>
+        `;
+        }
+
+        el.innerHTML = `
+            <div class="equation-main">${eqHtml}</div>
+                <div class="equation-legend">${legendHtml}</div>
+        `;
+    }
+
+    // ========================================
+    // Sequence Mechanics Visualizations
+    // ========================================
+
+    initMechanicsVisualizations() {
+        // Initialize R2 Chart as line chart showing decay curves
+        const r2Ctx = document.getElementById('r2Chart').getContext('2d');
+        this.r2Chart = new Chart(r2Ctx, {
+            type: 'line',
+            data: {
+                datasets: [
+                    {
+                        label: 'T2 Decay (SE)',
+                        data: [],
+                        borderColor: '#3b82f6',
+                        backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                        borderWidth: 3,
+                        fill: true,
+                        tension: 0.4,
+                        pointRadius: 0
+                    },
+                    {
+                        label: 'T2* Decay (GRE)',
+                        data: [],
+                        borderColor: '#10b981',
+                        backgroundColor: 'rgba(16, 185, 129, 0.1)',
+                        borderWidth: 3,
+                        fill: true,
+                        tension: 0.4,
+                        pointRadius: 0
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: {
+                        display: true,
+                        position: 'top',
+                        labels: {
+                            usePointStyle: true,
+                            padding: 15,
+                            font: { size: 11 },
+                            color: '#94a3b8'
+                        }
+                    }
+                },
+                scales: {
+                    x: {
+                        type: 'linear',
+                        title: { display: true, text: 'Time (ms)', font: { size: 11 }, color: '#94a3b8' },
+                        grid: { color: 'rgba(148, 163, 184, 0.1)' },
+                        ticks: { color: '#94a3b8' }
+                    },
+                    y: {
+                        title: { display: true, text: 'Signal', font: { size: 11 }, color: '#94a3b8' },
+                        min: 0,
+                        max: 1,
+                        grid: { color: 'rgba(148, 163, 184, 0.1)' },
+                        ticks: { color: '#94a3b8' }
+                    }
+                }
+            }
+        });
+
+        // Phase Wheel Controls - 16 frames for smooth animation
+        this.totalFrames = 16;
+
+        document.getElementById('prev-frame').addEventListener('click', () => {
+            this.phaseWheelFrame = (this.phaseWheelFrame - 1 + this.totalFrames) % this.totalFrames;
+            this.updatePhaseWheel();
+            this.updateRFTimeline(); // Sync timeline
+        });
+
+        document.getElementById('next-frame').addEventListener('click', () => {
+            this.phaseWheelFrame = (this.phaseWheelFrame + 1) % this.totalFrames;
+            this.updatePhaseWheel();
+            this.updateRFTimeline(); // Sync timeline
+        });
+
+        document.getElementById('play-animation').addEventListener('click', () => {
+            if (this.phaseWheelPlaying) {
+                clearInterval(this.phaseWheelInterval);
+                this.phaseWheelPlaying = false;
+                document.getElementById('play-animation').textContent = '▶ Play';
             } else {
-                // Outside acquired region - pure black
-                magImgData.data[idx] = 0;
-                magImgData.data[idx + 1] = 0;
-                magImgData.data[idx + 2] = 0;
-                magImgData.data[idx + 3] = 255;
+                this.phaseWheelPlaying = true;
+                document.getElementById('play-animation').textContent = '⏸ Pause';
+                this.phaseWheelInterval = setInterval(() => {
+                    this.phaseWheelFrame = (this.phaseWheelFrame + 1) % this.totalFrames;
+                    this.updatePhaseWheel();
+                    this.updateRFTimeline(); // Sync timeline
+                }, 400); // Faster for 16 frames
+            }
+        });
 
-                phaseImgData.data[idx] = 0;
-                phaseImgData.data[idx + 1] = 0;
-                phaseImgData.data[idx + 2] = 0;
-                phaseImgData.data[idx + 3] = 255;
+        // Initial render
+        this.updatePhaseWheel();
+        this.updateR2Chart();
+        this.updateRFTimeline();
+    }
+
+    updatePhaseWheel() {
+        const svg = document.getElementById('phase-wheel');
+        const seq = this.params.sequence;
+        const frame = this.phaseWheelFrame;
+        const t = frame / (this.totalFrames - 1); // Normalized time 0-1
+
+        // Update sequence-specific styling
+        this.updateMechanicsColors(seq);
+
+        // Sequence colors
+        const seqColors = {
+            'SE': { primary: '#3b82f6', secondary: '#93c5fd' },
+            'GRE': { primary: '#10b981', secondary: '#6ee7b7' },
+            'IR': { primary: '#a855f7', secondary: '#c4b5fd' }
+        };
+        const colors = seqColors[seq] || seqColors['SE'];
+
+        // Get step info for current frame
+        const stepInfo = this.getStepInfo(seq, frame);
+        document.getElementById('frame-label').textContent = `${frame + 1}/${this.totalFrames}: ${stepInfo.label}`;
+
+        // Clear SVG
+        svg.innerHTML = '';
+        const ns = 'http://www.w3.org/2000/svg';
+
+        // Add gradient definitions
+        const defs = document.createElementNS(ns, 'defs');
+
+        // Dark gradient background
+        const bgGrad = document.createElementNS(ns, 'radialGradient');
+        bgGrad.setAttribute('id', 'bgGradient');
+        bgGrad.innerHTML = `
+            <stop offset="0%" stop-color="#1e293b"/>
+            <stop offset="100%" stop-color="#0f172a"/>
+        `;
+        defs.appendChild(bgGrad);
+
+        // Glow filter
+        const glowFilter = document.createElementNS(ns, 'filter');
+        glowFilter.setAttribute('id', 'glow');
+        glowFilter.innerHTML = `
+            <feGaussianBlur stdDeviation="3" result="coloredBlur"/>
+            <feMerge>
+                <feMergeNode in="coloredBlur"/>
+                <feMergeNode in="SourceGraphic"/>
+            </feMerge>
+        `;
+        defs.appendChild(glowFilter);
+
+        // Arrow markers
+        ['spin', 'net', 'mz'].forEach((type, idx) => {
+            const markerColors = [colors.secondary, '#ef4444', '#22c55e'];
+            const marker = document.createElementNS(ns, 'marker');
+            marker.setAttribute('id', `arrow-${type}`);
+            marker.setAttribute('markerWidth', '8');
+            marker.setAttribute('markerHeight', '8');
+            marker.setAttribute('refX', '6');
+            marker.setAttribute('refY', '3');
+            marker.setAttribute('orient', 'auto');
+            const polygon = document.createElementNS(ns, 'polygon');
+            polygon.setAttribute('points', '0 0, 8 3, 0 6');
+            polygon.setAttribute('fill', markerColors[idx]);
+            marker.appendChild(polygon);
+            defs.appendChild(marker);
+        });
+
+        svg.appendChild(defs);
+
+        // Background
+        const bg = document.createElementNS(ns, 'rect');
+        bg.setAttribute('width', '300');
+        bg.setAttribute('height', '300');
+        bg.setAttribute('fill', 'url(#bgGradient)');
+        bg.setAttribute('rx', '12');
+        svg.appendChild(bg);
+
+        // --- DUAL VIEW: Transverse (Mxy) on left, Longitudinal (Mz) on right ---
+        const leftCx = 100, leftCy = 130; // Transverse plane center
+        const rightCx = 220, rightCy = 130; // Longitudinal view center
+        const radius = 60;
+
+        // Labels
+        this.addSvgText(svg, leftCx, 30, 'Mxy (Transverse)', 'middle', '10px', '#94a3b8', '600');
+        this.addSvgText(svg, rightCx, 30, 'Mz (Longitudinal)', 'middle', '10px', '#94a3b8', '600');
+
+        // --- Transverse Plane View ---
+        // Reference circle
+        const refCircle = document.createElementNS(ns, 'circle');
+        refCircle.setAttribute('cx', leftCx);
+        refCircle.setAttribute('cy', leftCy);
+        refCircle.setAttribute('r', radius);
+        refCircle.setAttribute('fill', 'none');
+        refCircle.setAttribute('stroke', 'rgba(148, 163, 184, 0.3)');
+        refCircle.setAttribute('stroke-width', '1');
+        refCircle.setAttribute('stroke-dasharray', '4,4');
+        svg.appendChild(refCircle);
+
+        // Center dot
+        const centerDot = document.createElementNS(ns, 'circle');
+        centerDot.setAttribute('cx', leftCx);
+        centerDot.setAttribute('cy', leftCy);
+        centerDot.setAttribute('r', '3');
+        centerDot.setAttribute('fill', '#64748b');
+        svg.appendChild(centerDot);
+
+        // Axis labels for transverse
+        this.addSvgText(svg, leftCx + radius + 10, leftCy + 4, "x'", 'start', '10px', '#64748b');
+        this.addSvgText(svg, leftCx, leftCy - radius - 8, "y'", 'middle', '10px', '#64748b');
+
+        // --- Longitudinal View (Mz bar) ---
+        const barX = rightCx - 15;
+        const barW = 30;
+        const barH = 100;
+        const barTop = rightCy - barH / 2;
+
+        // Background bar
+        const mzBg = document.createElementNS(ns, 'rect');
+        mzBg.setAttribute('x', barX);
+        mzBg.setAttribute('y', barTop);
+        mzBg.setAttribute('width', barW);
+        mzBg.setAttribute('height', barH);
+        mzBg.setAttribute('fill', 'rgba(148, 163, 184, 0.1)');
+        mzBg.setAttribute('stroke', 'rgba(148, 163, 184, 0.3)');
+        mzBg.setAttribute('rx', '4');
+        svg.appendChild(mzBg);
+
+        // Zero line
+        const zeroLine = document.createElementNS(ns, 'line');
+        zeroLine.setAttribute('x1', barX - 5);
+        zeroLine.setAttribute('y1', rightCy);
+        zeroLine.setAttribute('x2', barX + barW + 5);
+        zeroLine.setAttribute('y2', rightCy);
+        zeroLine.setAttribute('stroke', '#64748b');
+        zeroLine.setAttribute('stroke-width', '1');
+        zeroLine.setAttribute('stroke-dasharray', '2,2');
+        svg.appendChild(zeroLine);
+
+        // Mz labels
+        this.addSvgText(svg, barX - 10, barTop + 5, '+M₀', 'end', '9px', '#22c55e');
+        this.addSvgText(svg, barX - 10, barTop + barH - 2, '-M₀', 'end', '9px', '#ef4444');
+        this.addSvgText(svg, barX - 10, rightCy + 3, '0', 'end', '9px', '#64748b');
+
+        // Get magnetization state
+        const state = this.getMagnetizationState(seq, frame);
+        const numSpins = 12;
+        const spinLen = 40;
+
+        // Draw individual spins in transverse plane
+        for (let i = 0; i < numSpins; i++) {
+            const spreadAngle = state.spread * Math.PI * 2;
+            const baseAngle = state.baseAngle + (i - numSpins / 2) * (spreadAngle / numSpins);
+            const spinMxy = state.mxy * 0.8; // Scale for visibility
+
+            if (spinMxy > 0.05) {
+                const x2 = leftCx + spinLen * spinMxy * Math.cos(baseAngle);
+                const y2 = leftCy - spinLen * spinMxy * Math.sin(baseAngle);
+
+                const line = document.createElementNS(ns, 'line');
+                line.setAttribute('x1', leftCx);
+                line.setAttribute('y1', leftCy);
+                line.setAttribute('x2', x2);
+                line.setAttribute('y2', y2);
+                line.setAttribute('stroke', colors.secondary);
+                line.setAttribute('stroke-width', '2');
+                line.setAttribute('stroke-linecap', 'round');
+                line.setAttribute('opacity', '0.6');
+                svg.appendChild(line);
+            }
+        }
+
+        // Net Mxy vector
+        if (state.mxy > 0.05) {
+            const netLen = radius * 0.85 * state.mxy * state.coherence;
+            const netX = leftCx + netLen * Math.cos(state.baseAngle);
+            const netY = leftCy - netLen * Math.sin(state.baseAngle);
+
+            // Glow
+            const glow = document.createElementNS(ns, 'line');
+            glow.setAttribute('x1', leftCx);
+            glow.setAttribute('y1', leftCy);
+            glow.setAttribute('x2', netX);
+            glow.setAttribute('y2', netY);
+            glow.setAttribute('stroke', '#ef4444');
+            glow.setAttribute('stroke-width', '8');
+            glow.setAttribute('stroke-linecap', 'round');
+            glow.setAttribute('opacity', '0.3');
+            glow.setAttribute('filter', 'url(#glow)');
+            svg.appendChild(glow);
+
+            // Main vector
+            const netLine = document.createElementNS(ns, 'line');
+            netLine.setAttribute('x1', leftCx);
+            netLine.setAttribute('y1', leftCy);
+            netLine.setAttribute('x2', netX);
+            netLine.setAttribute('y2', netY);
+            netLine.setAttribute('stroke', '#ef4444');
+            netLine.setAttribute('stroke-width', '4');
+            netLine.setAttribute('stroke-linecap', 'round');
+            svg.appendChild(netLine);
+
+            // Tip circle
+            const tip = document.createElementNS(ns, 'circle');
+            tip.setAttribute('cx', netX);
+            tip.setAttribute('cy', netY);
+            tip.setAttribute('r', '5');
+            tip.setAttribute('fill', '#ef4444');
+            tip.setAttribute('filter', 'url(#glow)');
+            svg.appendChild(tip);
+
+            // Label
+            this.addSvgText(svg, netX + 10, netY - 8, 'Mxy', 'start', '10px', '#ef4444', '600');
+        }
+
+        // --- Mz bar fill ---
+        const mzValue = state.mz; // -1 to +1
+        const mzHeight = Math.abs(mzValue) * (barH / 2);
+        const mzY = mzValue >= 0 ? rightCy - mzHeight : rightCy;
+        const mzColor = mzValue >= 0 ? '#22c55e' : '#ef4444';
+
+        const mzFill = document.createElementNS(ns, 'rect');
+        mzFill.setAttribute('x', barX + 2);
+        mzFill.setAttribute('y', mzY);
+        mzFill.setAttribute('width', barW - 4);
+        mzFill.setAttribute('height', mzHeight);
+        mzFill.setAttribute('fill', mzColor);
+        mzFill.setAttribute('opacity', '0.7');
+        mzFill.setAttribute('rx', '2');
+        svg.appendChild(mzFill);
+
+        // Mz value indicator line
+        const mzIndicatorY = rightCy - mzValue * (barH / 2);
+        const mzIndicator = document.createElementNS(ns, 'line');
+        mzIndicator.setAttribute('x1', barX - 3);
+        mzIndicator.setAttribute('y1', mzIndicatorY);
+        mzIndicator.setAttribute('x2', barX + barW + 3);
+        mzIndicator.setAttribute('y2', mzIndicatorY);
+        mzIndicator.setAttribute('stroke', mzColor);
+        mzIndicator.setAttribute('stroke-width', '3');
+        mzIndicator.setAttribute('filter', 'url(#glow)');
+        svg.appendChild(mzIndicator);
+
+        // Mz value text
+        this.addSvgText(svg, rightCx + 30, mzIndicatorY + 4, `${(mzValue * 100).toFixed(0)}%`, 'start', '10px', mzColor, '600');
+
+        // --- Signal Bar (bottom) ---
+        const signalBarY = 250;
+        const signalBarW = 200;
+        const signalValue = state.mxy * state.coherence;
+
+        // Background
+        const sigBg = document.createElementNS(ns, 'rect');
+        sigBg.setAttribute('x', 50);
+        sigBg.setAttribute('y', signalBarY);
+        sigBg.setAttribute('width', signalBarW);
+        sigBg.setAttribute('height', '8');
+        sigBg.setAttribute('rx', '4');
+        sigBg.setAttribute('fill', 'rgba(148, 163, 184, 0.2)');
+        svg.appendChild(sigBg);
+
+        // Fill
+        const sigFill = document.createElementNS(ns, 'rect');
+        sigFill.setAttribute('x', 50);
+        sigFill.setAttribute('y', signalBarY);
+        sigFill.setAttribute('width', signalBarW * signalValue);
+        sigFill.setAttribute('height', '8');
+        sigFill.setAttribute('rx', '4');
+        sigFill.setAttribute('fill', colors.primary);
+        sigFill.setAttribute('filter', 'url(#glow)');
+        svg.appendChild(sigFill);
+
+        // Signal label
+        this.addSvgText(svg, 150, signalBarY + 22, `Signal: ${Math.round(signalValue * 100)}%`, 'middle', '11px', '#f1f5f9', '500');
+
+        // --- Educational Info Box ---
+        const infoBox = document.getElementById('phase-info');
+        if (infoBox) {
+            infoBox.innerHTML = `<strong>${stepInfo.label}</strong><br>${stepInfo.description}`;
+        }
+
+        // Update parameter badge
+        const phaseBadge = document.getElementById('phase-params');
+        if (phaseBadge) {
+            phaseBadge.textContent = `${seq}: TE=${this.params.te}ms, TR=${this.params.tr}ms${seq === 'IR' ? `, TI=${this.params.ti}ms` : ''}`;
+        }
+    }
+
+    addSvgText(svg, x, y, text, anchor = 'middle', size = '11px', fill = '#f1f5f9', weight = '400') {
+        const ns = 'http://www.w3.org/2000/svg';
+        const textEl = document.createElementNS(ns, 'text');
+        textEl.setAttribute('x', x);
+        textEl.setAttribute('y', y);
+        textEl.setAttribute('text-anchor', anchor);
+        textEl.setAttribute('font-size', size);
+        textEl.setAttribute('font-weight', weight);
+        textEl.setAttribute('fill', fill);
+        textEl.setAttribute('font-family', 'Inter, sans-serif');
+        textEl.textContent = text;
+        svg.appendChild(textEl);
+    }
+
+    getMagnetizationState(seq, frame) {
+        const t = frame / (this.totalFrames - 1);
+
+        if (seq === 'SE') {
+            // Spin Echo: 16 frames
+            // 0-1: 90° pulse (Mz->Mxy)
+            // 2-7: Dephasing (T2* decay + spread)
+            // 8: 180° pulse (flip phase)
+            // 9-14: Rephasing
+            // 15: Echo peak
+            if (frame === 0) {
+                return { mz: 1, mxy: 0, spread: 0, coherence: 1, baseAngle: 0 };
+            } else if (frame === 1) {
+                return { mz: 0, mxy: 1, spread: 0, coherence: 1, baseAngle: 0 };
+            } else if (frame <= 7) {
+                const dephaseT = (frame - 1) / 6;
+                const spread = dephaseT * 0.8;
+                const decay = Math.exp(-dephaseT * 1.5);
+                return { mz: 0, mxy: 1, spread: spread, coherence: decay, baseAngle: dephaseT * Math.PI * 0.5 };
+            } else if (frame === 8) {
+                // 180° pulse - flip phases
+                return { mz: 0, mxy: 1, spread: 0.8, coherence: 0.3, baseAngle: -Math.PI * 0.25 };
+            } else if (frame <= 14) {
+                const rephaseT = (frame - 8) / 6;
+                const spread = 0.8 * (1 - rephaseT);
+                const recovery = 0.3 + rephaseT * 0.65;
+                return { mz: 0, mxy: 1, spread: spread, coherence: recovery, baseAngle: -Math.PI * 0.25 * (1 - rephaseT) };
+            } else {
+                // Echo
+                return { mz: 0, mxy: 1, spread: 0.05, coherence: 0.95, baseAngle: 0 };
+            }
+        } else if (seq === 'GRE') {
+            // Gradient Echo: 16 frames
+            // 0: Equilibrium
+            // 1: α° pulse
+            // 2-7: Dephasing (gradient + T2*)
+            // 8-14: Rephasing (gradient reversal) - partial
+            // 15: Echo (partial refocus)
+            const fa = this.params.fa * Math.PI / 180;
+            const mxyMax = Math.sin(fa);
+            const mzAfter = Math.cos(fa);
+
+            if (frame === 0) {
+                return { mz: 1, mxy: 0, spread: 0, coherence: 1, baseAngle: 0 };
+            } else if (frame === 1) {
+                return { mz: mzAfter, mxy: mxyMax, spread: 0, coherence: 1, baseAngle: 0 };
+            } else if (frame <= 7) {
+                const dephaseT = (frame - 1) / 6;
+                const spread = dephaseT * 1.0;
+                const decay = Math.exp(-dephaseT * 2);
+                return { mz: mzAfter, mxy: mxyMax, spread: spread, coherence: decay, baseAngle: dephaseT * Math.PI * 0.7 };
+            } else if (frame <= 14) {
+                const rephaseT = (frame - 7) / 7;
+                const spread = 1.0 * (1 - rephaseT * 0.7); // Partial rephase
+                const recovery = 0.15 + rephaseT * 0.45;
+                return { mz: mzAfter, mxy: mxyMax, spread: spread, coherence: recovery, baseAngle: Math.PI * 0.7 * (1 - rephaseT) };
+            } else {
+                return { mz: mzAfter, mxy: mxyMax, spread: 0.3, coherence: 0.6, baseAngle: 0 };
+            }
+        } else { // IR
+            // Inversion Recovery: 16 frames
+            // 0: Equilibrium
+            // 1: 180° inversion (Mz = -1)
+            // 2-9: T1 recovery (Mz: -1 -> varies based on TI)
+            // 10: 90° readout pulse
+            // 11-15: Signal decay with T2
+            const ti = this.params.ti;
+            const t1 = 1000; // Approximate T1 for visualization
+            const mzAtTI = 1 - 2 * Math.exp(-ti / t1);
+
+            if (frame === 0) {
+                return { mz: 1, mxy: 0, spread: 0, coherence: 1, baseAngle: 0 };
+            } else if (frame === 1) {
+                return { mz: -1, mxy: 0, spread: 0, coherence: 0, baseAngle: 0 };
+            } else if (frame <= 9) {
+                const recoveryT = (frame - 1) / 8;
+                const mz = -1 + (1 + mzAtTI) * recoveryT * recoveryT; // Curved recovery
+                return { mz: Math.max(-1, Math.min(1, mz)), mxy: 0, spread: 0, coherence: 0, baseAngle: 0 };
+            } else if (frame === 10) {
+                // 90° readout - Mz goes to Mxy
+                return { mz: 0, mxy: Math.abs(mzAtTI), spread: 0, coherence: 1, baseAngle: 0 };
+            } else {
+                const decayT = (frame - 10) / 5;
+                const spread = decayT * 0.3;
+                const decay = Math.exp(-decayT * 1.2);
+                return { mz: 0, mxy: Math.abs(mzAtTI), spread: spread, coherence: decay, baseAngle: decayT * Math.PI * 0.3 };
             }
         }
     }
 
-    magCtx.putImageData(magImgData, 0, 0);
-    phaseCtx.putImageData(phaseImgData, 0, 0);
-
-    // Visual Marker for Resolution Boundary (k-space coverage)
-    // SNR baseline is 256×256; show color-coded boundary
-    // (centerX, centerY, halfRes already defined above)
-    const SNR_BASELINE = 256;
-    const snr = (SNR_BASELINE / matrixSize) * (SNR_BASELINE / matrixSize);
-
-    // Color based on SNR relative to baseline (256×256 = 1.0)
-    let strokeColor, fillColor;
-    if (snr >= 4) {
-        // High SNR (low resolution, e.g., 128×128 or smaller)
-        strokeColor = 'rgba(74, 222, 128, 0.8)';
-        fillColor = 'rgba(74, 222, 128, 0.9)';
-    } else if (snr >= 1) {
-        // Baseline or slightly above (e.g., 256×256)
-        strokeColor = 'rgba(56, 189, 248, 0.8)';
-        fillColor = 'rgba(56, 189, 248, 0.9)';
-    } else if (snr >= 0.5) {
-        // Below baseline (e.g., 384×384)
-        strokeColor = 'rgba(251, 191, 36, 0.8)';
-        fillColor = 'rgba(251, 191, 36, 0.9)';
-    } else {
-        // Low SNR (high resolution, e.g., 512×512)
-        strokeColor = 'rgba(248, 113, 113, 0.8)';
-        fillColor = 'rgba(248, 113, 113, 0.9)';
+    getStepInfo(seq, frame) {
+        const steps = {
+            'SE': [
+                { label: 'Equilibrium', description: 'Mz aligned with B0, no transverse magnetization' },
+                { label: '90° Excitation', description: 'RF pulse tips Mz into transverse plane (Mxy)' },
+                { label: 'Free Precession', description: 'Spins precess, begin to dephase due to T2* effects' },
+                { label: 'Dephasing', description: 'Field inhomogeneities cause progressive phase spread' },
+                { label: 'Dephasing', description: 'Signal decreases as spins lose coherence' },
+                { label: 'Dephasing', description: 'T2* decay continues, spins spread across phase wheel' },
+                { label: 'Max Dephase', description: 'Maximum dephasing before 180° pulse' },
+                { label: 'Pre-180° Pulse', description: 'Preparing for refocusing pulse' },
+                { label: '180° Refocus', description: 'Refocusing pulse flips spin phases - fast spins now behind' },
+                { label: 'Rephasing', description: 'Spins begin to reconverge as fast ones catch up' },
+                { label: 'Rephasing', description: 'Phase coherence increasing' },
+                { label: 'Rephasing', description: 'Spins approaching alignment' },
+                { label: 'Rephasing', description: 'Nearly rephased - signal recovering' },
+                { label: 'Rephasing', description: 'Almost at echo peak' },
+                { label: 'Near Echo', description: 'Spins nearly fully rephased' },
+                { label: 'Spin Echo!', description: 'Maximum signal - T2* effects cancelled, only T2 decay remains' }
+            ],
+            'GRE': [
+                { label: 'Equilibrium', description: 'Mz aligned with B0, ready for excitation' },
+                { label: 'α° Excitation', description: `${this.params.fa}° pulse tips partial Mz into Mxy` },
+                { label: 'Free Precession', description: 'Spins precess and dephase due to gradients + T2*' },
+                { label: 'Dephasing', description: 'Gradient dephasing + field inhomogeneity effects' },
+                { label: 'Dephasing', description: 'Rapid signal loss from gradient and T2*' },
+                { label: 'Dephasing', description: 'Continued dephasing - low signal' },
+                { label: 'Max Dephase', description: 'Maximum gradient-induced dephasing' },
+                { label: 'Gradient Reversal', description: 'Readout gradient polarity reversed' },
+                { label: 'Rephasing', description: 'Gradient rephasing begins - spins reconverging' },
+                { label: 'Rephasing', description: 'Partial recovery of phase coherence' },
+                { label: 'Rephasing', description: 'T2* effects remain - incomplete refocus' },
+                { label: 'Rephasing', description: 'Approaching gradient echo' },
+                { label: 'Rephasing', description: 'Nearly at echo center' },
+                { label: 'Near Echo', description: 'Gradient-induced dephasing cancelled' },
+                { label: 'Near Echo', description: 'T2* effects persist - lower signal than SE' },
+                { label: 'Gradient Echo', description: 'Partial refocus - T2* decay remains (no 180° pulse)' }
+            ],
+            'IR': [
+                { label: 'Equilibrium', description: 'Mz at maximum (+M0), aligned with B0' },
+                { label: '180° Inversion', description: 'Inversion pulse flips Mz to -M0' },
+                { label: 'T1 Recovery', description: 'Mz recovering toward +M0 via T1 relaxation' },
+                { label: 'T1 Recovery', description: 'Longitudinal magnetization increasing' },
+                { label: 'T1 Recovery', description: 'Mz approaching null point' },
+                { label: 'T1 Recovery', description: 'Recovery continues - Mz may cross zero' },
+                { label: 'T1 Recovery', description: 'Tissue-specific recovery rates create contrast' },
+                { label: 'T1 Recovery', description: 'Near TI - time for readout' },
+                { label: 'T1 Recovery', description: 'Mz value determines signal magnitude' },
+                { label: 'At TI', description: `TI=${this.params.ti}ms reached - readout pulse applied` },
+                { label: '90° Readout', description: 'Readout pulse converts Mz to Mxy signal' },
+                { label: 'Signal Decay', description: 'Transverse magnetization begins T2 decay' },
+                { label: 'Signal Decay', description: 'T2-weighted decay of the IR signal' },
+                { label: 'Signal Decay', description: 'Signal decreasing with T2 relaxation' },
+                { label: 'Signal Decay', description: 'Continued T2 decay' },
+                { label: 'Signal Acquired', description: 'IR signal acquired with T1 and T2 contrast' }
+            ]
+        };
+        return steps[seq][frame] || { label: 'Unknown', description: '' };
     }
 
-    const label = matrixSize + '×' + matrixSize + ' (SNR ' + snr.toFixed(2) + 'x)';
 
-    // Draw rectangle showing acquired k-space region
-    magCtx.strokeStyle = strokeColor;
-    magCtx.lineWidth = 2;
-    if (matrixSize < N) {
-        magCtx.setLineDash([5, 5]);
-    }
-    magCtx.strokeRect(centerX - halfRes, centerY - halfRes, matrixSize, matrixSize);
-    magCtx.setLineDash([]);
+    updateR2Chart() {
+        // Calculate T2 and T2* decay curves
+        const t2 = 80; // White matter T2 (ms)
+        const r2 = 1000 / t2; // s^-1
+        const r2prime = 2 * Math.PI * this.params.inhomogeneity; // s^-1
+        const r2star = r2 + r2prime;
+        const t2star = 1000 / r2star; // ms
 
-    // Add label
-    magCtx.fillStyle = fillColor;
-    magCtx.font = '10px Inter';
-    magCtx.shadowColor = 'black';
-    magCtx.shadowBlur = 2;
-    magCtx.fillText(label, 5, 12);
-    magCtx.shadowBlur = 0;
+        // Generate decay curve data
+        const t2Data = [];
+        const t2starData = [];
+        const maxTime = 200; // ms
 
-    // Also draw on phase canvas
-    phaseCtx.strokeStyle = strokeColor;
-    phaseCtx.lineWidth = 2;
-    if (matrixSize < N) {
-        phaseCtx.setLineDash([5, 5]);
-    }
-    phaseCtx.strokeRect(centerX - halfRes, centerY - halfRes, matrixSize, matrixSize);
-    phaseCtx.setLineDash([]);
-
-    // Visual Marker for Spike Noise
-    if (hasSpike) {
-        magCtx.beginPath();
-        magCtx.arc(spikeX, spikeY, 5, 0, 2 * Math.PI);
-        magCtx.strokeStyle = 'red';
-        magCtx.lineWidth = 2;
-        magCtx.stroke();
-
-        // Smart Label Positioning
-        magCtx.fillStyle = 'red';
-        magCtx.font = '10px Inter';
-
-        let labelX = spikeX + 8;
-        let labelY = spikeY + 3;
-        const text = `Spike (${spikeX}, ${spikeY})`;
-        const textWidth = magCtx.measureText(text).width;
-
-        // Check bounds
-        if (labelX + textWidth > N) {
-            labelX = spikeX - textWidth - 8;
-        }
-        if (labelY < 10) {
-            labelY = spikeY + 15;
-        } else if (labelY > N - 5) {
-            labelY = spikeY - 5;
+        for (let t = 0; t <= maxTime; t += 2) {
+            t2Data.push({ x: t, y: Math.exp(-t / t2) });
+            t2starData.push({ x: t, y: Math.exp(-t / t2star) });
         }
 
-        magCtx.fillText(text, labelX, labelY);
+        // Update chart data
+        this.r2Chart.data.datasets[0].data = t2Data;
+        this.r2Chart.data.datasets[1].data = t2starData;
+
+        // Highlight current sequence's curve
+        const isSE = this.params.sequence === 'SE';
+        this.r2Chart.data.datasets[0].borderWidth = isSE ? 4 : 2;
+        this.r2Chart.data.datasets[1].borderWidth = isSE ? 2 : 4;
+        this.r2Chart.data.datasets[0].borderDash = isSE ? [] : [5, 5];
+        this.r2Chart.data.datasets[1].borderDash = isSE ? [5, 5] : [];
+
+        // Add TE indicator line
+        if (this.r2Chart.data.datasets.length > 2) {
+            this.r2Chart.data.datasets.pop();
+        }
+        this.r2Chart.data.datasets.push({
+            label: 'Current TE',
+            data: [{ x: this.params.te, y: 0 }, { x: this.params.te, y: 1 }],
+            borderColor: '#ef4444',
+            borderWidth: 2,
+            borderDash: [3, 3],
+            pointRadius: 0,
+            fill: false
+        });
+
+        this.r2Chart.update();
+
+        // Update annotations
+        const seAnnotation = document.getElementById('se-annotation');
+        const greAnnotation = document.getElementById('gre-annotation');
+        if (this.params.sequence === 'SE' || this.params.sequence === 'IR') {
+            seAnnotation.style.display = 'block';
+            greAnnotation.style.display = 'none';
+        } else {
+            seAnnotation.style.display = 'none';
+            greAnnotation.style.display = 'block';
+        }
+
+        // Update parameter badge with T2 values
+        const r2Badge = document.getElementById('r2-params');
+        if (r2Badge) {
+            r2Badge.textContent = `T2=${t2}ms → T2*=${t2star.toFixed(0)}ms (ΔB₀=${this.params.inhomogeneity}Hz)`;
+        }
+    }
+
+    updateRFTimeline() {
+        const svg = document.getElementById('rf-gradient-timeline');
+        const seq = this.params.sequence;
+        const frame = this.phaseWheelFrame;
+        const ns = 'http://www.w3.org/2000/svg';
+
+        // Sequence colors
+        const seqColors = {
+            'SE': '#3b82f6',
+            'GRE': '#10b981',
+            'IR': '#a855f7'
+        };
+        const seqColor = seqColors[seq];
+
+        // Clear SVG
+        svg.innerHTML = '';
+
+        // Dark background with gradient
+        const defs = document.createElementNS(ns, 'defs');
+        const bgGrad = document.createElementNS(ns, 'linearGradient');
+        bgGrad.setAttribute('id', 'timelineBg');
+        bgGrad.setAttribute('x1', '0%');
+        bgGrad.setAttribute('y1', '0%');
+        bgGrad.setAttribute('x2', '0%');
+        bgGrad.setAttribute('y2', '100%');
+        bgGrad.innerHTML = `
+            <stop offset="0%" stop-color="#1e293b"/>
+            <stop offset="100%" stop-color="#0f172a"/>
+        `;
+        defs.appendChild(bgGrad);
+
+        // Glow filter
+        const glowFilter = document.createElementNS(ns, 'filter');
+        glowFilter.setAttribute('id', 'timelineGlow');
+        glowFilter.innerHTML = `
+            <feGaussianBlur stdDeviation="2" result="coloredBlur"/>
+            <feMerge>
+                <feMergeNode in="coloredBlur"/>
+                <feMergeNode in="SourceGraphic"/>
+            </feMerge>
+        `;
+        defs.appendChild(glowFilter);
+        svg.appendChild(defs);
+
+        const bg = document.createElementNS(ns, 'rect');
+        bg.setAttribute('width', '800');
+        bg.setAttribute('height', '200');
+        bg.setAttribute('fill', 'url(#timelineBg)');
+        bg.setAttribute('rx', '8');
+        svg.appendChild(bg);
+
+        // Row configuration - 5 rows now: RF, Gz, Gy, Gx, Signal
+        const rfY = 30;
+        const gzY = 60;
+        const gyY = 95;
+        const gxY = 130;
+        const signalY = 160;
+        const axisY = 185;
+
+        // Row labels
+        this.addTimelineLabel(svg, 25, rfY, 'RF', seqColor);
+        this.addTimelineLabel(svg, 25, gzY, 'Gz', '#22c55e');  // Slice select
+        this.addTimelineLabel(svg, 25, gyY, 'Gy', '#eab308');  // Phase encode
+        this.addTimelineLabel(svg, 25, gxY, 'Gx', '#60a5fa');  // Frequency encode
+        this.addTimelineLabel(svg, 25, signalY, 'Sig', '#ef4444');
+
+        // Horizontal guide lines
+        [rfY, gzY, gyY, gxY, signalY].forEach(y => {
+            const line = document.createElementNS(ns, 'line');
+            line.setAttribute('x1', '50');
+            line.setAttribute('y1', y);
+            line.setAttribute('x2', '780');
+            line.setAttribute('y2', y);
+            line.setAttribute('stroke', 'rgba(148, 163, 184, 0.2)');
+            line.setAttribute('stroke-width', '1');
+            svg.appendChild(line);
+        });
+
+        const startX = 70;
+        const endX = 760;
+        const totalWidth = endX - startX;
+
+        // Calculate current time position based on frame
+        const currentTimeX = startX + (frame / (this.totalFrames - 1)) * totalWidth;
+
+        // Draw current time indicator (vertical line synced with phase wheel)
+        const timeIndicator = document.createElementNS(ns, 'line');
+        timeIndicator.setAttribute('x1', currentTimeX);
+        timeIndicator.setAttribute('y1', 15);
+        timeIndicator.setAttribute('x2', currentTimeX);
+        timeIndicator.setAttribute('y2', axisY);
+        timeIndicator.setAttribute('stroke', '#ef4444');
+        timeIndicator.setAttribute('stroke-width', '2');
+        timeIndicator.setAttribute('stroke-dasharray', '4,2');
+        timeIndicator.setAttribute('filter', 'url(#timelineGlow)');
+        svg.appendChild(timeIndicator);
+
+        // Time indicator dot
+        const timeDot = document.createElementNS(ns, 'circle');
+        timeDot.setAttribute('cx', currentTimeX);
+        timeDot.setAttribute('cy', axisY);
+        timeDot.setAttribute('r', '5');
+        timeDot.setAttribute('fill', '#ef4444');
+        timeDot.setAttribute('filter', 'url(#timelineGlow)');
+        svg.appendChild(timeDot);
+
+        if (seq === 'SE') {
+            // Spin Echo timing
+            const te180Frac = 0.3;  // 180° at ~30% of TR
+            const teFrac = 0.6;     // Echo at ~60% of TR
+            const te180X = startX + te180Frac * totalWidth;
+            const teX = startX + teFrac * totalWidth;
+
+            // RF: 90° excitation
+            this.addRFPulseDark(svg, startX, rfY, 20, '90°', '#f59e0b');
+            // RF: 180° refocusing
+            this.addRFPulseDark(svg, te180X, rfY, 28, '180°', '#a855f7');
+
+            // Gz: Slice select during RF pulses
+            this.addGradientLobeDark(svg, startX - 5, gzY, 40, 18, '#22c55e', 'up');
+            this.addGradientLobeDark(svg, startX + 35, gzY, 20, 10, '#22c55e', 'down'); // Rephaser
+            this.addGradientLobeDark(svg, te180X - 5, gzY, 40, 18, '#22c55e', 'up');
+
+            // Gy: Phase encoding (short blip)
+            this.addGradientLobeDark(svg, startX + 60, gyY, 30, 15, '#eab308', 'up');
+
+            // Gx: Frequency encode (dephase + readout)
+            this.addGradientLobeDark(svg, startX + 60, gxY, 40, 18, '#60a5fa', 'down');
+            this.addGradientLobeDark(svg, te180X + 40, gxY, 80, 18, '#60a5fa', 'up'); // Readout
+
+            // Signal echo
+            this.addSignalEchoDark(svg, teX, signalY, seqColor);
+
+            // TE/2 and TE markers
+            this.addTimeMarkerDark(svg, te180X + 17, 12, axisY, 'TE/2');
+            this.addTimeMarkerDark(svg, teX, 12, axisY, 'TE', seqColor);
+
+        } else if (seq === 'GRE') {
+            // Gradient Echo timing
+            const teFrac = 0.4;
+            const teX = startX + teFrac * totalWidth;
+
+            // RF: α excitation
+            const pulseHeight = 12 + (this.params.fa / 180) * 16;
+            this.addRFPulseDark(svg, startX, rfY, pulseHeight, `${Math.round(this.params.fa)}°`, '#f59e0b');
+
+            // Gz: Slice select
+            this.addGradientLobeDark(svg, startX - 5, gzY, 40, 16, '#22c55e', 'up');
+            this.addGradientLobeDark(svg, startX + 35, gzY, 20, 8, '#22c55e', 'down');
+
+            // Gy: Phase encoding
+            this.addGradientLobeDark(svg, startX + 50, gyY, 25, 12, '#eab308', 'up');
+
+            // Gx: Bipolar (dephase then rephase)
+            this.addGradientLobeDark(svg, startX + 50, gxY, 35, 16, '#60a5fa', 'down');
+            this.addGradientLobeDark(svg, startX + 90, gxY, 60, 16, '#60a5fa', 'up'); // Readout
+
+            // Signal echo (smaller due to T2*)
+            this.addSignalEchoDark(svg, teX, signalY, seqColor, 0.7);
+
+            // TE marker
+            this.addTimeMarkerDark(svg, teX, 12, axisY, 'TE', seqColor);
+
+        } else { // IR
+            // Inversion Recovery timing
+            const tiFrac = 0.5;
+            const readoutFrac = 0.55;
+            const teFrac = 0.75;
+            const tiX = startX + tiFrac * totalWidth;
+            const readoutX = startX + readoutFrac * totalWidth;
+            const teX = startX + teFrac * totalWidth;
+
+            // RF: 180° inversion
+            this.addRFPulseDark(svg, startX, rfY, 28, '180°', '#ef4444');
+            this.addTimelineText(svg, startX + 17, rfY - 22, 'Inv', 'middle', '8px', '#ef4444');
+
+            // RF: Readout pulse at TI
+            this.addRFPulseDark(svg, readoutX, rfY, 20, `${Math.round(this.params.fa)}°`, '#f59e0b');
+
+            // Gz: Slice select during inversion and readout
+            this.addGradientLobeDark(svg, startX - 5, gzY, 40, 16, '#22c55e', 'up');
+            this.addGradientLobeDark(svg, readoutX - 5, gzY, 35, 14, '#22c55e', 'up');
+            this.addGradientLobeDark(svg, readoutX + 30, gzY, 18, 7, '#22c55e', 'down');
+
+            // Gy: Phase encoding after readout
+            this.addGradientLobeDark(svg, readoutX + 45, gyY, 25, 12, '#eab308', 'up');
+
+            // Gx: Frequency encode
+            this.addGradientLobeDark(svg, readoutX + 45, gxY, 30, 14, '#60a5fa', 'down');
+            this.addGradientLobeDark(svg, readoutX + 80, gxY, 55, 14, '#60a5fa', 'up');
+
+            // Signal echo
+            this.addSignalEchoDark(svg, teX, signalY, seqColor);
+
+            // TI and TE markers
+            this.addTimeMarkerDark(svg, tiX, 12, axisY, 'TI', '#a855f7');
+            this.addTimeMarkerDark(svg, teX, 12, axisY, 'TE', seqColor);
+        }
+
+        // Time axis
+        const axis = document.createElementNS(ns, 'line');
+        axis.setAttribute('x1', startX - 10);
+        axis.setAttribute('y1', axisY);
+        axis.setAttribute('x2', endX + 10);
+        axis.setAttribute('y2', axisY);
+        axis.setAttribute('stroke', '#64748b');
+        axis.setAttribute('stroke-width', '1');
+        svg.appendChild(axis);
+
+        // Arrow at end
+        const arrow = document.createElementNS(ns, 'polygon');
+        arrow.setAttribute('points', `${endX + 10},${axisY} ${endX + 5},${axisY - 3} ${endX + 5},${axisY + 3}`);
+        arrow.setAttribute('fill', '#64748b');
+        svg.appendChild(arrow);
+
+        // Time labels
+        this.addTimelineText(svg, startX, axisY + 12, '0', 'middle', '9px', '#64748b');
+        this.addTimelineText(svg, endX - 20, axisY + 12, 'TR', 'middle', '9px', '#64748b');
+
+        // Update parameter badge
+        const timelineBadge = document.getElementById('timeline-params');
+        if (timelineBadge) {
+            const params = [`TR=${this.params.tr}ms`, `TE=${this.params.te}ms`];
+            if (seq === 'IR') params.push(`TI=${this.params.ti}ms`);
+            if (seq === 'GRE' || seq === 'IR') params.push(`FA=${Math.round(this.params.fa)}°`);
+            timelineBadge.textContent = params.join(' | ');
+        }
+    }
+
+    // Dark theme versions of timeline helpers
+    addRFPulseDark(svg, x, y, height, label, color) {
+        const ns = 'http://www.w3.org/2000/svg';
+        const width = 30;
+
+        // Sinc-like pulse shape
+        const path = document.createElementNS(ns, 'path');
+        const d = `M ${x} ${y} Q ${x + width * 0.25} ${y - height} ${x + width * 0.5} ${y - height} Q ${x + width * 0.75} ${y - height} ${x + width} ${y}`;
+        path.setAttribute('d', d);
+        path.setAttribute('fill', 'none');
+        path.setAttribute('stroke', color);
+        path.setAttribute('stroke-width', '3');
+        path.setAttribute('stroke-linecap', 'round');
+        path.setAttribute('filter', 'url(#timelineGlow)');
+        svg.appendChild(path);
+
+        // Label
+        const text = document.createElementNS(ns, 'text');
+        text.setAttribute('x', x + width / 2);
+        text.setAttribute('y', y - height - 5);
+        text.setAttribute('font-size', '9');
+        text.setAttribute('font-weight', '600');
+        text.setAttribute('fill', color);
+        text.setAttribute('text-anchor', 'middle');
+        text.setAttribute('font-family', 'Inter, sans-serif');
+        text.textContent = label;
+        svg.appendChild(text);
+    }
+
+    addGradientLobeDark(svg, x, y, w, h, color, direction) {
+        const ns = 'http://www.w3.org/2000/svg';
+        const yOffset = direction === 'up' ? -h : 0;
+        const points = direction === 'up'
+            ? `${x},${y} ${x + w * 0.15},${y + yOffset} ${x + w * 0.85},${y + yOffset} ${x + w},${y}`
+            : `${x},${y} ${x + w * 0.15},${y + h} ${x + w * 0.85},${y + h} ${x + w},${y}`;
+
+        const polygon = document.createElementNS(ns, 'polygon');
+        polygon.setAttribute('points', points);
+        polygon.setAttribute('fill', color);
+        polygon.setAttribute('fill-opacity', '0.3');
+        polygon.setAttribute('stroke', color);
+        polygon.setAttribute('stroke-width', '1.5');
+        svg.appendChild(polygon);
+    }
+
+    addSignalEchoDark(svg, x, y, color, scale = 1) {
+        const ns = 'http://www.w3.org/2000/svg';
+        const width = 50 * scale;
+        const height = 18 * scale;
+
+        // Echo shape
+        const path = document.createElementNS(ns, 'path');
+        const d = `M ${x - width / 2} ${y} Q ${x - width / 4} ${y - height * 0.3} ${x} ${y - height} Q ${x + width / 4} ${y - height * 0.3} ${x + width / 2} ${y}`;
+        path.setAttribute('d', d);
+        path.setAttribute('fill', color);
+        path.setAttribute('fill-opacity', '0.4');
+        path.setAttribute('stroke', color);
+        path.setAttribute('stroke-width', '2');
+        path.setAttribute('filter', 'url(#timelineGlow)');
+        svg.appendChild(path);
+    }
+
+    addTimeMarkerDark(svg, x, y1, y2, label, color = '#94a3b8') {
+        const ns = 'http://www.w3.org/2000/svg';
+
+        // Vertical dashed line
+        const line = document.createElementNS(ns, 'line');
+        line.setAttribute('x1', x);
+        line.setAttribute('y1', y1);
+        line.setAttribute('x2', x);
+        line.setAttribute('y2', y2);
+        line.setAttribute('stroke', color);
+        line.setAttribute('stroke-width', '1');
+        line.setAttribute('stroke-dasharray', '3,2');
+        line.setAttribute('opacity', '0.6');
+        svg.appendChild(line);
+
+        // Label
+        const text = document.createElementNS(ns, 'text');
+        text.setAttribute('x', x);
+        text.setAttribute('y', y1 - 3);
+        text.setAttribute('font-size', '8');
+        text.setAttribute('font-weight', '500');
+        text.setAttribute('fill', color);
+        text.setAttribute('text-anchor', 'middle');
+        text.setAttribute('font-family', 'Inter, sans-serif');
+        text.textContent = label;
+        svg.appendChild(text);
+    }
+
+    addTimelineLabel(svg, x, y, text, color) {
+        const ns = 'http://www.w3.org/2000/svg';
+        const label = document.createElementNS(ns, 'text');
+        label.setAttribute('x', x);
+        label.setAttribute('y', y + 4);
+        label.setAttribute('font-size', '12');
+        label.setAttribute('font-weight', '600');
+        label.setAttribute('fill', color);
+        label.textContent = text;
+        svg.appendChild(label);
+    }
+
+    addRFPulse(svg, x, y, height, label, color) {
+        const ns = 'http://www.w3.org/2000/svg';
+        const width = 35;
+
+        // Sinc-like pulse shape
+        const path = document.createElementNS(ns, 'path');
+        const d = `M ${x} ${y}
+                   Q ${x + width * 0.25} ${y - height} ${x + width * 0.5} ${y - height}
+                   Q ${x + width * 0.75} ${y - height} ${x + width} ${y}`;
+        path.setAttribute('d', d);
+        path.setAttribute('fill', 'none');
+        path.setAttribute('stroke', color);
+        path.setAttribute('stroke-width', '4');
+        path.setAttribute('stroke-linecap', 'round');
+        svg.appendChild(path);
+
+        // Label
+        const text = document.createElementNS(ns, 'text');
+        text.setAttribute('x', x + width / 2);
+        text.setAttribute('y', y - height - 8);
+        text.setAttribute('font-size', '12');
+        text.setAttribute('font-weight', '700');
+        text.setAttribute('fill', color);
+        text.setAttribute('text-anchor', 'middle');
+        text.textContent = label;
+        svg.appendChild(text);
+    }
+
+    addSignalEcho(svg, x, y, color, scale = 1) {
+        const ns = 'http://www.w3.org/2000/svg';
+        const width = 60 * scale;
+        const height = 25 * scale;
+
+        // Echo shape (Gaussian-like)
+        const path = document.createElementNS(ns, 'path');
+        const d = `M ${x - width / 2} ${y}
+                   Q ${x - width / 4} ${y - height * 0.3} ${x} ${y - height}
+                   Q ${x + width / 4} ${y - height * 0.3} ${x + width / 2} ${y}`;
+        path.setAttribute('d', d);
+        path.setAttribute('fill', color);
+        path.setAttribute('fill-opacity', '0.3');
+        path.setAttribute('stroke', color);
+        path.setAttribute('stroke-width', '2');
+        svg.appendChild(path);
+    }
+
+    addTimeMarker(svg, x, y1, y2, label, color = '#64748b') {
+        const ns = 'http://www.w3.org/2000/svg';
+
+        // Vertical dashed line
+        const line = document.createElementNS(ns, 'line');
+        line.setAttribute('x1', x);
+        line.setAttribute('y1', y1);
+        line.setAttribute('x2', x);
+        line.setAttribute('y2', y2);
+        line.setAttribute('stroke', color);
+        line.setAttribute('stroke-width', '1.5');
+        line.setAttribute('stroke-dasharray', '4,3');
+        svg.appendChild(line);
+
+        // Label
+        const text = document.createElementNS(ns, 'text');
+        text.setAttribute('x', x);
+        text.setAttribute('y', y1 - 5);
+        text.setAttribute('font-size', '10');
+        text.setAttribute('font-weight', '600');
+        text.setAttribute('fill', color);
+        text.setAttribute('text-anchor', 'middle');
+        text.textContent = label;
+        svg.appendChild(text);
+    }
+
+    updateMechanicsColors(seq) {
+        // Set sequence-specific colors for mechanics tab
+        const colors = {
+            'SE': '#3b82f6',   // Blue
+            'GRE': '#10b981',  // Green
+            'IR': '#a855f7'    // Purple
+        };
+        const color = colors[seq] || '#3b82f6';
+
+        // Update panel title colors via CSS custom property
+        document.documentElement.style.setProperty('--seq-color', color);
+    }
+
+    addRFBlock(svg, x, y, w, h, color, label) {
+        const ns = 'http://www.w3.org/2000/svg';
+        const rect = document.createElementNS(ns, 'rect');
+        rect.setAttribute('x', x);
+        rect.setAttribute('y', y);
+        rect.setAttribute('width', w);
+        rect.setAttribute('height', h);
+        rect.setAttribute('fill', color);
+        rect.setAttribute('stroke', '#1e293b');
+        rect.setAttribute('stroke-width', '1');
+        rect.setAttribute('rx', '4');
+        svg.appendChild(rect);
+
+        const text = document.createElementNS(ns, 'text');
+        text.setAttribute('x', x + w / 2);
+        text.setAttribute('y', y + h / 2 + 4);
+        text.setAttribute('text-anchor', 'middle');
+        text.setAttribute('font-size', '14');
+        text.setAttribute('font-weight', 'bold');
+        text.setAttribute('fill', '#fff');
+        text.textContent = label;
+        svg.appendChild(text);
+    }
+
+    addGradientLobe(svg, x, y, w, h, color, direction) {
+        const ns = 'http://www.w3.org/2000/svg';
+        const points = direction === 'down'
+            ? `${x},${y} ${x + w / 2},${y + h} ${x + w},${y}`
+            : `${x},${y + h} ${x + w / 2},${y} ${x + w},${y + h}`;
+
+        const polygon = document.createElementNS(ns, 'polygon');
+        polygon.setAttribute('points', points);
+        polygon.setAttribute('fill', color);
+        polygon.setAttribute('stroke', '#1e40af');
+        polygon.setAttribute('stroke-width', '1.5');
+        svg.appendChild(polygon);
+    }
+
+    addEchoMarker(svg, x, y1, y2, label) {
+        const ns = 'http://www.w3.org/2000/svg';
+        const line = document.createElementNS(ns, 'line');
+        line.setAttribute('x1', x);
+        line.setAttribute('y1', y1);
+        line.setAttribute('x2', x);
+        line.setAttribute('y2', y2);
+        line.setAttribute('stroke', '#ef4444');
+        line.setAttribute('stroke-width', '2');
+        line.setAttribute('stroke-dasharray', '5,5');
+        svg.appendChild(line);
+
+        const text = document.createElementNS(ns, 'text');
+        text.setAttribute('x', x);
+        text.setAttribute('y', y1 - 5);
+        text.setAttribute('text-anchor', 'middle');
+        text.setAttribute('font-size', '13');
+        text.setAttribute('font-weight', '600');
+        text.setAttribute('fill', '#ef4444');
+        text.textContent = label;
+        svg.appendChild(text);
+    }
+
+    addTimelineText(svg, x, y, text, anchor = 'start', size = '14px', color = '#475569') {
+        const ns = 'http://www.w3.org/2000/svg';
+        const textEl = document.createElementNS(ns, 'text');
+        textEl.setAttribute('x', x);
+        textEl.setAttribute('y', y);
+        textEl.setAttribute('text-anchor', anchor);
+        textEl.setAttribute('font-size', size);
+        textEl.setAttribute('fill', color);
+        textEl.textContent = text;
+        svg.appendChild(textEl);
     }
 }
 
-function renderGrating(kx, ky) {
-    // Render grating to Original Object canvas (temporarily overlaying)
-    const canvas = document.getElementById('originalCanvas');
-    const ctx = canvas.getContext('2d');
-    const imgData = ctx.createImageData(N, N);
-
-    // kx, ky are indices in 0..N-1
-    // Center is N/2
-    // Normalized freq: (k - N/2) / N
-
-    const fx = (kx - N / 2) / N;
-    const fy = (ky - N / 2) / N;
-
-    for (let y = 0; y < N; y++) {
-        for (let x = 0; x < N; x++) {
-            const idx = (y * N + x) * 4;
-
-            // Grating equation: cos(2*pi*(fx*x + fy*y))
-            // Map -1..1 to 0..255
-            const val = Math.cos(2 * Math.PI * (fx * x + fy * y));
-            const norm = ((val + 1) / 2) * 255;
-
-            imgData.data[idx] = norm;
-            imgData.data[idx + 1] = norm;
-            imgData.data[idx + 2] = norm;
-            imgData.data[idx + 3] = 255;
-        }
-    }
-
-    ctx.putImageData(imgData, 0, 0);
-
-    // Also add text overlay
-    ctx.fillStyle = "white";
-    ctx.font = "14px Inter";
-    ctx.shadowColor = "black";
-    ctx.shadowBlur = 4;
-    ctx.fillText(`Spatial Frequency: (${(kx - N / 2)}, ${(ky - N / 2)})`, 10, 20);
-}
-
-function bindEvents() {
-    document.getElementById('phantomSelect').addEventListener('change', (e) => {
-        phantomType = e.target.value;
-        generatePhantom(phantomType);
-        renderAll();
-    });
-
-    document.getElementById('btnStartFill').addEventListener('click', () => {
-        // Check if acquisition is complete for current resolution
-        const totalLines = matrixSize;
-        if (currentLine >= totalLines) {
-            resetAcquisition();
-        }
-        startAnimation();
-    });
-    document.getElementById('btnStopFill').addEventListener('click', stopAnimation);
-
-    document.getElementById('btnAcquireAll').addEventListener('click', () => {
-        stopAnimation();
-        acquireAllLines();
-        renderAll();
-        updateStatus('Acquisition Complete');
-    });
-
-    document.getElementById('btnClear').addEventListener('click', () => {
-        stopAnimation();
-        resetAcquisition();
-        renderAll();
-    });
-
-    document.getElementById('speedRange').addEventListener('input', (e) => {
-        animationSpeed = parseInt(e.target.value);
-    });
-
-    document.getElementById('noiseRange').addEventListener('input', (e) => {
-        noiseLevel = parseInt(e.target.value);
-        // Re-acquire to show noise effect immediately if any data acquired
-        if (!isAnimating && currentLine > 0) {
-            acquireAllLines();
-            renderAll();
-        }
-    });
-
-    document.getElementById('motionRange').addEventListener('input', (e) => {
-        motionLevel = parseInt(e.target.value);
-        if (!isAnimating && currentLine > 0) {
-            acquireAllLines();
-            renderAll();
-        }
-    });
-
-    document.getElementById('spikeCheck').addEventListener('change', (e) => {
-        hasSpike = e.target.checked;
-        if (hasSpike) {
-            // Randomize spike location within current resolution's k-space boundary
-            const halfRes = matrixSize / 2;
-            const centerX = N / 2;
-            const centerY = N / 2;
-            spikeX = Math.floor(centerX - halfRes + Math.random() * matrixSize);
-            spikeY = Math.floor(centerY - halfRes + Math.random() * matrixSize);
-        }
-        // Always re-acquire when spike changes (to inject or remove spike)
-        if (!isAnimating && currentLine > 0) {
-            acquireAllLines();
-            renderAll();
-        }
-    });
-
-    document.getElementById('skipYRange').addEventListener('input', (e) => {
-        skipY = parseInt(e.target.value);
-        document.getElementById('skipYVal').innerText = skipY;
-        if (!isAnimating && currentLine > 0) {
-            acquireAllLines();
-            renderAll();
-        }
-    });
-
-    // Matrix Size (Resolution) slider
-    document.getElementById('matrixSizeRange').addEventListener('input', (e) => {
-        matrixSize = parseInt(e.target.value);
-        updateResolutionInfo();
-        // Reset spike position if it's now outside the new boundary
-        if (hasSpike) {
-            const halfRes = matrixSize / 2;
-            const centerX = N / 2;
-            const centerY = N / 2;
-            const minX = centerX - halfRes;
-            const maxX = centerX + halfRes;
-            const minY = centerY - halfRes;
-            const maxY = centerY + halfRes;
-            if (spikeX < minX || spikeX >= maxX || spikeY < minY || spikeY >= maxY) {
-                // Relocate spike within new boundary
-                spikeX = Math.floor(centerX - halfRes + Math.random() * matrixSize);
-                spikeY = Math.floor(centerY - halfRes + Math.random() * matrixSize);
-            }
-        }
-        // Clear and re-acquire with new resolution if any data was acquired
-        if (!isAnimating && currentLine > 0) {
-            // Clear acquired k-space to remove data outside new boundary
-            resetAcquisition();
-            acquireAllLines();
-            renderAll();
-        }
-    });
-
-    // Simulate SNR checkbox
-    document.getElementById('simulateSNRCheck').addEventListener('change', (e) => {
-        simulateSNR = e.target.checked;
-        if (!isAnimating && currentLine > 0) {
-            acquireAllLines();
-            renderAll();
-        }
-    });
-
-    // K-Space Hover (on Magnitude canvas)
-    const kCanvas = document.getElementById('kspaceMagCanvas');
-
-    kCanvas.addEventListener('mousemove', (e) => {
-        const rect = kCanvas.getBoundingClientRect();
-        const scaleX = N / rect.width;
-        const scaleY = N / rect.height;
-
-        const x = Math.floor((e.clientX - rect.left) * scaleX);
-        const y = Math.floor((e.clientY - rect.top) * scaleY);
-
-        if (x >= 0 && x < N && y >= 0 && y < N) {
-            isInspecting = true;
-            renderGrating(x, y);
-            updateStatus(`Inspecting K-Space: (${x - N / 2}, ${y - N / 2})`);
-        }
-    });
-
-    kCanvas.addEventListener('mouseleave', () => {
-        isInspecting = false;
-        renderImage();
-        updateStatus(isAnimating ? `Acquiring... Line ${currentLine}/${matrixSize}` : 'Ready');
-    });
-
-    // Partial Fourier controls
-    document.getElementById('partialFourierSelect').addEventListener('change', (e) => {
-        partialFourierFraction = parseFloat(e.target.value);
-        // Show/hide reconstruction method selector
-        document.getElementById('pfReconControl').style.display =
-            partialFourierFraction < 1.0 ? 'block' : 'none';
-        updateResolutionInfo();
-        if (!isAnimating && currentLine > 0) {
-            acquireAllLines();
-            renderAll();
-        }
-    });
-
-    document.getElementById('pfReconSelect').addEventListener('change', (e) => {
-        partialFourierRecon = e.target.value;
-        if (!isAnimating && currentLine > 0) {
-            reconstructImage();
-            renderAll();
-        }
-    });
-
-    // Parallel Imaging controls
-    document.getElementById('parallelImagingSelect').addEventListener('change', (e) => {
-        const val = parseInt(e.target.value);
-        numCoils = val;
-        parallelAcceleration = val; // R = number of coils for simplified demo
-        updateResolutionInfo();
-        if (!isAnimating && currentLine > 0) {
-            acquireAllLines();
-            renderAll();
-        }
-    });
-}
+// Initialize
+const app = new MRPhysics();
+app.init();

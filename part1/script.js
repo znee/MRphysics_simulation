@@ -1,1915 +1,1994 @@
 /**
- * MR Physics Simulation Logic
+ * Part 0: NMR Signal Formation
+ *
+ * Interactive simulation showing how nuclear spins create the MR signal.
+ * Based on the Bloch equations and fundamental NMR physics.
+ *
+ * Modules:
+ * A - B0 Alignment (spin alignment with magnetic field)
+ * B - FID Formation (RF excitation & dephasing)
+ * C - Echo Formation (Spin Echo, Gradient Echo)
+ * D - GRE Variants (Spoiled GRE vs SSFP, multi-TR steady-state)
  */
 
-class MRPhysics {
-    constructor() {
-        // Fixed Tissues for Brain Schematic
-        this.tissues = [
-            { id: 'fat', name: 'Fat', t1: 250, t2: 60, pd: 0.9, color: '#fbbf24', regionId: 'region-fat' },
-            { id: 'gm', name: 'Gray Matter', t1: 950, t2: 100, pd: 0.8, color: '#94a3b8', regionId: 'region-gm' },
-            { id: 'wm', name: 'White Matter', t1: 600, t2: 80, pd: 0.7, color: '#e2e8f0', regionId: 'region-wm' },
-            { id: 'csf', name: 'CSF', t1: 4500, t2: 2200, pd: 1.0, color: '#38bdf8', regionId: 'region-csf' }
-        ];
+// ============================================================================
+// CONSTANTS & CONFIGURATION
+// ============================================================================
 
-        this.params = {
-            sequence: 'SE',
-            b0: 1.5,
-            inhomogeneity: 0, // Hz
-            tr: 500,    // ms
-            te: 20,     // ms
-            ti: 0,      // ms (for IR)
-            fa: 90      // degrees (for GRE/SE)
+const GAMMA = 42.577; // Gyromagnetic ratio for 1H (MHz/T)
+const DEFAULT_MAX_TIME = 1500; // Default simulation duration (ms) - long enough to see T1 recovery
+
+const CONFIG = {
+    // Animation
+    animationSpeed: 1.0,
+    isPlaying: false,
+    currentTime: 0,       // ms
+    maxTime: DEFAULT_MAX_TIME,
+    dt: 0.5,              // Time step (ms)
+
+    // Module A: B0 Alignment
+    // T1 = 500ms for educational demo (faster to observe recovery)
+    // Real brain tissue: WM ~600-800ms, GM ~900-1200ms at 1.5T
+    T1: 500,              // ms (shorter for faster demo)
+    T2: 80,               // ms (used for transverse decay during alignment)
+    B0: 1.5,              // Tesla
+
+    // Module B: FID
+    flipAngle: 90,        // degrees (moved from Module A)
+
+    // Module B: Ensemble
+    numSpins: 100,
+    freqSpread: 30,       // Hz (determines T2*)
+    T2ensemble: 100,      // ms (intrinsic T2)
+    showIndividual: true,
+
+    // Module C: Echo
+    // Defaults for visible echo formation:
+    // Spin Echo: 180° refocuses B0 inhomogeneity → echo at T2 envelope
+    // Gradient Echo: gradient reversal does NOT refocus B0 → echo at T2* envelope
+    // - TE = 60ms gives enough time to see dephasing and rephasing
+    // - T2 = 200ms (long) so SE echo amplitude is high
+    // - T2* = 30ms (short) so GRE echo is visibly lower than SE (T2* weighting)
+    echoType: 'spin',     // 'spin' or 'gradient'
+    TE: 60,               // ms
+    T2echo: 200,          // ms (long T2 for strong SE echo)
+    T2starEcho: 30,       // ms (short T2* - shows GRE vs SE difference)
+    T2starEchoSE: 30,     // Saved T2* for Spin Echo
+    T2starEchoGRE: 100,   // Saved T2* for Gradient Echo (longer for visible echo)
+
+    // Module D: GRE Variants (Spoiled vs SSFP)
+    // Multi-TR simulation to show steady-state magnetization
+    greType: 'spoiled',   // 'spoiled' or 'ssfp'
+    flipAngleD: 30,       // degrees
+    TR: 25,               // ms (short TR typical for GRE)
+    T1D: 600,             // ms (typical tissue T1)
+    T2D: 80,              // ms (typical tissue T2)
+    numTR: 8,             // Number of TR cycles to simulate
+
+    // Current module
+    currentModule: 'A'
+};
+
+// ============================================================================
+// SPIN CLASS - Represents a single nuclear spin
+// ============================================================================
+
+class Spin {
+    constructor(T1, T2, deltaOmega = 0, B0 = 1.5) {
+        // Magnetization components (normalized to M0 = 1)
+        this.Mx = 0;
+        this.My = 0;
+        this.Mz = 1.0;  // Equilibrium along B0
+
+        // Relaxation times
+        this.T1 = T1;
+        this.T2 = T2;
+
+        // B0 inhomogeneity offset (Hz) - causes T2* decay
+        // This is FIXED and NOT refocused by gradient reversal
+        this.deltaOmegaB0 = deltaOmega;
+
+        // Gradient-induced frequency offset (Hz)
+        // This IS refocused by gradient reversal (sign flip)
+        this.deltaOmegaGrad = 0;
+        this.gradientSign = 1;
+
+        // B0 field strength (Tesla)
+        this.B0 = B0;
+
+        // Phase accumulation
+        this.phase = 0;
+    }
+
+    /**
+     * Get total frequency offset (B0 inhomogeneity + gradient)
+     */
+    getTotalDeltaOmega() {
+        return this.deltaOmegaB0 + (this.deltaOmegaGrad * this.gradientSign);
+    }
+
+    /**
+     * Apply RF pulse (instantaneous rotation)
+     * @param {number} flipAngle - Flip angle in degrees
+     * @param {number} phaseAngle - Phase of RF pulse in degrees (0 = along x)
+     */
+    applyRFPulse(flipAngle, phaseAngle = 0) {
+        const alpha = flipAngle * Math.PI / 180;
+        const phi = phaseAngle * Math.PI / 180;
+
+        // Current magnetization
+        const Mx0 = this.Mx;
+        const My0 = this.My;
+        const Mz0 = this.Mz;
+
+        // Rotation about axis in xy-plane at angle phi from x-axis
+        // Using rotation matrix for arbitrary axis
+        const cosA = Math.cos(alpha);
+        const sinA = Math.sin(alpha);
+        const cosPhi = Math.cos(phi);
+        const sinPhi = Math.sin(phi);
+
+        // Rotation axis is (cos(phi), sin(phi), 0)
+        // Apply Rodrigues' rotation formula
+        const ux = cosPhi, uy = sinPhi, uz = 0;
+
+        this.Mx = (cosA + ux * ux * (1 - cosA)) * Mx0 +
+            (ux * uy * (1 - cosA) - uz * sinA) * My0 +
+            (ux * uz * (1 - cosA) + uy * sinA) * Mz0;
+
+        this.My = (uy * ux * (1 - cosA) + uz * sinA) * Mx0 +
+            (cosA + uy * uy * (1 - cosA)) * My0 +
+            (uy * uz * (1 - cosA) - ux * sinA) * Mz0;
+
+        this.Mz = (uz * ux * (1 - cosA) - uy * sinA) * Mx0 +
+            (uz * uy * (1 - cosA) + ux * sinA) * My0 +
+            (cosA + uz * uz * (1 - cosA)) * Mz0;
+    }
+
+    /**
+     * Evolve magnetization using Bloch equations
+     * In rotating frame at Larmor frequency
+     * @param {number} dt - Time step in ms
+     */
+    evolve(dt) {
+        // Convert dt to seconds for calculation
+        const dtSec = dt / 1000;
+
+        // Precession due to total frequency offset (B0 inhomogeneity + gradient)
+        // Both components contribute to phase accumulation
+        const totalDeltaOmega = this.getTotalDeltaOmega();
+        const dPhi = 2 * Math.PI * totalDeltaOmega * dtSec;
+        this.phase += dPhi;
+
+        // Rotation due to off-resonance
+        const Mx0 = this.Mx;
+        const My0 = this.My;
+        this.Mx = Mx0 * Math.cos(dPhi) - My0 * Math.sin(dPhi);
+        this.My = Mx0 * Math.sin(dPhi) + My0 * Math.cos(dPhi);
+
+        // T2 relaxation (transverse decay)
+        const E2 = Math.exp(-dt / this.T2);
+        this.Mx *= E2;
+        this.My *= E2;
+
+        // T1 relaxation (longitudinal recovery)
+        const E1 = Math.exp(-dt / this.T1);
+        this.Mz = this.Mz * E1 + (1 - E1);
+    }
+
+    /**
+     * Get transverse magnetization magnitude
+     */
+    getMxy() {
+        return Math.sqrt(this.Mx * this.Mx + this.My * this.My);
+    }
+
+    /**
+     * Get phase angle in xy-plane
+     */
+    getPhase() {
+        return Math.atan2(this.My, this.Mx);
+    }
+
+    /**
+     * Reset to equilibrium
+     */
+    reset() {
+        this.Mx = 0;
+        this.My = 0;
+        this.Mz = 1.0;
+        this.phase = 0;
+        // Reset gradient state but keep B0 inhomogeneity
+        this.deltaOmegaGrad = 0;
+        this.gradientSign = 1;
+    }
+
+    /**
+     * Invert phase (180° pulse effect on phase)
+     * Used for spin echo - inverts ALL accumulated phase
+     */
+    invertPhase() {
+        this.phase = -this.phase;
+        // Also invert the actual magnetization phase
+        const currentPhase = Math.atan2(this.My, this.Mx);
+        const Mxy = this.getMxy();
+        const newPhase = -currentPhase;
+        this.Mx = Mxy * Math.cos(newPhase);
+        this.My = Mxy * Math.sin(newPhase);
+    }
+
+    /**
+     * Set gradient frequency offset (Hz)
+     * For gradient echo, this creates additional dephasing that can be refocused
+     */
+    setGradient(gradFreq) {
+        this.deltaOmegaGrad = gradFreq;
+    }
+
+    /**
+     * Toggle gradient direction (for gradient echo refocusing)
+     * ONLY affects gradient-induced offset, NOT B0 inhomogeneity
+     */
+    toggleGradient() {
+        this.gradientSign *= -1;
+    }
+
+    /**
+     * Restore gradient to original direction
+     */
+    restoreGradient() {
+        this.gradientSign = 1;
+    }
+}
+
+// ============================================================================
+// SPIN ENSEMBLE - Collection of spins for FID simulation
+// ============================================================================
+
+class SpinEnsemble {
+    constructor(numSpins, T1, T2, freqSpread, B0 = 1.5) {
+        this.numSpins = numSpins;
+        this.T1 = T1;
+        this.T2 = T2;
+        this.freqSpread = freqSpread;
+        this.B0 = B0;
+        this.spins = [];
+
+        this.createSpins();
+    }
+
+    createSpins() {
+        this.spins = [];
+        for (let i = 0; i < this.numSpins; i++) {
+            // Gaussian distribution of frequency offsets
+            const u1 = Math.random();
+            const u2 = Math.random();
+            const z = Math.sqrt(-2 * Math.log(u1 || 0.0001)) * Math.cos(2 * Math.PI * u2);
+            const deltaOmega = z * this.freqSpread;
+
+            this.spins.push(new Spin(this.T1, this.T2, deltaOmega, this.B0));
+        }
+    }
+
+    applyRFPulse(flipAngle, phaseAngle = 0) {
+        this.spins.forEach(spin => spin.applyRFPulse(flipAngle, phaseAngle));
+    }
+
+    evolve(dt) {
+        this.spins.forEach(spin => spin.evolve(dt));
+    }
+
+    reset() {
+        this.spins.forEach(spin => spin.reset());
+    }
+
+    /**
+     * Update T2 for all spins (for interactive control)
+     */
+    setT2(newT2) {
+        this.T2 = newT2;
+        this.spins.forEach(spin => {
+            spin.T2 = newT2;
+        });
+    }
+
+    /**
+     * Update T1 for all spins
+     */
+    setT1(newT1) {
+        this.T1 = newT1;
+        this.spins.forEach(spin => {
+            spin.T1 = newT1;
+        });
+    }
+
+    /**
+     * Update B0 for all spins (affects precession rate scaling)
+     */
+    setB0(newB0) {
+        this.B0 = newB0;
+        this.spins.forEach(spin => {
+            spin.B0 = newB0;
+        });
+    }
+
+    /**
+     * Apply gradient to all spins
+     * Gradient creates spatial-dependent frequency offset (independent of B0 inhomogeneity)
+     * For simulation, we create a separate gradient offset distribution
+     * @param {number} gradientStrength - Frequency spread for gradient (Hz)
+     */
+    applyGradient(gradientStrength = 1.0) {
+        this.spins.forEach((spin, i) => {
+            // Create gradient offset INDEPENDENT of B0 inhomogeneity
+            // Use spin index to create a spread of gradient-induced offsets
+            // This simulates spatial position along the gradient direction
+            const normalizedPos = (i / (this.numSpins - 1)) * 2 - 1; // Range: -1 to +1
+            const gradOffset = normalizedPos * this.freqSpread * gradientStrength;
+            spin.setGradient(gradOffset);
+        });
+    }
+
+    /**
+     * Toggle gradient direction for all spins (for GRE refocusing)
+     * Only affects gradient-induced offset, NOT B0 inhomogeneity
+     */
+    toggleGradient() {
+        this.spins.forEach(spin => spin.toggleGradient());
+    }
+
+    /**
+     * Restore gradient to original direction for all spins
+     */
+    restoreGradient() {
+        this.spins.forEach(spin => spin.restoreGradient());
+    }
+
+    /**
+     * Clear gradient offset (back to pure B0 inhomogeneity)
+     */
+    clearGradient() {
+        this.spins.forEach(spin => spin.setGradient(0));
+    }
+
+    /**
+     * Apply gradient with fixed frequency spread (Hz)
+     * Independent of B0 inhomogeneity settings
+     * @param {number} freqSpreadHz - Total frequency spread in Hz
+     */
+    applyGradientFixed(freqSpreadHz) {
+        this.spins.forEach((spin, i) => {
+            // Create linear gradient offset based on position
+            const normalizedPos = (i / (this.numSpins - 1)) * 2 - 1; // Range: -1 to +1
+            const gradOffset = normalizedPos * freqSpreadHz / 2; // ±freqSpreadHz/2
+            spin.setGradient(gradOffset);
+        });
+    }
+
+    /**
+     * Get sum magnetization (macroscopic signal)
+     */
+    getSumMagnetization() {
+        let sumMx = 0, sumMy = 0, sumMz = 0;
+        this.spins.forEach(spin => {
+            sumMx += spin.Mx;
+            sumMy += spin.My;
+            sumMz += spin.Mz;
+        });
+        return {
+            Mx: sumMx / this.numSpins,
+            My: sumMy / this.numSpins,
+            Mz: sumMz / this.numSpins
         };
-
-        this.charts = {};
-
-        // Phase Wheel State
-        this.phaseWheelFrame = 0;
-        this.phaseWheelPlaying = false;
-        this.phaseWheelInterval = null;
-
-        // Chart State
-        this.showSigned = false;
-
-        // Brain segmentation data
-        this.brainSegData = null;
-        this.canvasSize = 512;
     }
 
-    init() {
-        this.initUI();
-        this.initCharts();
-        this.initMechanicsVisualizations();
-        this.renderParams();
-        this.loadBrainSegmentation();
-        this.makeDraggable();
+    /**
+     * Get phase coherence (0-100%)
+     */
+    getPhaseCoherence() {
+        const sum = this.getSumMagnetization();
+        const sumMxy = Math.sqrt(sum.Mx * sum.Mx + sum.My * sum.My);
 
-        // Help button
-        document.getElementById('helpBtn').addEventListener('click', () => {
-            document.getElementById('helpModal').style.display = 'flex';
+        // Average individual Mxy
+        let avgIndividualMxy = 0;
+        this.spins.forEach(spin => {
+            avgIndividualMxy += spin.getMxy();
         });
+        avgIndividualMxy /= this.numSpins;
 
-        document.getElementById('closeModal').addEventListener('click', () => {
-            document.getElementById('helpModal').style.display = 'none';
+        if (avgIndividualMxy < 0.001) return 0;
+        return Math.min(100, (sumMxy / avgIndividualMxy) * 100);
+    }
+
+    invertPhases() {
+        this.spins.forEach(spin => spin.invertPhase());
+    }
+
+    /**
+     * Randomize all spin orientations (B0 OFF state)
+     * Each spin points in a random direction on the unit sphere
+     */
+    randomizeOrientations() {
+        this.spins.forEach(spin => {
+            // Random point on unit sphere using spherical coordinates
+            const theta = Math.random() * 2 * Math.PI;  // azimuthal angle
+            const phi = Math.acos(2 * Math.random() - 1);  // polar angle (uniform on sphere)
+
+            spin.Mx = Math.sin(phi) * Math.cos(theta);
+            spin.My = Math.sin(phi) * Math.sin(theta);
+            spin.Mz = Math.cos(phi);
+            spin.phase = theta;
         });
     }
 
-    loadBrainSegmentation() {
-        // Load the brain segmentation image
-        const img = new Image();
-        img.onload = () => {
-            // Extract pixel data from segmentation at original size
-            const tempCanvas = document.createElement('canvas');
-            tempCanvas.width = this.canvasSize;
-            tempCanvas.height = this.canvasSize;
-            const tempCtx = tempCanvas.getContext('2d');
-            tempCtx.imageSmoothingEnabled = false;
-            tempCtx.drawImage(img, 0, 0, this.canvasSize, this.canvasSize);
+    /**
+     * Get average Mz (for alignment visualization)
+     */
+    getAverageMz() {
+        let sumMz = 0;
+        this.spins.forEach(spin => {
+            sumMz += spin.Mz;
+        });
+        return sumMz / this.numSpins;
+    }
+}
 
-            const imageData = tempCtx.getImageData(0, 0, this.canvasSize, this.canvasSize);
-            this.brainSegData = new Uint8Array(this.canvasSize * this.canvasSize);
+// ============================================================================
+// GLOBAL STATE
+// ============================================================================
 
-            // Extract tissue labels from red channel
-            // The PNG stores grayscale values - need to map to discrete labels
-            // First, collect all unique values to understand the encoding
-            const uniqueValues = new Set();
-            for (let i = 0; i < this.canvasSize * this.canvasSize; i++) {
-                uniqueValues.add(imageData.data[i * 4]);
+// Module A: Ensemble for B0 alignment animation
+let alignmentEnsemble = null;  // Created when Module A loads
+let b0IsOn = false;            // Track B0 state
+let alignmentArrows = [];      // Arrows for alignment visualization
+
+// Module B/C: Ensemble for FID and Echo simulations
+let ensemble = new SpinEnsemble(CONFIG.numSpins, CONFIG.T1, CONFIG.T2ensemble, CONFIG.freqSpread, CONFIG.B0);
+
+// Data arrays for plotting
+let timeData = [];
+let mxyData = [];
+let mzData = [];
+let signalReData = [];
+let signalImData = [];
+
+// Echo sequence state
+let echoSequenceState = 'idle'; // 'idle', 'dephasing', 'refocusing', 'echo', 'done'
+let echoSequenceTime = 0;
+let gradientFlipped = false; // Track if gradient has been flipped
+
+// Module D: GRE multi-TR state
+let greSequenceState = 'idle'; // 'idle', 'running', 'done'
+let currentTRIndex = 0;        // Which TR we're in (0 to numTR-1)
+let timeInTR = 0;              // Time within current TR
+let rfPhase = 0;               // RF phase for spoiling (changes each TR)
+let steadyStateMxy = [];       // Store Mxy at each TR for plotting approach to steady-state
+let steadyStateMz = [];        // Store Mz at each TR
+
+// Event markers for chart annotations (RF pulses, gradients)
+let eventMarkers = []; // Array of { time, type, label }
+
+// Previous Mxy for computing dMxy/dt (signal detection is EMF ∝ dMxy/dt)
+let previousMxy = 0;
+
+// Three.js globals
+let scene, camera, renderer;
+let spinArrows = [];        // Individual spin arrows (ensemble for Module B/C)
+let sumArrow = null;        // Sum magnetization arrow (white - total M)
+let mxyArrow = null;        // Transverse component arrow (cyan - Mxy in xy plane)
+let mzArrow = null;         // Longitudinal component arrow (blue - Mz along z)
+let b0Arrow = null;         // B0 field indicator
+let xyPlane = null;         // XY plane visualization
+let netMagArrowA = null;    // Net magnetization arrow for Module A
+
+// Chart.js instances
+let chartMxy, chartMz, chartSignal;
+
+// Animation
+let animationId = null;
+let lastTimestamp = 0;
+
+// ============================================================================
+// THREE.JS SETUP
+// ============================================================================
+
+function init3D() {
+    const container = document.getElementById('canvas-3d');
+    const width = container.clientWidth;
+    const height = container.clientHeight;
+
+    // Scene
+    scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x0a0a0a);
+
+    // Camera
+    camera = new THREE.PerspectiveCamera(50, width / height, 0.1, 1000);
+    camera.position.set(2.5, 2, 2);
+    camera.lookAt(0, 0, 0);
+
+    // Renderer
+    renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(width, height);
+    container.appendChild(renderer.domElement);
+
+    // Lighting
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+    scene.add(ambientLight);
+    const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+    dirLight.position.set(5, 5, 5);
+    scene.add(dirLight);
+
+    // Coordinate axes (thin lines)
+    const axesGroup = new THREE.Group();
+
+    // X axis (red) - labeled as x'
+    const xGeom = new THREE.BufferGeometry().setFromPoints([
+        new THREE.Vector3(-1.5, 0, 0),
+        new THREE.Vector3(1.5, 0, 0)
+    ]);
+    const xLine = new THREE.Line(xGeom, new THREE.LineBasicMaterial({ color: 0xff4444, opacity: 0.7, transparent: true }));
+    axesGroup.add(xLine);
+
+    // Y axis (green) - labeled as y'
+    const yGeom = new THREE.BufferGeometry().setFromPoints([
+        new THREE.Vector3(0, -1.5, 0),
+        new THREE.Vector3(0, 1.5, 0)
+    ]);
+    const yLine = new THREE.Line(yGeom, new THREE.LineBasicMaterial({ color: 0x44ff44, opacity: 0.7, transparent: true }));
+    axesGroup.add(yLine);
+
+    // Z axis (blue) - B0 direction
+    const zGeom = new THREE.BufferGeometry().setFromPoints([
+        new THREE.Vector3(0, 0, -1.5),
+        new THREE.Vector3(0, 0, 1.5)
+    ]);
+    const zLine = new THREE.Line(zGeom, new THREE.LineBasicMaterial({ color: 0x4444ff, opacity: 0.7, transparent: true }));
+    axesGroup.add(zLine);
+
+    scene.add(axesGroup);
+
+    // XY plane (semi-transparent) - transverse plane perpendicular to B0
+    // CircleGeometry creates a circle in XY plane by default, which is correct
+    // (z=0 plane, perpendicular to B0 which is along Z)
+    // Use blue/purple color to distinguish from receiver coil
+    const planeGeom = new THREE.CircleGeometry(1.2, 64);
+    const planeMat = new THREE.MeshBasicMaterial({
+        color: 0x6366f1,  // Indigo/purple - distinct from coil color
+        transparent: true,
+        opacity: 0.12,
+        side: THREE.DoubleSide
+    });
+    xyPlane = new THREE.Mesh(planeGeom, planeMat);
+    // No rotation needed - circle is already in XY plane (perpendicular to Z/B0)
+    scene.add(xyPlane);
+
+    // B0 arrow (pointing up along Z)
+    const b0Dir = new THREE.Vector3(0, 0, 1);
+    b0Arrow = new THREE.ArrowHelper(b0Dir, new THREE.Vector3(1.3, 0, 0), 1.2, 0xffff00, 0.15, 0.1);
+    scene.add(b0Arrow);
+
+    // Create axis labels
+    createAxisLabels();
+
+    // Orbit controls (simple mouse drag)
+    setupOrbitControls(container);
+
+    // Handle resize
+    window.addEventListener('resize', () => {
+        const w = container.clientWidth;
+        const h = container.clientHeight;
+        camera.aspect = w / h;
+        camera.updateProjectionMatrix();
+        renderer.setSize(w, h);
+    });
+}
+
+function createAxisLabels() {
+    // Create text sprites for axis labels
+    function createLabel(text, position, color = '#ffffff') {
+        const canvas = document.createElement('canvas');
+        canvas.width = 64;
+        canvas.height = 64;
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = color;
+        ctx.font = 'bold 40px Inter, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(text, 32, 32);
+
+        const texture = new THREE.CanvasTexture(canvas);
+        const spriteMat = new THREE.SpriteMaterial({ map: texture });
+        const sprite = new THREE.Sprite(spriteMat);
+        sprite.position.copy(position);
+        sprite.scale.set(0.4, 0.4, 1);
+        return sprite;
+    }
+
+    scene.add(createLabel("x'", new THREE.Vector3(1.7, 0, 0), '#ff6666'));
+    scene.add(createLabel("y'", new THREE.Vector3(0, 1.7, 0), '#66ff66'));
+    scene.add(createLabel("B₀", new THREE.Vector3(0, 0, 1.7), '#6666ff'));
+}
+
+/**
+ * Update signal panel glow based on detected signal strength
+ * The Signal/FID chart panel border glows when signal is detected
+ * This avoids the rotating frame vs lab frame confusion of showing a coil in 3D
+ *
+ * PHYSICS: Signal detection uses Faraday's law: EMF ∝ -dΦ/dt ∝ dMxy/dt
+ * In lab frame, Mxy rotates at ω₀, so EMF ∝ ω₀ × Mxy × sin(ω₀t)
+ * The envelope of detected signal is proportional to |dMxy/dt|
+ *
+ * For educational purposes, we use |dMxy/dt| to show:
+ * - Strong glow during rapid changes (RF excitation, echo formation)
+ * - Weak glow when Mxy is large but stable
+ * - Fading glow during slow T2/T2* decay
+ *
+ * @param {number} mxy - Current transverse magnetization magnitude (0 to 1)
+ * @param {number} dt - Time step in ms
+ */
+function updateSignalPanelGlow(mxy, dt) {
+    const signalPanel = document.querySelector('.signal-panel:last-child');
+    if (!signalPanel) return;
+
+    // Compute |dMxy/dt| - rate of change of transverse magnetization
+    // This is what a receiver coil actually detects (Faraday's law)
+    const dMxyDt = Math.abs(mxy - previousMxy) / (dt || 0.5);  // units: 1/ms
+    previousMxy = mxy;
+
+    // Scale factor: dMxy/dt during RF pulse is very fast (~1/ms)
+    // During echo rephasing, it's slower (~0.01-0.1/ms)
+    // Normalize to 0-1 range with sensitivity to typical signal changes
+    // Also include a small contribution from |Mxy| for continuous visibility
+    const rateContribution = Math.min(dMxyDt * 5, 1.0);  // Fast changes → strong glow
+    const steadyContribution = mxy * 0.3;  // Some glow when Mxy exists (rotating signal)
+    const glowIntensity = Math.min(rateContribution + steadyContribution, 1.0);
+
+    if (glowIntensity > 0.05) {
+        // Glow color: orange to yellow based on intensity
+        const r = 255;
+        const g = Math.floor(150 + glowIntensity * 105);
+        const b = Math.floor(glowIntensity * 50);
+        const glowSize = 5 + glowIntensity * 15; // 5-20px glow
+        signalPanel.style.boxShadow = `0 0 ${glowSize}px rgba(${r}, ${g}, ${b}, ${glowIntensity * 0.8})`;
+        signalPanel.style.borderColor = `rgb(${r}, ${g}, ${b})`;
+    } else {
+        signalPanel.style.boxShadow = 'none';
+        signalPanel.style.borderColor = 'var(--border-color)';
+    }
+}
+
+/**
+ * Create arrows for Module A alignment visualization
+ * Shows individual spins aligning with B0 when turned on
+ */
+function createAlignmentArrows(numSpins) {
+    // Remove existing arrows
+    alignmentArrows.forEach(arrow => scene.remove(arrow));
+    alignmentArrows = [];
+
+    if (netMagArrowA) {
+        scene.remove(netMagArrowA);
+        netMagArrowA = null;
+    }
+
+    // Create individual spin arrows (green, smaller)
+    for (let i = 0; i < numSpins; i++) {
+        // Random initial direction
+        const theta = Math.random() * 2 * Math.PI;
+        const phi = Math.acos(2 * Math.random() - 1);
+        const dir = new THREE.Vector3(
+            Math.sin(phi) * Math.cos(theta),
+            Math.sin(phi) * Math.sin(theta),
+            Math.cos(phi)
+        );
+
+        const arrow = new THREE.ArrowHelper(
+            dir,
+            new THREE.Vector3(0, 0, 0),
+            0.75,
+            0x10b981,
+            0.08,
+            0.05
+        );
+        arrow.name = 'alignmentSpin';
+        alignmentArrows.push(arrow);
+        scene.add(arrow);
+    }
+
+    // Net magnetization arrow (white, larger)
+    const netDir = new THREE.Vector3(0, 0, 0.01);
+    netMagArrowA = new THREE.ArrowHelper(netDir, new THREE.Vector3(0, 0, 0), 0.01, 0xffffff, 0.12, 0.06);
+    netMagArrowA.name = 'netMagA';
+    netMagArrowA.visible = false;
+    scene.add(netMagArrowA);
+}
+
+/**
+ * Update alignment arrows to match ensemble spin orientations
+ */
+function updateAlignmentArrows() {
+    if (!alignmentEnsemble) return;
+
+    // Update individual arrows
+    alignmentEnsemble.spins.forEach((spin, i) => {
+        if (alignmentArrows[i]) {
+            const dir = new THREE.Vector3(spin.Mx, spin.My, spin.Mz);
+            const length = dir.length();
+            if (length > 0.001) {
+                dir.normalize();
+                alignmentArrows[i].setDirection(dir);
+                alignmentArrows[i].setLength(length * 0.75, 0.08, 0.05);
             }
-            console.log('Unique pixel values in segmentation:', Array.from(uniqueValues).sort((a,b) => a-b));
-
-            // Map raw grayscale values to tissue labels
-            // Expected: 0=background, distinct values for CSF, GM, WM, Fat
-            const sortedValues = Array.from(uniqueValues).sort((a, b) => a - b);
-            const valueToLabel = {};
-            sortedValues.forEach((val, idx) => {
-                valueToLabel[val] = Math.min(idx, 4); // Map to 0-4
-            });
-            console.log('Value to label mapping:', valueToLabel);
-
-            for (let i = 0; i < this.brainSegData.length; i++) {
-                const rawValue = imageData.data[i * 4]; // Red channel
-                // Map the raw grayscale value to a tissue label
-                this.brainSegData[i] = valueToLabel[rawValue] !== undefined ? valueToLabel[rawValue] : 0;
-            }
-
-            console.log('Brain segmentation loaded');
-            this.updateSimulation();
-        };
-        img.onerror = () => {
-            console.error('Failed to load brain segmentation');
-            this.updateSimulation();
-        };
-        img.src = brainSegBase64;
-    }
-
-    makeDraggable() {
-        const overlay = document.getElementById('equation-overlay');
-        let isDragging = false;
-        let currentX;
-        let currentY;
-        let initialX;
-        let initialY;
-
-        overlay.addEventListener('mousedown', (e) => {
-            isDragging = true;
-            initialX = e.clientX - overlay.offsetLeft;
-            initialY = e.clientY - overlay.offsetTop;
-        });
-
-        document.addEventListener('mousemove', (e) => {
-            if (!isDragging) return;
-
-            e.preventDefault();
-            currentX = e.clientX - initialX;
-            currentY = e.clientY - initialY;
-
-            // Keep within container bounds
-            const container = document.getElementById('brain-phantom-container');
-            const containerRect = container.getBoundingClientRect();
-            const overlayRect = overlay.getBoundingClientRect();
-
-            const maxX = containerRect.width - overlayRect.width;
-            const maxY = containerRect.height - overlayRect.height;
-
-            currentX = Math.max(0, Math.min(currentX, maxX));
-            currentY = Math.max(0, Math.min(currentY, maxY));
-
-            overlay.style.left = currentX + 'px';
-            overlay.style.top = currentY + 'px';
-            overlay.style.bottom = 'auto';
-            overlay.style.right = 'auto';
-        });
-
-        document.addEventListener('mouseup', () => {
-            isDragging = false;
-        });
-    }
-
-    initUI() {
-        // Tab Navigation
-        document.querySelectorAll('.tab-btn').forEach(btn => {
-            btn.addEventListener('click', (e) => {
-                const targetTab = e.target.getAttribute('data-tab');
-
-                // Update active tab button
-                document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-                e.target.classList.add('active');
-
-                // Update active tab content
-                document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
-                document.getElementById(`tab-${targetTab}`).classList.add('active');
-            });
-        });
-
-        // Presets
-        document.getElementById('preset-t1').addEventListener('click', () => this.applyPreset('T1'));
-        document.getElementById('preset-t2').addEventListener('click', () => this.applyPreset('T2'));
-        document.getElementById('preset-t2star').addEventListener('click', () => this.applyPreset('T2*'));
-        document.getElementById('preset-flair').addEventListener('click', () => this.applyPreset('FLAIR'));
-        document.getElementById('preset-stir').addEventListener('click', () => this.applyPreset('STIR'));
-
-        // Sequence Selector
-        document.getElementById('sequenceType').addEventListener('change', (e) => {
-            this.params.sequence = e.target.value;
-            this.renderParams();
-            this.updateSimulation();
-            this.updateInhomogeneityVisibility();
-        });
-
-        // B0 Slider with frequency update
-        const b0Slider = document.getElementById('b0Field');
-        b0Slider.addEventListener('input', (e) => {
-            this.params.b0 = parseFloat(e.target.value);
-            document.getElementById('b0Value').textContent = `${this.params.b0} T`;
-            this.updateB0Frequency();
-            this.updateSimulation();
-        });
-        // Initialize frequency display
-        this.updateB0Frequency();
-
-        // Inhomogeneity Slider
-        const inhoSlider = document.getElementById('inhomogeneity');
-        inhoSlider.addEventListener('input', (e) => {
-            this.params.inhomogeneity = parseFloat(e.target.value);
-            document.getElementById('inhomogeneityValue').textContent = `${this.params.inhomogeneity} Hz`;
-            this.updateSimulation();
-        });
-
-        // Help Modal
-        const modal = document.getElementById('helpModal');
-        const btn = document.getElementById('helpBtn');
-        const span = document.getElementsByClassName('close-modal')[0];
-
-        btn.onclick = () => modal.style.display = 'block';
-        span.onclick = () => modal.style.display = 'none';
-        window.onclick = (event) => {
-            if (event.target == modal) {
-                modal.style.display = 'none';
-            }
         }
+    });
 
-        // Signed Signal Toggle
-        const signedToggle = document.getElementById('signedSignalToggle');
-        if (signedToggle) {
-            signedToggle.addEventListener('change', (e) => {
-                this.showSigned = e.target.checked;
-                this.updateContrastCharts();
-            });
-        }
+    // Update net magnetization arrow
+    // The true net magnetization from random spins is ~1/√N (very small)
+    // For N=100 random spins: |M| ~ 0.1
+    // After alignment: |M| approaches 1.0 (all spins along +z)
+    const sum = alignmentEnsemble.getSumMagnetization();
+    const sumDir = new THREE.Vector3(sum.Mx, sum.My, sum.Mz);
+    const sumLength = sumDir.length();
 
-        this.renderParams();
-    }
+    // Show arrow based on Mz alignment (what we're visualizing)
+    // Random spins: Mz ~ 0 (cancel out)
+    // Aligned spins: Mz → 1.0 (all pointing +z)
+    // Use sum.Mz as the visibility criterion since that's what the chart shows
+    const VISIBILITY_THRESHOLD = 0.1;
 
-    applyPreset(type) {
-        if (type === 'T1') {
-            this.params.sequence = 'SE';
-            this.params.tr = 500;
-            this.params.te = 20;
-            this.params.inhomogeneity = 0; // SE doesn't use inhomogeneity
-        } else if (type === 'T2') {
-            this.params.sequence = 'SE';
-            this.params.tr = 3000;
-            this.params.te = 100;
-            this.params.inhomogeneity = 0; // SE doesn't use inhomogeneity
-        } else if (type === 'T2*') {
-            this.params.sequence = 'GRE';
-            this.params.tr = 500;
-            this.params.te = 20;
-            this.params.fa = 20; // Low flip angle for GRE T2*
-            this.params.inhomogeneity = 20; // Add some inhomogeneity to show T2* effect
-        } else if (type === 'FLAIR') {
-            this.params.sequence = 'IR';
-            this.params.tr = 9000;
-            this.params.te = 100;
-            // CSF nulling: TI = T1_CSF * ln(2) = 4500 * 0.693 ≈ 3120ms
-            this.params.ti = 3120;
-            this.params.fa = 90; // Standard readout
-            this.params.inhomogeneity = 0; // IR doesn't use inhomogeneity
-        } else if (type === 'STIR') {
-            this.params.sequence = 'IR';
-            this.params.tr = 4000;
-            this.params.te = 50;
-            this.params.ti = 170; // Null Fat (T1 ~250ms -> TI ~ 0.69*T1)
-            this.params.fa = 90; // Standard readout
-            this.params.inhomogeneity = 0; // IR doesn't use inhomogeneity
-        }
-
-        // Update UI - highlight active preset
-        document.querySelectorAll('.preset-buttons .btn').forEach(btn => btn.classList.remove('active'));
-        const presetMap = { 'T1': 'preset-t1', 'T2': 'preset-t2', 'T2*': 'preset-t2star', 'FLAIR': 'preset-flair', 'STIR': 'preset-stir' };
-        const activeBtn = document.getElementById(presetMap[type]);
-        if (activeBtn) {
-            activeBtn.classList.add('active');
-            // Add pulse animation
-            activeBtn.style.animation = 'pulse 0.3s ease-out';
-            setTimeout(() => activeBtn.style.animation = '', 300);
-        }
-
-        document.getElementById('sequenceType').value = this.params.sequence;
-
-        // Update sliders if they exist (need to re-render params first to create elements)
-        this.renderParams();
-
-        // Always sync inhomogeneity slider with current params
-        const inhoSlider = document.getElementById('inhomogeneity');
-        if (inhoSlider) {
-            inhoSlider.value = this.params.inhomogeneity;
-            document.getElementById('inhomogeneityValue').textContent = `${this.params.inhomogeneity} Hz`;
-        }
-
-        this.updateSimulation();
-        this.updateInhomogeneityVisibility();
-    }
-
-    updateInhomogeneityVisibility() {
-        const inhoCtrl = document.getElementById('inhomogeneity-control');
-        if (this.params.sequence === 'GRE') {
-            inhoCtrl.style.display = 'block';
+    if (netMagArrowA) {
+        // Use Mz for visibility check (matches the Mz chart)
+        // But use full vector for direction
+        if (sum.Mz > VISIBILITY_THRESHOLD) {
+            sumDir.normalize();
+            // Arrow length proportional to |M|, with minimum for visibility
+            const displayLength = Math.max(sumLength, 0.15);
+            netMagArrowA.setDirection(sumDir);
+            netMagArrowA.setLength(displayLength, 0.12, 0.06);
+            netMagArrowA.visible = true;
         } else {
-            inhoCtrl.style.display = 'none';
+            netMagArrowA.visible = false;
+        }
+    }
+}
+
+function createEnsembleArrows() {
+    // Clear existing
+    spinArrows.forEach(arrow => scene.remove(arrow));
+    spinArrows = [];
+
+    if (sumArrow) scene.remove(sumArrow);
+    if (mxyArrow) scene.remove(mxyArrow);
+    if (mzArrow) scene.remove(mzArrow);
+
+    // Create individual spin arrows
+    const arrowLength = 0.8;
+    ensemble.spins.forEach((spin) => {
+        const dir = new THREE.Vector3(spin.Mx, spin.My, spin.Mz).normalize();
+        const arrow = new THREE.ArrowHelper(
+            dir,
+            new THREE.Vector3(0, 0, 0),
+            arrowLength,
+            0x10b981,
+            0.08,
+            0.05
+        );
+        arrow.visible = CONFIG.showIndividual;
+        spinArrows.push(arrow);
+        scene.add(arrow);
+    });
+
+    // Get sum magnetization for component arrows
+    // Note: getSumMagnetization returns normalized values (0-1 range for coherent spins)
+    const sum = ensemble.getSumMagnetization();
+
+    // Always create all three arrows (they'll be updated in updateEnsembleArrows)
+    // Mxy arrow (cyan) - transverse component in xy plane
+    const mxyMag = Math.sqrt(sum.Mx * sum.Mx + sum.My * sum.My);
+    const mxyDir = mxyMag > 0.001 ? new THREE.Vector3(sum.Mx, sum.My, 0).normalize() : new THREE.Vector3(1, 0, 0);
+    const mxyLen = Math.max(mxyMag, 0.1); // Minimum visible length
+    mxyArrow = new THREE.ArrowHelper(mxyDir, new THREE.Vector3(0, 0, 0), mxyLen, 0x22d3ee, 0.12, 0.06);
+    mxyArrow.visible = mxyMag > 0.02;
+    scene.add(mxyArrow);
+
+    // Mz arrow (blue) - longitudinal component along z
+    const mzMag = Math.abs(sum.Mz);
+    const mzDir = new THREE.Vector3(0, 0, sum.Mz >= 0 ? 1 : -1);
+    const mzLen = Math.max(mzMag, 0.1);
+    mzArrow = new THREE.ArrowHelper(mzDir, new THREE.Vector3(0, 0, 0), mzLen, 0x3b82f6, 0.12, 0.06);
+    mzArrow.visible = mzMag > 0.02;
+    scene.add(mzArrow);
+
+    // Sum arrow (white) - total magnetization vector
+    const sumMag = Math.sqrt(sum.Mx*sum.Mx + sum.My*sum.My + sum.Mz*sum.Mz);
+    const sumDir = sumMag > 0.001 ? new THREE.Vector3(sum.Mx, sum.My, sum.Mz).normalize() : new THREE.Vector3(0, 0, 1);
+    const sumLen = Math.max(sumMag, 0.1);
+    sumArrow = new THREE.ArrowHelper(sumDir, new THREE.Vector3(0, 0, 0), sumLen, 0xffffff, 0.12, 0.06);
+    sumArrow.visible = sumMag > 0.02;
+    scene.add(sumArrow);
+}
+
+
+function updateEnsembleArrows() {
+    // Update individual arrows
+    ensemble.spins.forEach((spin, i) => {
+        if (spinArrows[i]) {
+            const dir = new THREE.Vector3(spin.Mx, spin.My, spin.Mz);
+            const length = dir.length();
+            if (length > 0.001) {
+                dir.normalize();
+                spinArrows[i].setDirection(dir);
+                spinArrows[i].setLength(length * 0.8, 0.08, 0.05);
+            }
+            spinArrows[i].visible = CONFIG.showIndividual;
+        }
+    });
+
+    // Get sum magnetization
+    const sum = ensemble.getSumMagnetization();
+
+    // Update Mxy arrow (cyan) - transverse component
+    const mxyMag = Math.sqrt(sum.Mx * sum.Mx + sum.My * sum.My);
+    if (mxyArrow) {
+        if (mxyMag > 0.02) {
+            const mxyDir = new THREE.Vector3(sum.Mx, sum.My, 0).normalize();
+            mxyArrow.setDirection(mxyDir);
+            mxyArrow.setLength(Math.min(mxyMag, 1.0), 0.12, 0.06);
+            mxyArrow.visible = true;
+        } else {
+            mxyArrow.visible = false;
         }
     }
 
-    updateB0Frequency() {
-        // Larmor frequency: f = gamma * B0
-        // gamma for 1H = 42.576 MHz/T
-        const gamma = 42.576;
-        const freq = (gamma * this.params.b0).toFixed(2);
-        const freqEl = document.getElementById('b0Freq');
-        if (freqEl) {
-            freqEl.textContent = `${freq} MHz`;
+    // Update Mz arrow (blue) - longitudinal component
+    const mzMag = Math.abs(sum.Mz);
+    if (mzArrow) {
+        if (mzMag > 0.02) {
+            const mzDir = new THREE.Vector3(0, 0, sum.Mz >= 0 ? 1 : -1);
+            mzArrow.setDirection(mzDir);
+            mzArrow.setLength(Math.min(mzMag, 1.0), 0.12, 0.06);
+            mzArrow.visible = true;
+        } else {
+            mzArrow.visible = false;
         }
     }
 
-    renderParams() {
-        const container = document.getElementById('params-container');
-        container.innerHTML = '';
+    // Update sum arrow (white) - total magnetization
+    const sumMag = Math.sqrt(sum.Mx*sum.Mx + sum.My*sum.My + sum.Mz*sum.Mz);
+    if (sumArrow) {
+        if (sumMag > 0.02) {
+            const sumDir = new THREE.Vector3(sum.Mx, sum.My, sum.Mz).normalize();
+            sumArrow.setDirection(sumDir);
+            sumArrow.setLength(Math.min(sumMag, 1.0), 0.12, 0.06);
+            sumArrow.visible = true;
+        } else {
+            sumArrow.visible = false;
+        }
+    }
+}
 
-        const createInput = (id, label, value, min, max, step) => {
-            const div = document.createElement('div');
-            div.innerHTML = `
-                <label for="${id}">${label}</label>
-                <input type="range" id="${id}" min="${min}" max="${max}" step="${step}" value="${value}">
-                <span id="${id}-val">${value}</span>
-            `;
-            const input = div.querySelector('input');
-            input.addEventListener('input', (e) => {
-                let newValue = parseFloat(e.target.value);
+function setupOrbitControls(container) {
+    let isDragging = false;
+    let previousMouse = { x: 0, y: 0 };
 
-                // Safeguard: TI must be less than TR
-                if (id === 'ti' && newValue >= this.params.tr) {
-                    newValue = Math.max(10, this.params.tr - 10);
-                    e.target.value = newValue;
+    container.addEventListener('mousedown', (e) => {
+        isDragging = true;
+        previousMouse = { x: e.clientX, y: e.clientY };
+    });
+
+    container.addEventListener('mousemove', (e) => {
+        if (!isDragging) return;
+
+        const deltaX = e.clientX - previousMouse.x;
+        const deltaY = e.clientY - previousMouse.y;
+
+        // Rotate camera around origin
+        const spherical = new THREE.Spherical();
+        spherical.setFromVector3(camera.position);
+
+        spherical.theta -= deltaX * 0.01;
+        spherical.phi += deltaY * 0.01;
+
+        // Clamp phi to avoid flipping
+        spherical.phi = Math.max(0.1, Math.min(Math.PI - 0.1, spherical.phi));
+
+        camera.position.setFromSpherical(spherical);
+        camera.lookAt(0, 0, 0);
+
+        previousMouse = { x: e.clientX, y: e.clientY };
+    });
+
+    document.addEventListener('mouseup', () => {
+        isDragging = false;
+    });
+
+    // Zoom with wheel
+    container.addEventListener('wheel', (e) => {
+        e.preventDefault();
+        const zoomSpeed = 0.001;
+        const distance = camera.position.length();
+        const newDistance = distance * (1 + e.deltaY * zoomSpeed);
+        camera.position.setLength(Math.max(2, Math.min(10, newDistance)));
+    });
+}
+
+// ============================================================================
+// CHART.JS SETUP
+// ============================================================================
+
+function initCharts() {
+    const chartOptions = {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: false,
+        scales: {
+            x: {
+                type: 'linear',
+                title: { display: true, text: 'Time (ms)', color: '#94a3b8' },
+                grid: { color: 'rgba(148, 163, 184, 0.1)' },
+                ticks: { color: '#94a3b8' }
+            },
+            y: {
+                title: { display: true, text: 'Magnitude', color: '#94a3b8' },
+                grid: { color: 'rgba(148, 163, 184, 0.1)' },
+                ticks: { color: '#94a3b8' },
+                min: 0,
+                max: 1.1
+            }
+        },
+        plugins: {
+            legend: { display: false }
+        }
+    };
+
+    // Mxy chart
+    chartMxy = new Chart(document.getElementById('chart-mxy'), {
+        type: 'line',
+        data: {
+            datasets: [{
+                label: 'Mxy',
+                data: [],
+                borderColor: '#10b981',
+                borderWidth: 2,
+                pointRadius: 0,
+                tension: 0.1
+            }]
+        },
+        options: { ...chartOptions }
+    });
+
+    // Mz chart
+    chartMz = new Chart(document.getElementById('chart-mz'), {
+        type: 'line',
+        data: {
+            datasets: [{
+                label: 'Mz',
+                data: [],
+                borderColor: '#3b82f6',
+                borderWidth: 2,
+                pointRadius: 0,
+                tension: 0.1
+            }]
+        },
+        options: {
+            ...chartOptions,
+            scales: {
+                ...chartOptions.scales,
+                y: { ...chartOptions.scales.y, min: -0.1, max: 1.1 }
+            }
+        }
+    });
+
+    // Signal chart (Re and Im)
+    chartSignal = new Chart(document.getElementById('chart-signal'), {
+        type: 'line',
+        data: {
+            datasets: [
+                {
+                    label: 'Re(S)',
+                    data: [],
+                    borderColor: '#ef4444',
+                    borderWidth: 1.5,
+                    pointRadius: 0,
+                    tension: 0.1
+                },
+                {
+                    label: 'Im(S)',
+                    data: [],
+                    borderColor: '#22c55e',
+                    borderWidth: 1.5,
+                    pointRadius: 0,
+                    tension: 0.1
+                },
+                {
+                    label: '|S|',
+                    data: [],
+                    borderColor: '#ffffff',
+                    borderWidth: 2,
+                    pointRadius: 0,
+                    tension: 0.1
                 }
-                // Also check when TR changes - adjust TI if needed
-                if (id === 'tr' && this.params.ti && this.params.ti >= newValue) {
-                    this.params.ti = Math.max(10, newValue - 10);
-                    const tiInput = document.querySelector('input[type="range"][step="10"][min="10"][max="2000"]');
-                    if (tiInput) {
-                        tiInput.value = this.params.ti;
-                        const tiSpan = tiInput.parentElement.querySelector('span');
-                        if (tiSpan) tiSpan.textContent = this.params.ti;
-                    }
-                }
-
-                this.params[id] = newValue;
-                div.querySelector('span').textContent = newValue;
-                this.updateSimulation();
-            });
-            return div;
-        };
-
-        // TR and TE are common
-        container.appendChild(createInput('tr', 'TR (ms)', this.params.tr, 10, 12000, 10));
-        container.appendChild(createInput('te', 'TE (ms)', this.params.te, 1, 300, 1));
-
-        if (this.params.sequence === 'IR') {
-            // Extended TI range to 4000ms to support FLAIR (CSF nulling ~3100ms at 3T)
-            container.appendChild(createInput('ti', 'TI (ms)', this.params.ti || 150, 10, 4000, 10));
-            this.params.ti = this.params.ti || 150;
-        }
-
-        // FA only applies to GRE and IR (SE uses fixed 90°/180° pulses)
-        if (this.params.sequence === 'GRE' || this.params.sequence === 'IR') {
-            container.appendChild(createInput('fa', 'Flip Angle (°)', this.params.fa || 90, 1, 180, 1));
-            this.params.fa = this.params.fa || 90;
-        }
-    }
-
-    initCharts() {
-        // Modern dark theme for charts
-        const darkTheme = {
-            responsive: true,
-            maintainAspectRatio: false,
-            animation: false,
-            elements: {
-                point: { radius: 0 },
-                line: { borderWidth: 2.5 }
+            ]
+        },
+        options: {
+            ...chartOptions,
+            scales: {
+                ...chartOptions.scales,
+                y: { ...chartOptions.scales.y, min: -1.1, max: 1.1 }
             },
             plugins: {
                 legend: {
                     display: true,
                     position: 'top',
-                    labels: {
-                        color: '#94a3b8',
-                        usePointStyle: true,
-                        pointStyle: 'circle',
-                        padding: 15,
-                        font: { size: 10 }
-                    }
-                }
-            },
-            scales: {
-                x: {
-                    type: 'linear',
-                    grid: {
-                        color: 'rgba(148, 163, 184, 0.1)',
-                        drawBorder: false
-                    },
-                    ticks: { color: '#94a3b8', font: { size: 10 } },
-                    title: {
-                        display: true,
-                        color: '#94a3b8',
-                        font: { size: 11, weight: '500' }
-                    }
-                },
-                y: {
-                    grid: {
-                        color: 'rgba(148, 163, 184, 0.1)',
-                        drawBorder: false
-                    },
-                    ticks: { color: '#94a3b8', font: { size: 10 } },
-                    title: {
-                        display: true,
-                        text: 'Signal',
-                        color: '#94a3b8',
-                        font: { size: 11, weight: '500' }
-                    }
+                    labels: { color: '#94a3b8', boxWidth: 12, padding: 8 }
                 }
             }
-        };
-
-        // Helper to create contrast charts with dark theme
-        const createContrastChart = (id, xLabel) => {
-            const ctx = document.getElementById(id).getContext('2d');
-            const options = JSON.parse(JSON.stringify(darkTheme));
-            options.scales.x.title.text = xLabel;
-            return new Chart(ctx, {
-                type: 'line',
-                data: { datasets: [] },
-                options: options
-            });
-        };
-
-        this.charts.tr = createContrastChart('chartTR', 'TR (ms)');
-        this.charts.te = createContrastChart('chartTE', 'TE (ms)');
-        this.charts.ti = createContrastChart('chartTI', 'TI (ms)');
-        this.charts.fa = createContrastChart('chartFA', 'Flip Angle (°)');
-    }
-
-    updateSimulation() {
-        this.updatePhantom();
-        this.updateContrastCharts();
-        this.updateVisibility();
-        this.updateEquation();
-
-        // Update mechanics visualizations
-        this.updatePhaseWheel();
-        this.updateR2Chart();
-        this.updateRFTimeline();
-    }
-
-    updateVisibility() {
-        const seq = this.params.sequence;
-
-        // Helper to show/hide
-        const setVisible = (id, visible) => {
-            const el = document.getElementById(id);
-            if (el) el.style.display = visible ? 'block' : 'none';
-        };
-
-        // TR and TE are always relevant
-        setVisible('container-tr', true);
-        setVisible('container-te', true);
-
-        // TI only for IR
-        setVisible('container-ti', seq === 'IR');
-
-        // FA for GRE and IR only (not SE - we use fixed 90°/180°)
-        setVisible('container-fa', seq === 'GRE' || seq === 'IR');
-    }
-
-    // Physics Equations
-    getSignalSE(t1, t2, pd, tr, te, faDeg = 90) {
-        const b0Factor = this.params.b0 / 1.5;
-
-        // True 90°/180° Spin Echo
-        // T1 recovery is INDEPENDENT of TE (no Ernst angle effects)
-        // S = PD * (1 - exp(-TR/T1)) * exp(-TE/T2)
-        const t1Factor = (1 - Math.exp(-tr / t1));
-        const t2Factor = Math.exp(-te / t2);
-
-        return b0Factor * pd * t1Factor * t2Factor;
-    }
-
-    getSignalGRE(t1, t2, pd, tr, te, faDeg, inhomogeneity = this.params.inhomogeneity) {
-        const fa = faDeg * Math.PI / 180;
-        const e1 = Math.exp(-tr / t1);
-
-        // T2* calculation
-        // R2* = R2 + R2'
-        // R2' = 2 * PI * delta_f
-        const r2 = 1000 / t2; // s^-1
-        const r2prime = 2 * Math.PI * inhomogeneity; // s^-1
-        const r2star = r2 + r2prime;
-        const t2star = 1000 / r2star; // ms
-
-        const b0Factor = this.params.b0 / 1.5;
-
-        // Steady state GRE (SPGR/FLASH)
-        // S = PD * sin(α) * (1-E1) / (1 - E1*cos(α)) * exp(-TE/T2*)
-        const t1Factor = (1 - e1) / (1 - e1 * Math.cos(fa));
-        const t2starFactor = Math.exp(-te / t2star);
-
-        return b0Factor * pd * Math.sin(fa) * t1Factor * t2starFactor;
-    }
-
-    getSignalIR(t1, t2, pd, tr, te, ti, faDeg = 90) {
-        const b0Factor = this.params.b0 / 1.5;
-        const fa = faDeg * Math.PI / 180;
-
-        // General Steady State IR with readout alpha
-        // Sequence: 180 -> TI -> alpha -> (TR-TI)
-        const e_ti = Math.exp(-ti / t1);
-        const e_rem = Math.exp(-(tr - ti) / t1);
-        const e1 = Math.exp(-tr / t1); // e_ti * e_rem
-
-        // M_ss (just before 180)
-        // M_ss = M0 * [1 - E_rem + (E_rem - E1)*cos(alpha)] / (1 + E1*cos(alpha))
-        const num = 1 - e_rem + (e_rem - e1) * Math.cos(fa);
-        const den = 1 + e1 * Math.cos(fa);
-        const m_ss_start = num / den;
-
-        // M(TI) just before readout
-        // M(TI) = M0*(1 - E_ti) - M_ss_start * E_ti
-        const mz_ti = (1 - e_ti) - m_ss_start * e_ti;
-
-        // Return SIGNED value (caller handles magnitude if needed)
-        return b0Factor * pd * mz_ti * Math.sin(fa) * Math.exp(-te / t2);
-    }
-
-    updatePhantom() {
-        // Calculate signal for each tissue
-        // Tissue mapping: segmentation label -> tissue
-        // 0=background, 1=CSF, 2=GM, 3=WM, 4=Fat
-        const tissueByLabel = {
-            1: this.tissues.find(t => t.id === 'csf'),
-            2: this.tissues.find(t => t.id === 'gm'),
-            3: this.tissues.find(t => t.id === 'wm'),
-            4: this.tissues.find(t => t.id === 'fat')
-        };
-
-        // Calculate signal for each tissue type
-        const signals = {};
-        const signalDebug = {};
-        for (const [label, tissue] of Object.entries(tissueByLabel)) {
-            if (!tissue) continue;
-            let s = 0;
-            if (this.params.sequence === 'SE') {
-                s = this.getSignalSE(tissue.t1, tissue.t2, tissue.pd, this.params.tr, this.params.te, this.params.fa);
-            } else if (this.params.sequence === 'GRE') {
-                s = this.getSignalGRE(tissue.t1, tissue.t2, tissue.pd, this.params.tr, this.params.te, this.params.fa, this.params.inhomogeneity);
-            } else if (this.params.sequence === 'IR') {
-                s = this.getSignalIR(tissue.t1, tissue.t2, tissue.pd, this.params.tr, this.params.te, this.params.ti, this.params.fa);
-            }
-            signalDebug[tissue.id] = { raw: s, abs: Math.abs(s) };
-            signals[label] = Math.abs(s);
         }
-        console.log('Tissue signals:', signalDebug, 'Params:', this.params);
+    });
+}
 
-        // Find max signal for auto-scaling (Windowing)
-        const maxSignal = Math.max(...Object.values(signals));
-        const scaleFactor = maxSignal > 0.001 ? (255 / maxSignal) : 0;
+function updateCharts() {
+    // Get annotations for Module C and D (both use event markers)
+    const annotations = (CONFIG.currentModule === 'C' || CONFIG.currentModule === 'D') ? getChartAnnotations() : {};
 
-        // Render to canvas
-        this.renderBrainCanvas(signals, scaleFactor);
+    // Update Mxy chart with annotations
+    chartMxy.data.datasets[0].data = timeData.map((t, i) => ({ x: t, y: mxyData[i] }));
+    chartMxy.options.plugins.annotation = { annotations };
+    chartMxy.update('none');
+
+    // Update Mz chart with annotations
+    chartMz.data.datasets[0].data = timeData.map((t, i) => ({ x: t, y: mzData[i] }));
+    chartMz.options.plugins.annotation = { annotations };
+    chartMz.update('none');
+
+    // Update Signal chart with annotations
+    chartSignal.data.datasets[0].data = timeData.map((t, i) => ({ x: t, y: signalReData[i] }));
+    chartSignal.data.datasets[1].data = timeData.map((t, i) => ({ x: t, y: signalImData[i] }));
+    chartSignal.data.datasets[2].data = timeData.map((t, i) => ({ x: t, y: mxyData[i] }));
+    chartSignal.options.plugins.annotation = { annotations };
+    chartSignal.update('none');
+}
+
+function clearChartData() {
+    timeData = [];
+    mxyData = [];
+    mzData = [];
+    signalReData = [];
+    signalImData = [];
+    eventMarkers = [];
+    updateCharts();
+}
+
+/**
+ * Add an event marker for chart annotations
+ * @param {number} time - Time in ms when event occurs
+ * @param {string} type - 'rf90', 'rf180', 'gradient_flip', 'gradient_restore', 'echo'
+ * @param {string} label - Label to show on chart
+ */
+function addEventMarker(time, type, label) {
+    eventMarkers.push({ time, type, label });
+}
+
+/**
+ * Generate Chart.js annotation config from event markers
+ */
+function getChartAnnotations() {
+    const annotations = {};
+
+    eventMarkers.forEach((event, i) => {
+        let color, borderDash;
+
+        switch (event.type) {
+            case 'rf90':
+                color = '#f59e0b'; // amber
+                borderDash = [];
+                break;
+            case 'rf180':
+                color = '#ef4444'; // red
+                borderDash = [];
+                break;
+            case 'gradient_flip':
+                color = '#8b5cf6'; // purple
+                borderDash = [5, 5];
+                break;
+            case 'gradient_restore':
+                color = '#8b5cf6'; // purple
+                borderDash = [2, 2];
+                break;
+            case 'echo':
+                color = '#22c55e'; // green
+                borderDash = [];
+                break;
+            default:
+                color = '#94a3b8';
+                borderDash = [];
+        }
+
+        annotations[`event${i}`] = {
+            type: 'line',
+            xMin: event.time,
+            xMax: event.time,
+            borderColor: color,
+            borderWidth: 2,
+            borderDash: borderDash,
+            label: {
+                display: true,
+                content: event.label,
+                position: 'start',
+                backgroundColor: 'rgba(0,0,0,0.7)',
+                color: color,
+                font: { size: 10, weight: 'bold' },
+                padding: 3
+            }
+        };
+    });
+
+    return annotations;
+}
+
+// ============================================================================
+// ANIMATION LOOP
+// ============================================================================
+
+function animate(timestamp) {
+    animationId = requestAnimationFrame(animate);
+
+    // Calculate delta time
+    if (!lastTimestamp) lastTimestamp = timestamp;
+    lastTimestamp = timestamp;
+
+    // Update simulation if playing
+    if (CONFIG.isPlaying && CONFIG.currentTime < CONFIG.maxTime) {
+        const simDt = CONFIG.dt * CONFIG.animationSpeed;
+        CONFIG.currentTime += simDt;
+
+        // Update physics based on module
+        switch (CONFIG.currentModule) {
+            case 'A':
+                updateModuleA(simDt);
+                break;
+            case 'B':
+                updateModuleB(simDt);
+                break;
+            case 'C':
+                updateModuleC(simDt);
+                break;
+            case 'D':
+                updateModuleD(simDt);
+                break;
+        }
+
+        // Update time display
+        document.getElementById('time-val').textContent = CONFIG.currentTime.toFixed(1) + ' ms';
     }
 
-    renderBrainCanvas(signals, scaleFactor) {
-        const canvas = document.getElementById('brain-canvas');
-        if (!canvas) return;
+    // Render 3D scene
+    renderer.render(scene, camera);
+}
 
-        const srcSize = this.canvasSize; // 512
+function updateModuleA(dt) {
+    if (!alignmentEnsemble || !b0IsOn) return;
 
-        // If segmentation not loaded yet, show loading
-        if (!this.brainSegData) {
-            canvas.width = srcSize;
-            canvas.height = srcSize;
-            const ctx = canvas.getContext('2d');
-            ctx.fillStyle = '#000';
-            ctx.fillRect(0, 0, srcSize, srcSize);
-            ctx.fillStyle = '#333';
-            ctx.font = '16px Inter';
-            ctx.textAlign = 'center';
-            ctx.fillText('Loading brain...', srcSize / 2, srcSize / 2);
+    // When B0 is on, spins align toward +z through T1 relaxation
+    // Each spin evolves independently
+    alignmentEnsemble.spins.forEach(spin => {
+        // T1 relaxation drives Mz toward equilibrium (M0 = 1)
+        const E1 = Math.exp(-dt / spin.T1);
+        spin.Mz = spin.Mz * E1 + (1 - E1);
+
+        // Transverse components decay (but more slowly since no RF was applied)
+        // In reality, random thermal motion causes some T2-like decay
+        const E2 = Math.exp(-dt / spin.T2);
+        spin.Mx *= E2;
+        spin.My *= E2;
+
+        // Normalize the magnetization vector (keep it on unit sphere during alignment)
+        const mag = Math.sqrt(spin.Mx * spin.Mx + spin.My * spin.My + spin.Mz * spin.Mz);
+        if (mag > 0.01) {
+            spin.Mx /= mag;
+            spin.My /= mag;
+            spin.Mz /= mag;
+        }
+    });
+
+    // Get sum magnetization for plotting
+    const sum = alignmentEnsemble.getSumMagnetization();
+    const avgMz = alignmentEnsemble.getAverageMz();
+
+    // Record data
+    timeData.push(CONFIG.currentTime);
+    mxyData.push(Math.sqrt(sum.Mx * sum.Mx + sum.My * sum.My));
+    mzData.push(sum.Mz);
+    signalReData.push(sum.Mx);
+    signalImData.push(sum.My);
+
+    // Update visualization
+    updateAlignmentArrows();
+
+    // Update alignment progress bar
+    const alignmentPercent = Math.max(0, avgMz * 100);
+    document.getElementById('alignment-fill').style.width = alignmentPercent + '%';
+    document.getElementById('net-mz').textContent = alignmentPercent.toFixed(0) + '%';
+
+    // Update vector display
+    document.getElementById('Mx-val').textContent = sum.Mx.toFixed(2);
+    document.getElementById('My-val').textContent = sum.My.toFixed(2);
+    document.getElementById('Mz-val').textContent = sum.Mz.toFixed(2);
+
+    updateCharts();
+}
+
+function updateModuleB(dt) {
+    // Evolve ensemble
+    ensemble.evolve(dt);
+
+    // Get sum magnetization
+    const sum = ensemble.getSumMagnetization();
+
+    // Record data
+    timeData.push(CONFIG.currentTime);
+    mxyData.push(Math.sqrt(sum.Mx * sum.Mx + sum.My * sum.My));
+    mzData.push(sum.Mz);
+    signalReData.push(sum.Mx);
+    signalImData.push(sum.My);
+
+    // Update visualization
+    updateEnsembleArrows();
+    updateVectorDisplay({ Mx: sum.Mx, My: sum.My, Mz: sum.Mz, getMxy: () => Math.sqrt(sum.Mx * sum.Mx + sum.My * sum.My) });
+    document.getElementById('coherent-count').textContent = ensemble.getPhaseCoherence().toFixed(0) + '%';
+    updateCharts();
+
+    // Update receiver coil glow based on dMxy/dt (detected signal - Faraday's law)
+    const mxy = Math.sqrt(sum.Mx * sum.Mx + sum.My * sum.My);
+    updateSignalPanelGlow(mxy, dt);
+}
+
+function updateModuleC(dt) {
+    echoSequenceTime += dt;
+
+    // Handle echo sequence timing
+    const halfTE = CONFIG.TE / 2;
+
+    if (CONFIG.echoType === 'spin') {
+        // Spin Echo: 90° at t=0, 180° at t=TE/2, echo at t=TE
+        if (echoSequenceState === 'dephasing' && echoSequenceTime >= halfTE) {
+            // Apply 180° pulse
+            ensemble.spins.forEach(spin => {
+                spin.applyRFPulse(180, 0);
+            });
+            // Add event marker for 180° pulse
+            addEventMarker(CONFIG.currentTime, 'rf180', '180°');
+            echoSequenceState = 'refocusing';
+        }
+    } else {
+        // Gradient Echo: gradient reversal at TE/2, turn off at TE
+        if (echoSequenceState === 'dephasing' && echoSequenceTime >= halfTE && !gradientFlipped) {
+            // Toggle gradient direction (flip sign)
+            ensemble.toggleGradient();
+            gradientFlipped = true;
+            // Add event marker for gradient flip
+            addEventMarker(CONFIG.currentTime, 'gradient_flip', 'G flip');
+            echoSequenceState = 'refocusing';
+        }
+        // Turn off gradient at echo (TE) - readout complete
+        if (echoSequenceState === 'refocusing' && echoSequenceTime >= CONFIG.TE && gradientFlipped) {
+            // Clear gradient completely - only B0 inhomogeneity remains
+            ensemble.clearGradient();
+            echoSequenceState = 'done';
+        }
+    }
+
+    // Evolve ensemble
+    ensemble.evolve(dt);
+
+    // Get sum magnetization
+    const sum = ensemble.getSumMagnetization();
+
+    // Record data
+    timeData.push(CONFIG.currentTime);
+    mxyData.push(Math.sqrt(sum.Mx * sum.Mx + sum.My * sum.My));
+    mzData.push(sum.Mz);
+    signalReData.push(sum.Mx);
+    signalImData.push(sum.My);
+
+    // Update visualization
+    updateEnsembleArrows();
+    updateVectorDisplay({ Mx: sum.Mx, My: sum.My, Mz: sum.Mz });
+    document.getElementById('coherent-count').textContent = ensemble.getPhaseCoherence().toFixed(0) + '%';
+    updateCharts();
+
+    // Update receiver coil glow based on dMxy/dt (detected signal - Faraday's law)
+    const mxy = Math.sqrt(sum.Mx * sum.Mx + sum.My * sum.My);
+    updateSignalPanelGlow(mxy, dt);
+}
+
+/**
+ * Module D: GRE Variants - Multi-TR steady-state simulation
+ * Shows how magnetization evolves over repeated excitations
+ * Spoiled GRE: RF spoiling destroys Mxy → T1-weighted
+ * SSFP: Balanced gradients preserve Mxy → T2/T1-weighted
+ */
+function updateModuleD(dt) {
+    if (greSequenceState !== 'running') return;
+
+    timeInTR += dt;
+
+    // Check if we've completed a TR
+    if (timeInTR >= CONFIG.TR) {
+        // End of TR: record steady-state signal and prepare for next TR
+        const sum = ensemble.getSumMagnetization();
+        const mxy = Math.sqrt(sum.Mx * sum.Mx + sum.My * sum.My);
+
+        // Store signal at end of TR (just before next RF pulse)
+        steadyStateMxy.push(mxy);
+        steadyStateMz.push(sum.Mz);
+
+        currentTRIndex++;
+
+        // Check if we've done all TRs
+        if (currentTRIndex >= CONFIG.numTR) {
+            greSequenceState = 'done';
+            updateSteadyStateDisplay();
             return;
         }
 
-        // Create/reuse offscreen canvas at native 512×512
-        if (!this.offscreenCanvas) {
-            this.offscreenCanvas = document.createElement('canvas');
-            this.offscreenCanvas.width = srcSize;
-            this.offscreenCanvas.height = srcSize;
-        }
+        // Prepare for next TR
+        timeInTR = 0;
 
-        // Render grayscale image at native resolution
-        const offCtx = this.offscreenCanvas.getContext('2d');
-        const imageData = offCtx.createImageData(srcSize, srcSize);
-        const data = imageData.data;
-
-        for (let i = 0; i < this.brainSegData.length; i++) {
-            const label = this.brainSegData[i]; // Already mapped to 0-4 in loadBrainSegmentation
-            const signal = signals[label] || 0;
-            const grayVal = Math.floor(Math.min(signal * scaleFactor, 255));
-            const idx = i * 4;
-            data[idx] = grayVal;
-            data[idx + 1] = grayVal;
-            data[idx + 2] = grayVal;
-            data[idx + 3] = 255;
-        }
-        offCtx.putImageData(imageData, 0, 0);
-
-        // Set display canvas to fixed 512×512 - let browser handle scaling with CSS
-        canvas.width = srcSize;
-        canvas.height = srcSize;
-
-        // Draw offscreen canvas to display canvas
-        const ctx = canvas.getContext('2d');
-        ctx.drawImage(this.offscreenCanvas, 0, 0);
-    }
-
-    updateContrastCharts() {
-        // We need to update ALL visible charts
-        // Helper to generate data for a specific varying parameter
-        const generateData = (paramKey, min, max, step) => {
-            return this.tissues.map(tissue => {
-                const data = [];
-                for (let x = min; x <= max; x += step) {
-                    let s = 0;
-                    let p = { ...this.params };
-                    p[paramKey] = x; // Override
-
-                    if (p.sequence === 'SE') {
-                        s = this.getSignalSE(tissue.t1, tissue.t2, tissue.pd, p.tr, p.te, p.fa);
-                    } else if (p.sequence === 'GRE') {
-                        s = this.getSignalGRE(tissue.t1, tissue.t2, tissue.pd, p.tr, p.te, p.fa, p.inhomogeneity);
-                    } else if (p.sequence === 'IR') {
-                        s = this.getSignalIR(tissue.t1, tissue.t2, tissue.pd, p.tr, p.te, p.ti, p.fa);
-                    }
-
-                    // Apply magnitude unless "Show Signed" is enabled (only relevant for IR)
-                    if (!this.showSigned) {
-                        s = Math.abs(s);
-                    }
-
-                    data.push({ x: x, y: s });
-                }
-                // Create semi-transparent version of color for fill
-                const hexToRgba = (hex, alpha) => {
-                    const r = parseInt(hex.slice(1, 3), 16);
-                    const g = parseInt(hex.slice(3, 5), 16);
-                    const b = parseInt(hex.slice(5, 7), 16);
-                    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
-                };
-
-                return {
-                    label: tissue.name,
-                    data: data,
-                    borderColor: tissue.color,
-                    backgroundColor: hexToRgba(tissue.color, 0.1),
-                    borderWidth: 2.5,
-                    pointRadius: 0,
-                    fill: true,
-                    tension: 0.1
-                };
+        // Apply RF pulse at start of new TR
+        if (CONFIG.greType === 'spoiled') {
+            // Spoiled GRE: Apply spoiler gradient to destroy Mxy before RF
+            // Then apply RF with incrementing phase (RF spoiling)
+            // Simplified: just zero out Mxy (perfect spoiling)
+            ensemble.spins.forEach(spin => {
+                spin.Mx = 0;
+                spin.My = 0;
             });
-        };
-
-        // Helper to add vertical indicator line with glow effect
-        const addIndicator = (chart, value, color = '#ef4444') => {
-            // Find max Y in current datasets to scale the indicator
-            let maxY = 0;
-            chart.data.datasets.forEach(ds => {
-                if (ds.data) {
-                    const dsMax = Math.max(...ds.data.map(p => p.y));
-                    if (dsMax > maxY) maxY = dsMax;
-                }
-            });
-
-            // If no data or max is 0, default to 1.0
-            if (maxY === 0) maxY = 1.0;
-
-            // Add a margin (e.g. 10%)
-            const indicatorHeight = maxY * 1.1;
-
-            // Add glow line (thicker, semi-transparent)
-            chart.data.datasets.push({
-                label: '',
-                data: [{ x: value, y: 0 }, { x: value, y: indicatorHeight }],
-                borderColor: 'rgba(239, 68, 68, 0.3)',
-                borderWidth: 8,
-                pointRadius: 0,
-                showLine: true,
-                order: -1,
-                fill: false
-            });
-
-            // Add main indicator line
-            chart.data.datasets.push({
-                label: 'Current',
-                data: [{ x: value, y: 0 }, { x: value, y: indicatorHeight }],
-                borderColor: color,
-                borderWidth: 2,
-                borderDash: [6, 4],
-                pointRadius: 0,
-                showLine: true,
-                order: 0,
-                fill: false
-            });
-        };
-
-        // Update TR Chart
-        const maxTR = Math.max(5000, this.params.tr * 1.1);
-        this.charts.tr.data.datasets = generateData('tr', 0, maxTR, maxTR / 100);
-        addIndicator(this.charts.tr, this.params.tr);
-        // Update scale to match data
-        this.charts.tr.options.scales.x.max = maxTR;
-        this.charts.tr.update();
-
-        // Update TE Chart
-        this.charts.te.data.datasets = generateData('te', 0, 300, 5);
-
-        // If GRE, add T2 reference curve (dotted) for White Matter (or first tissue)
-        if (this.params.sequence === 'GRE' && this.tissues.length > 0) {
-            const refTissue = this.tissues[0]; // Use first tissue as reference
-            const data = [];
-            for (let x = 0; x <= 300; x += 5) {
-                // Pure T2 decay: PD * exp(-TE/T2) * (saturation term)
-                // Saturation term depends on TR/T1/FA.
-                // S_GRE_steady = M0 * sin(a)*(1-E1)/(1-E1*cos(a)) * exp(-TE/T2)
-                // We use T2 instead of T2*
-                const s = this.getSignalGRE(refTissue.t1, refTissue.t2, refTissue.pd, this.params.tr, x, this.params.fa, 0); // Inhomogeneity = 0
-                data.push({ x: x, y: s });
-            }
-            this.charts.te.data.datasets.push({
-                label: `${refTissue.name} (Pure T2)`,
-                data: data,
-                borderColor: refTissue.color,
-                borderWidth: 2,
-                borderDash: [2, 2], // Dotted
-                pointRadius: 0
-            });
-        }
-
-        addIndicator(this.charts.te, this.params.te);
-        this.charts.te.update();
-
-        // Update TI Chart (only if IR)
-        if (this.params.sequence === 'IR') {
-            const maxTI = Math.max(2000, this.params.ti * 1.1);
-            this.charts.ti.data.datasets = generateData('ti', 0, maxTI, maxTI / 100);
-            addIndicator(this.charts.ti, this.params.ti);
-            // Update scale to match data
-            this.charts.ti.options.scales.x.max = maxTI;
-            this.charts.ti.update();
-        }
-
-        // Update FA Chart (for all sequences)
-        this.charts.fa.data.datasets = generateData('fa', 0, 180, 1);
-        addIndicator(this.charts.fa, this.params.fa);
-        this.charts.fa.update();
-    }
-
-    updateEquation() {
-        const el = document.getElementById('equation-overlay');
-        let eqHtml = '';
-        let legendHtml = '';
-
-        const commonLegend = `
-            <span class="legend-term">S</span><span>Signal Intensity</span>
-            <span class="legend-term">PD</span><span>Proton Density</span>
-        `;
-
-        if (this.params.sequence === 'SE') {
-            eqHtml = `
-        S &approx; PD &middot;
-        <span style="color: #2563eb;">(T1 Recovery)</span> &middot;
-        <span style="color: #dc2626;">(T2 Decay)</span>
-        `;
-            legendHtml = `
-                ${commonLegend}
-                <span class="legend-term" style="color: #2563eb;">T1 Recovery</span><span>Depends on TR & T1</span>
-                <span class="legend-term" style="color: #dc2626;">T2 Decay</span><span>Depends on TE & T2</span>
-        `;
-        } else if (this.params.sequence === 'GRE') {
-            eqHtml = `
-        S &approx; PD &middot;
-        <span style="color: #2563eb;">(Steady State T1)</span> &middot;
-        <span style="color: #dc2626;">(T2* Decay)</span>
-        `;
-            legendHtml = `
-                ${commonLegend}
-                <span class="legend-term" style="color: #2563eb;">Steady State T1</span><span>Depends on TR, T1 & &alpha;</span>
-                <span class="legend-term" style="color: #dc2626;">T2* Decay</span><span>Depends on TE & T2*</span>
-        `;
-        } else if (this.params.sequence === 'IR') {
-            eqHtml = `
-        S &approx; PD &middot;
-        <span style="color: #2563eb;">(Inversion Recovery)</span> &middot;
-        <span style="color: #dc2626;">(T2 Decay)</span>
-        `;
-            legendHtml = `
-                ${commonLegend}
-                <span class="legend-term" style="color: #2563eb;">Inversion Recovery</span><span>Depends on TI, TR & T1</span>
-                <span class="legend-term" style="color: #dc2626;">T2 Decay</span><span>Depends on TE & T2</span>
-        `;
-        }
-
-        el.innerHTML = `
-            <div class="equation-main">${eqHtml}</div>
-                <div class="equation-legend">${legendHtml}</div>
-        `;
-    }
-
-    // ========================================
-    // Sequence Mechanics Visualizations
-    // ========================================
-
-    initMechanicsVisualizations() {
-        // Initialize R2 Chart as line chart showing decay curves
-        const r2Ctx = document.getElementById('r2Chart').getContext('2d');
-        this.r2Chart = new Chart(r2Ctx, {
-            type: 'line',
-            data: {
-                datasets: [
-                    {
-                        label: 'T2 Decay (SE)',
-                        data: [],
-                        borderColor: '#3b82f6',
-                        backgroundColor: 'rgba(59, 130, 246, 0.1)',
-                        borderWidth: 3,
-                        fill: true,
-                        tension: 0.4,
-                        pointRadius: 0
-                    },
-                    {
-                        label: 'T2* Decay (GRE)',
-                        data: [],
-                        borderColor: '#10b981',
-                        backgroundColor: 'rgba(16, 185, 129, 0.1)',
-                        borderWidth: 3,
-                        fill: true,
-                        tension: 0.4,
-                        pointRadius: 0
-                    }
-                ]
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: {
-                    legend: {
-                        display: true,
-                        position: 'top',
-                        labels: {
-                            usePointStyle: true,
-                            padding: 15,
-                            font: { size: 11 },
-                            color: '#94a3b8'
-                        }
-                    }
-                },
-                scales: {
-                    x: {
-                        type: 'linear',
-                        title: { display: true, text: 'Time (ms)', font: { size: 11 }, color: '#94a3b8' },
-                        grid: { color: 'rgba(148, 163, 184, 0.1)' },
-                        ticks: { color: '#94a3b8' }
-                    },
-                    y: {
-                        title: { display: true, text: 'Signal', font: { size: 11 }, color: '#94a3b8' },
-                        min: 0,
-                        max: 1,
-                        grid: { color: 'rgba(148, 163, 184, 0.1)' },
-                        ticks: { color: '#94a3b8' }
-                    }
-                }
-            }
-        });
-
-        // Phase Wheel Controls - 16 frames for smooth animation
-        this.totalFrames = 16;
-
-        document.getElementById('prev-frame').addEventListener('click', () => {
-            this.phaseWheelFrame = (this.phaseWheelFrame - 1 + this.totalFrames) % this.totalFrames;
-            this.updatePhaseWheel();
-            this.updateRFTimeline(); // Sync timeline
-        });
-
-        document.getElementById('next-frame').addEventListener('click', () => {
-            this.phaseWheelFrame = (this.phaseWheelFrame + 1) % this.totalFrames;
-            this.updatePhaseWheel();
-            this.updateRFTimeline(); // Sync timeline
-        });
-
-        document.getElementById('play-animation').addEventListener('click', () => {
-            if (this.phaseWheelPlaying) {
-                clearInterval(this.phaseWheelInterval);
-                this.phaseWheelPlaying = false;
-                document.getElementById('play-animation').textContent = '▶ Play';
-            } else {
-                this.phaseWheelPlaying = true;
-                document.getElementById('play-animation').textContent = '⏸ Pause';
-                this.phaseWheelInterval = setInterval(() => {
-                    this.phaseWheelFrame = (this.phaseWheelFrame + 1) % this.totalFrames;
-                    this.updatePhaseWheel();
-                    this.updateRFTimeline(); // Sync timeline
-                }, 400); // Faster for 16 frames
-            }
-        });
-
-        // Initial render
-        this.updatePhaseWheel();
-        this.updateR2Chart();
-        this.updateRFTimeline();
-    }
-
-    updatePhaseWheel() {
-        const svg = document.getElementById('phase-wheel');
-        const seq = this.params.sequence;
-        const frame = this.phaseWheelFrame;
-        const t = frame / (this.totalFrames - 1); // Normalized time 0-1
-
-        // Update sequence-specific styling
-        this.updateMechanicsColors(seq);
-
-        // Sequence colors
-        const seqColors = {
-            'SE': { primary: '#3b82f6', secondary: '#93c5fd' },
-            'GRE': { primary: '#10b981', secondary: '#6ee7b7' },
-            'IR': { primary: '#a855f7', secondary: '#c4b5fd' }
-        };
-        const colors = seqColors[seq] || seqColors['SE'];
-
-        // Get step info for current frame
-        const stepInfo = this.getStepInfo(seq, frame);
-        document.getElementById('frame-label').textContent = `${frame + 1}/${this.totalFrames}: ${stepInfo.label}`;
-
-        // Clear SVG
-        svg.innerHTML = '';
-        const ns = 'http://www.w3.org/2000/svg';
-
-        // Add gradient definitions
-        const defs = document.createElementNS(ns, 'defs');
-
-        // Dark gradient background
-        const bgGrad = document.createElementNS(ns, 'radialGradient');
-        bgGrad.setAttribute('id', 'bgGradient');
-        bgGrad.innerHTML = `
-            <stop offset="0%" stop-color="#1e293b"/>
-            <stop offset="100%" stop-color="#0f172a"/>
-        `;
-        defs.appendChild(bgGrad);
-
-        // Glow filter
-        const glowFilter = document.createElementNS(ns, 'filter');
-        glowFilter.setAttribute('id', 'glow');
-        glowFilter.innerHTML = `
-            <feGaussianBlur stdDeviation="3" result="coloredBlur"/>
-            <feMerge>
-                <feMergeNode in="coloredBlur"/>
-                <feMergeNode in="SourceGraphic"/>
-            </feMerge>
-        `;
-        defs.appendChild(glowFilter);
-
-        // Arrow markers
-        ['spin', 'net', 'mz'].forEach((type, idx) => {
-            const markerColors = [colors.secondary, '#ef4444', '#22c55e'];
-            const marker = document.createElementNS(ns, 'marker');
-            marker.setAttribute('id', `arrow-${type}`);
-            marker.setAttribute('markerWidth', '8');
-            marker.setAttribute('markerHeight', '8');
-            marker.setAttribute('refX', '6');
-            marker.setAttribute('refY', '3');
-            marker.setAttribute('orient', 'auto');
-            const polygon = document.createElementNS(ns, 'polygon');
-            polygon.setAttribute('points', '0 0, 8 3, 0 6');
-            polygon.setAttribute('fill', markerColors[idx]);
-            marker.appendChild(polygon);
-            defs.appendChild(marker);
-        });
-
-        svg.appendChild(defs);
-
-        // Background
-        const bg = document.createElementNS(ns, 'rect');
-        bg.setAttribute('width', '300');
-        bg.setAttribute('height', '300');
-        bg.setAttribute('fill', 'url(#bgGradient)');
-        bg.setAttribute('rx', '12');
-        svg.appendChild(bg);
-
-        // --- DUAL VIEW: Transverse (Mxy) on left, Longitudinal (Mz) on right ---
-        const leftCx = 100, leftCy = 130; // Transverse plane center
-        const rightCx = 220, rightCy = 130; // Longitudinal view center
-        const radius = 60;
-
-        // Labels
-        this.addSvgText(svg, leftCx, 30, 'Mxy (Transverse)', 'middle', '10px', '#94a3b8', '600');
-        this.addSvgText(svg, rightCx, 30, 'Mz (Longitudinal)', 'middle', '10px', '#94a3b8', '600');
-
-        // --- Transverse Plane View ---
-        // Reference circle
-        const refCircle = document.createElementNS(ns, 'circle');
-        refCircle.setAttribute('cx', leftCx);
-        refCircle.setAttribute('cy', leftCy);
-        refCircle.setAttribute('r', radius);
-        refCircle.setAttribute('fill', 'none');
-        refCircle.setAttribute('stroke', 'rgba(148, 163, 184, 0.3)');
-        refCircle.setAttribute('stroke-width', '1');
-        refCircle.setAttribute('stroke-dasharray', '4,4');
-        svg.appendChild(refCircle);
-
-        // Center dot
-        const centerDot = document.createElementNS(ns, 'circle');
-        centerDot.setAttribute('cx', leftCx);
-        centerDot.setAttribute('cy', leftCy);
-        centerDot.setAttribute('r', '3');
-        centerDot.setAttribute('fill', '#64748b');
-        svg.appendChild(centerDot);
-
-        // Axis labels for transverse
-        this.addSvgText(svg, leftCx + radius + 10, leftCy + 4, "x'", 'start', '10px', '#64748b');
-        this.addSvgText(svg, leftCx, leftCy - radius - 8, "y'", 'middle', '10px', '#64748b');
-
-        // --- Longitudinal View (Mz bar) ---
-        const barX = rightCx - 15;
-        const barW = 30;
-        const barH = 100;
-        const barTop = rightCy - barH / 2;
-
-        // Background bar
-        const mzBg = document.createElementNS(ns, 'rect');
-        mzBg.setAttribute('x', barX);
-        mzBg.setAttribute('y', barTop);
-        mzBg.setAttribute('width', barW);
-        mzBg.setAttribute('height', barH);
-        mzBg.setAttribute('fill', 'rgba(148, 163, 184, 0.1)');
-        mzBg.setAttribute('stroke', 'rgba(148, 163, 184, 0.3)');
-        mzBg.setAttribute('rx', '4');
-        svg.appendChild(mzBg);
-
-        // Zero line
-        const zeroLine = document.createElementNS(ns, 'line');
-        zeroLine.setAttribute('x1', barX - 5);
-        zeroLine.setAttribute('y1', rightCy);
-        zeroLine.setAttribute('x2', barX + barW + 5);
-        zeroLine.setAttribute('y2', rightCy);
-        zeroLine.setAttribute('stroke', '#64748b');
-        zeroLine.setAttribute('stroke-width', '1');
-        zeroLine.setAttribute('stroke-dasharray', '2,2');
-        svg.appendChild(zeroLine);
-
-        // Mz labels
-        this.addSvgText(svg, barX - 10, barTop + 5, '+M₀', 'end', '9px', '#22c55e');
-        this.addSvgText(svg, barX - 10, barTop + barH - 2, '-M₀', 'end', '9px', '#ef4444');
-        this.addSvgText(svg, barX - 10, rightCy + 3, '0', 'end', '9px', '#64748b');
-
-        // Get magnetization state
-        const state = this.getMagnetizationState(seq, frame);
-        const numSpins = 12;
-        const spinLen = 40;
-
-        // Draw individual spins in transverse plane
-        for (let i = 0; i < numSpins; i++) {
-            const spreadAngle = state.spread * Math.PI * 2;
-            const baseAngle = state.baseAngle + (i - numSpins / 2) * (spreadAngle / numSpins);
-            const spinMxy = state.mxy * 0.8; // Scale for visibility
-
-            if (spinMxy > 0.05) {
-                const x2 = leftCx + spinLen * spinMxy * Math.cos(baseAngle);
-                const y2 = leftCy - spinLen * spinMxy * Math.sin(baseAngle);
-
-                const line = document.createElementNS(ns, 'line');
-                line.setAttribute('x1', leftCx);
-                line.setAttribute('y1', leftCy);
-                line.setAttribute('x2', x2);
-                line.setAttribute('y2', y2);
-                line.setAttribute('stroke', colors.secondary);
-                line.setAttribute('stroke-width', '2');
-                line.setAttribute('stroke-linecap', 'round');
-                line.setAttribute('opacity', '0.6');
-                svg.appendChild(line);
-            }
-        }
-
-        // Net Mxy vector
-        if (state.mxy > 0.05) {
-            const netLen = radius * 0.85 * state.mxy * state.coherence;
-            const netX = leftCx + netLen * Math.cos(state.baseAngle);
-            const netY = leftCy - netLen * Math.sin(state.baseAngle);
-
-            // Glow
-            const glow = document.createElementNS(ns, 'line');
-            glow.setAttribute('x1', leftCx);
-            glow.setAttribute('y1', leftCy);
-            glow.setAttribute('x2', netX);
-            glow.setAttribute('y2', netY);
-            glow.setAttribute('stroke', '#ef4444');
-            glow.setAttribute('stroke-width', '8');
-            glow.setAttribute('stroke-linecap', 'round');
-            glow.setAttribute('opacity', '0.3');
-            glow.setAttribute('filter', 'url(#glow)');
-            svg.appendChild(glow);
-
-            // Main vector
-            const netLine = document.createElementNS(ns, 'line');
-            netLine.setAttribute('x1', leftCx);
-            netLine.setAttribute('y1', leftCy);
-            netLine.setAttribute('x2', netX);
-            netLine.setAttribute('y2', netY);
-            netLine.setAttribute('stroke', '#ef4444');
-            netLine.setAttribute('stroke-width', '4');
-            netLine.setAttribute('stroke-linecap', 'round');
-            svg.appendChild(netLine);
-
-            // Tip circle
-            const tip = document.createElementNS(ns, 'circle');
-            tip.setAttribute('cx', netX);
-            tip.setAttribute('cy', netY);
-            tip.setAttribute('r', '5');
-            tip.setAttribute('fill', '#ef4444');
-            tip.setAttribute('filter', 'url(#glow)');
-            svg.appendChild(tip);
-
-            // Label
-            this.addSvgText(svg, netX + 10, netY - 8, 'Mxy', 'start', '10px', '#ef4444', '600');
-        }
-
-        // --- Mz bar fill ---
-        const mzValue = state.mz; // -1 to +1
-        const mzHeight = Math.abs(mzValue) * (barH / 2);
-        const mzY = mzValue >= 0 ? rightCy - mzHeight : rightCy;
-        const mzColor = mzValue >= 0 ? '#22c55e' : '#ef4444';
-
-        const mzFill = document.createElementNS(ns, 'rect');
-        mzFill.setAttribute('x', barX + 2);
-        mzFill.setAttribute('y', mzY);
-        mzFill.setAttribute('width', barW - 4);
-        mzFill.setAttribute('height', mzHeight);
-        mzFill.setAttribute('fill', mzColor);
-        mzFill.setAttribute('opacity', '0.7');
-        mzFill.setAttribute('rx', '2');
-        svg.appendChild(mzFill);
-
-        // Mz value indicator line
-        const mzIndicatorY = rightCy - mzValue * (barH / 2);
-        const mzIndicator = document.createElementNS(ns, 'line');
-        mzIndicator.setAttribute('x1', barX - 3);
-        mzIndicator.setAttribute('y1', mzIndicatorY);
-        mzIndicator.setAttribute('x2', barX + barW + 3);
-        mzIndicator.setAttribute('y2', mzIndicatorY);
-        mzIndicator.setAttribute('stroke', mzColor);
-        mzIndicator.setAttribute('stroke-width', '3');
-        mzIndicator.setAttribute('filter', 'url(#glow)');
-        svg.appendChild(mzIndicator);
-
-        // Mz value text
-        this.addSvgText(svg, rightCx + 30, mzIndicatorY + 4, `${(mzValue * 100).toFixed(0)}%`, 'start', '10px', mzColor, '600');
-
-        // --- Signal Bar (bottom) ---
-        const signalBarY = 250;
-        const signalBarW = 200;
-        const signalValue = state.mxy * state.coherence;
-
-        // Background
-        const sigBg = document.createElementNS(ns, 'rect');
-        sigBg.setAttribute('x', 50);
-        sigBg.setAttribute('y', signalBarY);
-        sigBg.setAttribute('width', signalBarW);
-        sigBg.setAttribute('height', '8');
-        sigBg.setAttribute('rx', '4');
-        sigBg.setAttribute('fill', 'rgba(148, 163, 184, 0.2)');
-        svg.appendChild(sigBg);
-
-        // Fill
-        const sigFill = document.createElementNS(ns, 'rect');
-        sigFill.setAttribute('x', 50);
-        sigFill.setAttribute('y', signalBarY);
-        sigFill.setAttribute('width', signalBarW * signalValue);
-        sigFill.setAttribute('height', '8');
-        sigFill.setAttribute('rx', '4');
-        sigFill.setAttribute('fill', colors.primary);
-        sigFill.setAttribute('filter', 'url(#glow)');
-        svg.appendChild(sigFill);
-
-        // Signal label
-        this.addSvgText(svg, 150, signalBarY + 22, `Signal: ${Math.round(signalValue * 100)}%`, 'middle', '11px', '#f1f5f9', '500');
-
-        // --- Educational Info Box ---
-        const infoBox = document.getElementById('phase-info');
-        if (infoBox) {
-            infoBox.innerHTML = `<strong>${stepInfo.label}</strong><br>${stepInfo.description}`;
-        }
-
-        // Update parameter badge
-        const phaseBadge = document.getElementById('phase-params');
-        if (phaseBadge) {
-            phaseBadge.textContent = `${seq}: TE=${this.params.te}ms, TR=${this.params.tr}ms${seq === 'IR' ? `, TI=${this.params.ti}ms` : ''}`;
-        }
-    }
-
-    addSvgText(svg, x, y, text, anchor = 'middle', size = '11px', fill = '#f1f5f9', weight = '400') {
-        const ns = 'http://www.w3.org/2000/svg';
-        const textEl = document.createElementNS(ns, 'text');
-        textEl.setAttribute('x', x);
-        textEl.setAttribute('y', y);
-        textEl.setAttribute('text-anchor', anchor);
-        textEl.setAttribute('font-size', size);
-        textEl.setAttribute('font-weight', weight);
-        textEl.setAttribute('fill', fill);
-        textEl.setAttribute('font-family', 'Inter, sans-serif');
-        textEl.textContent = text;
-        svg.appendChild(textEl);
-    }
-
-    getMagnetizationState(seq, frame) {
-        const t = frame / (this.totalFrames - 1);
-
-        if (seq === 'SE') {
-            // Spin Echo: 16 frames
-            // 0-1: 90° pulse (Mz->Mxy)
-            // 2-7: Dephasing (T2* decay + spread)
-            // 8: 180° pulse (flip phase)
-            // 9-14: Rephasing
-            // 15: Echo peak
-            if (frame === 0) {
-                return { mz: 1, mxy: 0, spread: 0, coherence: 1, baseAngle: 0 };
-            } else if (frame === 1) {
-                return { mz: 0, mxy: 1, spread: 0, coherence: 1, baseAngle: 0 };
-            } else if (frame <= 7) {
-                const dephaseT = (frame - 1) / 6;
-                const spread = dephaseT * 0.8;
-                const decay = Math.exp(-dephaseT * 1.5);
-                return { mz: 0, mxy: 1, spread: spread, coherence: decay, baseAngle: dephaseT * Math.PI * 0.5 };
-            } else if (frame === 8) {
-                // 180° pulse - flip phases
-                return { mz: 0, mxy: 1, spread: 0.8, coherence: 0.3, baseAngle: -Math.PI * 0.25 };
-            } else if (frame <= 14) {
-                const rephaseT = (frame - 8) / 6;
-                const spread = 0.8 * (1 - rephaseT);
-                const recovery = 0.3 + rephaseT * 0.65;
-                return { mz: 0, mxy: 1, spread: spread, coherence: recovery, baseAngle: -Math.PI * 0.25 * (1 - rephaseT) };
-            } else {
-                // Echo
-                return { mz: 0, mxy: 1, spread: 0.05, coherence: 0.95, baseAngle: 0 };
-            }
-        } else if (seq === 'GRE') {
-            // Gradient Echo: 16 frames
-            // 0: Equilibrium
-            // 1: α° pulse
-            // 2-7: Dephasing (gradient + T2*)
-            // 8-14: Rephasing (gradient reversal) - partial
-            // 15: Echo (partial refocus)
-            const fa = this.params.fa * Math.PI / 180;
-            const mxyMax = Math.sin(fa);
-            const mzAfter = Math.cos(fa);
-
-            if (frame === 0) {
-                return { mz: 1, mxy: 0, spread: 0, coherence: 1, baseAngle: 0 };
-            } else if (frame === 1) {
-                return { mz: mzAfter, mxy: mxyMax, spread: 0, coherence: 1, baseAngle: 0 };
-            } else if (frame <= 7) {
-                const dephaseT = (frame - 1) / 6;
-                const spread = dephaseT * 1.0;
-                const decay = Math.exp(-dephaseT * 2);
-                return { mz: mzAfter, mxy: mxyMax, spread: spread, coherence: decay, baseAngle: dephaseT * Math.PI * 0.7 };
-            } else if (frame <= 14) {
-                const rephaseT = (frame - 7) / 7;
-                const spread = 1.0 * (1 - rephaseT * 0.7); // Partial rephase
-                const recovery = 0.15 + rephaseT * 0.45;
-                return { mz: mzAfter, mxy: mxyMax, spread: spread, coherence: recovery, baseAngle: Math.PI * 0.7 * (1 - rephaseT) };
-            } else {
-                return { mz: mzAfter, mxy: mxyMax, spread: 0.3, coherence: 0.6, baseAngle: 0 };
-            }
-        } else { // IR
-            // Inversion Recovery: 16 frames
-            // 0: Equilibrium
-            // 1: 180° inversion (Mz = -1)
-            // 2-9: T1 recovery (Mz: -1 -> varies based on TI)
-            // 10: 90° readout pulse
-            // 11-15: Signal decay with T2
-            const ti = this.params.ti;
-            const t1 = 1000; // Approximate T1 for visualization
-            const mzAtTI = 1 - 2 * Math.exp(-ti / t1);
-
-            if (frame === 0) {
-                return { mz: 1, mxy: 0, spread: 0, coherence: 1, baseAngle: 0 };
-            } else if (frame === 1) {
-                return { mz: -1, mxy: 0, spread: 0, coherence: 0, baseAngle: 0 };
-            } else if (frame <= 9) {
-                const recoveryT = (frame - 1) / 8;
-                const mz = -1 + (1 + mzAtTI) * recoveryT * recoveryT; // Curved recovery
-                return { mz: Math.max(-1, Math.min(1, mz)), mxy: 0, spread: 0, coherence: 0, baseAngle: 0 };
-            } else if (frame === 10) {
-                // 90° readout - Mz goes to Mxy
-                return { mz: 0, mxy: Math.abs(mzAtTI), spread: 0, coherence: 1, baseAngle: 0 };
-            } else {
-                const decayT = (frame - 10) / 5;
-                const spread = decayT * 0.3;
-                const decay = Math.exp(-decayT * 1.2);
-                return { mz: 0, mxy: Math.abs(mzAtTI), spread: spread, coherence: decay, baseAngle: decayT * Math.PI * 0.3 };
-            }
-        }
-    }
-
-    getStepInfo(seq, frame) {
-        const steps = {
-            'SE': [
-                { label: 'Equilibrium', description: 'Mz aligned with B0, no transverse magnetization' },
-                { label: '90° Excitation', description: 'RF pulse tips Mz into transverse plane (Mxy)' },
-                { label: 'Free Precession', description: 'Spins precess, begin to dephase due to T2* effects' },
-                { label: 'Dephasing', description: 'Field inhomogeneities cause progressive phase spread' },
-                { label: 'Dephasing', description: 'Signal decreases as spins lose coherence' },
-                { label: 'Dephasing', description: 'T2* decay continues, spins spread across phase wheel' },
-                { label: 'Max Dephase', description: 'Maximum dephasing before 180° pulse' },
-                { label: 'Pre-180° Pulse', description: 'Preparing for refocusing pulse' },
-                { label: '180° Refocus', description: 'Refocusing pulse flips spin phases - fast spins now behind' },
-                { label: 'Rephasing', description: 'Spins begin to reconverge as fast ones catch up' },
-                { label: 'Rephasing', description: 'Phase coherence increasing' },
-                { label: 'Rephasing', description: 'Spins approaching alignment' },
-                { label: 'Rephasing', description: 'Nearly rephased - signal recovering' },
-                { label: 'Rephasing', description: 'Almost at echo peak' },
-                { label: 'Near Echo', description: 'Spins nearly fully rephased' },
-                { label: 'Spin Echo!', description: 'Maximum signal - T2* effects cancelled, only T2 decay remains' }
-            ],
-            'GRE': [
-                { label: 'Equilibrium', description: 'Mz aligned with B0, ready for excitation' },
-                { label: 'α° Excitation', description: `${this.params.fa}° pulse tips partial Mz into Mxy` },
-                { label: 'Free Precession', description: 'Spins precess and dephase due to gradients + T2*' },
-                { label: 'Dephasing', description: 'Gradient dephasing + field inhomogeneity effects' },
-                { label: 'Dephasing', description: 'Rapid signal loss from gradient and T2*' },
-                { label: 'Dephasing', description: 'Continued dephasing - low signal' },
-                { label: 'Max Dephase', description: 'Maximum gradient-induced dephasing' },
-                { label: 'Gradient Reversal', description: 'Readout gradient polarity reversed' },
-                { label: 'Rephasing', description: 'Gradient rephasing begins - spins reconverging' },
-                { label: 'Rephasing', description: 'Partial recovery of phase coherence' },
-                { label: 'Rephasing', description: 'T2* effects remain - incomplete refocus' },
-                { label: 'Rephasing', description: 'Approaching gradient echo' },
-                { label: 'Rephasing', description: 'Nearly at echo center' },
-                { label: 'Near Echo', description: 'Gradient-induced dephasing cancelled' },
-                { label: 'Near Echo', description: 'T2* effects persist - lower signal than SE' },
-                { label: 'Gradient Echo', description: 'Partial refocus - T2* decay remains (no 180° pulse)' }
-            ],
-            'IR': [
-                { label: 'Equilibrium', description: 'Mz at maximum (+M0), aligned with B0' },
-                { label: '180° Inversion', description: 'Inversion pulse flips Mz to -M0' },
-                { label: 'T1 Recovery', description: 'Mz recovering toward +M0 via T1 relaxation' },
-                { label: 'T1 Recovery', description: 'Longitudinal magnetization increasing' },
-                { label: 'T1 Recovery', description: 'Mz approaching null point' },
-                { label: 'T1 Recovery', description: 'Recovery continues - Mz may cross zero' },
-                { label: 'T1 Recovery', description: 'Tissue-specific recovery rates create contrast' },
-                { label: 'T1 Recovery', description: 'Near TI - time for readout' },
-                { label: 'T1 Recovery', description: 'Mz value determines signal magnitude' },
-                { label: 'At TI', description: `TI=${this.params.ti}ms reached - readout pulse applied` },
-                { label: '90° Readout', description: 'Readout pulse converts Mz to Mxy signal' },
-                { label: 'Signal Decay', description: 'Transverse magnetization begins T2 decay' },
-                { label: 'Signal Decay', description: 'T2-weighted decay of the IR signal' },
-                { label: 'Signal Decay', description: 'Signal decreasing with T2 relaxation' },
-                { label: 'Signal Decay', description: 'Continued T2 decay' },
-                { label: 'Signal Acquired', description: 'IR signal acquired with T1 and T2 contrast' }
-            ]
-        };
-        return steps[seq][frame] || { label: 'Unknown', description: '' };
-    }
-
-
-    updateR2Chart() {
-        // Calculate T2 and T2* decay curves
-        const t2 = 80; // White matter T2 (ms)
-        const r2 = 1000 / t2; // s^-1
-        const r2prime = 2 * Math.PI * this.params.inhomogeneity; // s^-1
-        const r2star = r2 + r2prime;
-        const t2star = 1000 / r2star; // ms
-
-        // Generate decay curve data
-        const t2Data = [];
-        const t2starData = [];
-        const maxTime = 200; // ms
-
-        for (let t = 0; t <= maxTime; t += 2) {
-            t2Data.push({ x: t, y: Math.exp(-t / t2) });
-            t2starData.push({ x: t, y: Math.exp(-t / t2star) });
-        }
-
-        // Update chart data
-        this.r2Chart.data.datasets[0].data = t2Data;
-        this.r2Chart.data.datasets[1].data = t2starData;
-
-        // Highlight current sequence's curve
-        const isSE = this.params.sequence === 'SE';
-        this.r2Chart.data.datasets[0].borderWidth = isSE ? 4 : 2;
-        this.r2Chart.data.datasets[1].borderWidth = isSE ? 2 : 4;
-        this.r2Chart.data.datasets[0].borderDash = isSE ? [] : [5, 5];
-        this.r2Chart.data.datasets[1].borderDash = isSE ? [5, 5] : [];
-
-        // Add TE indicator line
-        if (this.r2Chart.data.datasets.length > 2) {
-            this.r2Chart.data.datasets.pop();
-        }
-        this.r2Chart.data.datasets.push({
-            label: 'Current TE',
-            data: [{ x: this.params.te, y: 0 }, { x: this.params.te, y: 1 }],
-            borderColor: '#ef4444',
-            borderWidth: 2,
-            borderDash: [3, 3],
-            pointRadius: 0,
-            fill: false
-        });
-
-        this.r2Chart.update();
-
-        // Update annotations
-        const seAnnotation = document.getElementById('se-annotation');
-        const greAnnotation = document.getElementById('gre-annotation');
-        if (this.params.sequence === 'SE' || this.params.sequence === 'IR') {
-            seAnnotation.style.display = 'block';
-            greAnnotation.style.display = 'none';
+            // Apply RF pulse
+            ensemble.applyRFPulse(CONFIG.flipAngleD, 0);
         } else {
-            seAnnotation.style.display = 'none';
-            greAnnotation.style.display = 'block';
+            // SSFP: Balanced gradients mean Mxy is preserved
+            // Alternate RF phase by 180° each TR (typical bSSFP)
+            const phase = (currentTRIndex % 2) * 180;
+            ensemble.applyRFPulse(CONFIG.flipAngleD, phase);
         }
 
-        // Update parameter badge with T2 values
-        const r2Badge = document.getElementById('r2-params');
-        if (r2Badge) {
-            r2Badge.textContent = `T2=${t2}ms → T2*=${t2star.toFixed(0)}ms (ΔB₀=${this.params.inhomogeneity}Hz)`;
-        }
+        // Add RF marker
+        addEventMarker(CONFIG.currentTime, 'rf90', `α${currentTRIndex + 1}`);
     }
 
-    updateRFTimeline() {
-        const svg = document.getElementById('rf-gradient-timeline');
-        const seq = this.params.sequence;
-        const frame = this.phaseWheelFrame;
-        const ns = 'http://www.w3.org/2000/svg';
+    // Evolve ensemble (T1 recovery, T2 decay, precession)
+    ensemble.evolve(dt);
 
-        // Sequence colors
-        const seqColors = {
-            'SE': '#3b82f6',
-            'GRE': '#10b981',
-            'IR': '#a855f7'
-        };
-        const seqColor = seqColors[seq];
+    // Get sum magnetization
+    const sum = ensemble.getSumMagnetization();
 
-        // Clear SVG
-        svg.innerHTML = '';
+    // Record data for continuous plotting
+    timeData.push(CONFIG.currentTime);
+    mxyData.push(Math.sqrt(sum.Mx * sum.Mx + sum.My * sum.My));
+    mzData.push(sum.Mz);
+    signalReData.push(sum.Mx);
+    signalImData.push(sum.My);
 
-        // Dark background with gradient
-        const defs = document.createElementNS(ns, 'defs');
-        const bgGrad = document.createElementNS(ns, 'linearGradient');
-        bgGrad.setAttribute('id', 'timelineBg');
-        bgGrad.setAttribute('x1', '0%');
-        bgGrad.setAttribute('y1', '0%');
-        bgGrad.setAttribute('x2', '0%');
-        bgGrad.setAttribute('y2', '100%');
-        bgGrad.innerHTML = `
-            <stop offset="0%" stop-color="#1e293b"/>
-            <stop offset="100%" stop-color="#0f172a"/>
-        `;
-        defs.appendChild(bgGrad);
+    // Update visualization
+    updateEnsembleArrows();
+    updateVectorDisplay({ Mx: sum.Mx, My: sum.My, Mz: sum.Mz });
+    updateCharts();
 
-        // Glow filter
-        const glowFilter = document.createElementNS(ns, 'filter');
-        glowFilter.setAttribute('id', 'timelineGlow');
-        glowFilter.innerHTML = `
-            <feGaussianBlur stdDeviation="2" result="coloredBlur"/>
-            <feMerge>
-                <feMergeNode in="coloredBlur"/>
-                <feMergeNode in="SourceGraphic"/>
-            </feMerge>
-        `;
-        defs.appendChild(glowFilter);
-        svg.appendChild(defs);
+    // Update phase coherence display (reuse from Module B/C)
+    const coherentEl = document.getElementById('coherent-count');
+    if (coherentEl) {
+        coherentEl.textContent = ensemble.getPhaseCoherence().toFixed(0) + '%';
+    }
 
-        const bg = document.createElementNS(ns, 'rect');
-        bg.setAttribute('width', '800');
-        bg.setAttribute('height', '200');
-        bg.setAttribute('fill', 'url(#timelineBg)');
-        bg.setAttribute('rx', '8');
-        svg.appendChild(bg);
+    // Update signal glow
+    const mxy = Math.sqrt(sum.Mx * sum.Mx + sum.My * sum.My);
+    updateSignalPanelGlow(mxy, dt);
+}
 
-        // Row configuration - 5 rows now: RF, Gz, Gy, Gx, Signal
-        const rfY = 30;
-        const gzY = 60;
-        const gyY = 95;
-        const gxY = 130;
-        const signalY = 160;
-        const axisY = 185;
+/**
+ * Calculate Ernst angle: optimal flip angle for maximum signal in spoiled GRE
+ * α_Ernst = arccos(exp(-TR/T1))
+ */
+function calculateErnstAngle(TR, T1) {
+    const E1 = Math.exp(-TR / T1);
+    const ernstRad = Math.acos(E1);
+    return ernstRad * 180 / Math.PI;
+}
 
-        // Row labels
-        this.addTimelineLabel(svg, 25, rfY, 'RF', seqColor);
-        this.addTimelineLabel(svg, 25, gzY, 'Gz', '#22c55e');  // Slice select
-        this.addTimelineLabel(svg, 25, gyY, 'Gy', '#eab308');  // Phase encode
-        this.addTimelineLabel(svg, 25, gxY, 'Gx', '#60a5fa');  // Frequency encode
-        this.addTimelineLabel(svg, 25, signalY, 'Sig', '#ef4444');
+/**
+ * Calculate theoretical steady-state signal for spoiled GRE
+ * S = M0 * sin(α) * (1 - E1) / (1 - cos(α) * E1)
+ * where E1 = exp(-TR/T1)
+ */
+function calculateSpoiledGRESignal(flipAngleDeg, TR, T1) {
+    const alpha = flipAngleDeg * Math.PI / 180;
+    const E1 = Math.exp(-TR / T1);
+    const signal = Math.sin(alpha) * (1 - E1) / (1 - Math.cos(alpha) * E1);
+    return signal;
+}
 
-        // Horizontal guide lines
-        [rfY, gzY, gyY, gxY, signalY].forEach(y => {
-            const line = document.createElementNS(ns, 'line');
-            line.setAttribute('x1', '50');
-            line.setAttribute('y1', y);
-            line.setAttribute('x2', '780');
-            line.setAttribute('y2', y);
-            line.setAttribute('stroke', 'rgba(148, 163, 184, 0.2)');
-            line.setAttribute('stroke-width', '1');
-            svg.appendChild(line);
-        });
+/**
+ * Calculate theoretical steady-state signal for SSFP (bSSFP)
+ * S = M0 * sin(α) / (1 + cos(α) + (1 - cos(α)) * T1/T2)
+ * This is a simplified on-resonance formula
+ */
+function calculateSSFPSignal(flipAngleDeg, T1, T2) {
+    const alpha = flipAngleDeg * Math.PI / 180;
+    const ratio = T1 / T2;
+    const signal = Math.sin(alpha) / (1 + Math.cos(alpha) + (1 - Math.cos(alpha)) * ratio);
+    return signal;
+}
 
-        const startX = 70;
-        const endX = 760;
-        const totalWidth = endX - startX;
+/**
+ * Update the Ernst angle and steady-state signal displays
+ */
+function updateErnstAngleDisplay() {
+    const ernst = calculateErnstAngle(CONFIG.TR, CONFIG.T1D);
+    document.getElementById('ernst-angle-val').textContent = ernst.toFixed(1) + '°';
+}
 
-        // Calculate current time position based on frame
-        const currentTimeX = startX + (frame / (this.totalFrames - 1)) * totalWidth;
+/**
+ * Update steady-state signal display after sequence completes
+ */
+function updateSteadyStateDisplay() {
+    let signal;
+    if (CONFIG.greType === 'spoiled') {
+        signal = calculateSpoiledGRESignal(CONFIG.flipAngleD, CONFIG.TR, CONFIG.T1D);
+    } else {
+        signal = calculateSSFPSignal(CONFIG.flipAngleD, CONFIG.T1D, CONFIG.T2D);
+    }
+    document.getElementById('steady-state-val').textContent = (signal * 100).toFixed(1) + '%';
+}
 
-        // Draw current time indicator (vertical line synced with phase wheel)
-        const timeIndicator = document.createElementNS(ns, 'line');
-        timeIndicator.setAttribute('x1', currentTimeX);
-        timeIndicator.setAttribute('y1', 15);
-        timeIndicator.setAttribute('x2', currentTimeX);
-        timeIndicator.setAttribute('y2', axisY);
-        timeIndicator.setAttribute('stroke', '#ef4444');
-        timeIndicator.setAttribute('stroke-width', '2');
-        timeIndicator.setAttribute('stroke-dasharray', '4,2');
-        timeIndicator.setAttribute('filter', 'url(#timelineGlow)');
-        svg.appendChild(timeIndicator);
+/**
+ * Run the GRE multi-TR sequence
+ */
+function runGRESequence() {
+    resetSimulation();
 
-        // Time indicator dot
-        const timeDot = document.createElementNS(ns, 'circle');
-        timeDot.setAttribute('cx', currentTimeX);
-        timeDot.setAttribute('cy', axisY);
-        timeDot.setAttribute('r', '5');
-        timeDot.setAttribute('fill', '#ef4444');
-        timeDot.setAttribute('filter', 'url(#timelineGlow)');
-        svg.appendChild(timeDot);
+    // Create ensemble with minimal frequency spread (on-resonance for SSFP)
+    // Use small spread for spoiled GRE to show T2* effects
+    const freqSpread = CONFIG.greType === 'ssfp' ? 5 : 20;
+    ensemble = new SpinEnsemble(CONFIG.numSpins, CONFIG.T1D, CONFIG.T2D, freqSpread, CONFIG.B0);
+    createEnsembleArrows();
 
-        if (seq === 'SE') {
-            // Spin Echo timing
-            const te180Frac = 0.3;  // 180° at ~30% of TR
-            const teFrac = 0.6;     // Echo at ~60% of TR
-            const te180X = startX + te180Frac * totalWidth;
-            const teX = startX + teFrac * totalWidth;
+    // Initialize state
+    greSequenceState = 'running';
+    currentTRIndex = 0;
+    timeInTR = 0;
+    steadyStateMxy = [];
+    steadyStateMz = [];
 
-            // RF: 90° excitation
-            this.addRFPulseDark(svg, startX, rfY, 20, '90°', '#f59e0b');
-            // RF: 180° refocusing
-            this.addRFPulseDark(svg, te180X, rfY, 28, '180°', '#a855f7');
+    // Apply initial RF pulse
+    ensemble.applyRFPulse(CONFIG.flipAngleD, 0);
+    addEventMarker(0, 'rf90', 'α1');
 
-            // Gz: Slice select during RF pulses
-            this.addGradientLobeDark(svg, startX - 5, gzY, 40, 18, '#22c55e', 'up');
-            this.addGradientLobeDark(svg, startX + 35, gzY, 20, 10, '#22c55e', 'down'); // Rephaser
-            this.addGradientLobeDark(svg, te180X - 5, gzY, 40, 18, '#22c55e', 'up');
+    // Set max time based on number of TRs
+    CONFIG.maxTime = CONFIG.TR * CONFIG.numTR + 50;
 
-            // Gy: Phase encoding (short blip)
-            this.addGradientLobeDark(svg, startX + 60, gyY, 30, 15, '#eab308', 'up');
+    // Update displays
+    updateErnstAngleDisplay();
 
-            // Gx: Frequency encode (dephase + readout)
-            this.addGradientLobeDark(svg, startX + 60, gxY, 40, 18, '#60a5fa', 'down');
-            this.addGradientLobeDark(svg, te180X + 40, gxY, 80, 18, '#60a5fa', 'up'); // Readout
+    CONFIG.isPlaying = true;
+}
 
-            // Signal echo
-            this.addSignalEchoDark(svg, teX, signalY, seqColor);
+function updateVectorDisplay(spin) {
+    document.getElementById('Mx-val').textContent = spin.Mx.toFixed(2);
+    document.getElementById('My-val').textContent = spin.My.toFixed(2);
+    document.getElementById('Mz-val').textContent = spin.Mz.toFixed(2);
+}
 
-            // TE/2 and TE markers
-            this.addTimeMarkerDark(svg, te180X + 17, 12, axisY, 'TE/2');
-            this.addTimeMarkerDark(svg, teX, 12, axisY, 'TE', seqColor);
+// ============================================================================
+// MODULE SWITCHING
+// ============================================================================
 
-        } else if (seq === 'GRE') {
-            // Gradient Echo timing
-            const teFrac = 0.4;
-            const teX = startX + teFrac * totalWidth;
+function switchModule(module) {
+    CONFIG.currentModule = module;
 
-            // RF: α excitation
-            const pulseHeight = 12 + (this.params.fa / 180) * 16;
-            this.addRFPulseDark(svg, startX, rfY, pulseHeight, `${Math.round(this.params.fa)}°`, '#f59e0b');
+    // Update tab UI
+    document.querySelectorAll('.module-tab').forEach(tab => {
+        tab.classList.toggle('active', tab.dataset.module === module);
+    });
 
-            // Gz: Slice select
-            this.addGradientLobeDark(svg, startX - 5, gzY, 40, 16, '#22c55e', 'up');
-            this.addGradientLobeDark(svg, startX + 35, gzY, 20, 8, '#22c55e', 'down');
+    // Show/hide controls
+    document.querySelectorAll('.module-controls').forEach(ctrl => {
+        ctrl.style.display = 'none';
+    });
+    document.getElementById(`controls-${module}`).style.display = 'block';
 
-            // Gy: Phase encoding
-            this.addGradientLobeDark(svg, startX + 50, gyY, 25, 12, '#eab308', 'up');
+    // Sync checkbox states across modules
+    const showIndividualB = document.getElementById('show-individual');
+    const showIndividualC = document.getElementById('show-individual-C');
+    const showIndividualD = document.getElementById('show-individual-D');
+    if (showIndividualB) showIndividualB.checked = CONFIG.showIndividual;
+    if (showIndividualC) showIndividualC.checked = CONFIG.showIndividual;
+    if (showIndividualD) showIndividualD.checked = CONFIG.showIndividual;
 
-            // Gx: Bipolar (dephase then rephase)
-            this.addGradientLobeDark(svg, startX + 50, gxY, 35, 16, '#60a5fa', 'down');
-            this.addGradientLobeDark(svg, startX + 90, gxY, 60, 16, '#60a5fa', 'up'); // Readout
+    // Update info panel
+    updateInfoPanel(module);
 
-            // Signal echo (smaller due to T2*)
-            this.addSignalEchoDark(svg, teX, signalY, seqColor, 0.7);
+    // Reset and setup for module
+    resetSimulation();
 
-            // TE marker
-            this.addTimeMarkerDark(svg, teX, 12, axisY, 'TE', seqColor);
+    // Setup 3D view for module
+    if (module === 'A') {
+        // Initialize Module A alignment ensemble
+        initModuleA();
+        // Hide Module B/C/D ensemble arrows
+        spinArrows.forEach(a => a.visible = false);
+        if (sumArrow) sumArrow.visible = false;
+        if (mxyArrow) mxyArrow.visible = false;
+        if (mzArrow) mzArrow.visible = false;
+    } else {
+        // Hide Module A arrows
+        alignmentArrows.forEach(a => a.visible = false);
+        if (netMagArrowA) netMagArrowA.visible = false;
+        // Show ensemble with component arrows
+        createEnsembleArrows();
 
-        } else { // IR
-            // Inversion Recovery timing
-            const tiFrac = 0.5;
-            const readoutFrac = 0.55;
-            const teFrac = 0.75;
-            const tiX = startX + tiFrac * totalWidth;
-            const readoutX = startX + readoutFrac * totalWidth;
-            const teX = startX + teFrac * totalWidth;
-
-            // RF: 180° inversion
-            this.addRFPulseDark(svg, startX, rfY, 28, '180°', '#ef4444');
-            this.addTimelineText(svg, startX + 17, rfY - 22, 'Inv', 'middle', '8px', '#ef4444');
-
-            // RF: Readout pulse at TI
-            this.addRFPulseDark(svg, readoutX, rfY, 20, `${Math.round(this.params.fa)}°`, '#f59e0b');
-
-            // Gz: Slice select during inversion and readout
-            this.addGradientLobeDark(svg, startX - 5, gzY, 40, 16, '#22c55e', 'up');
-            this.addGradientLobeDark(svg, readoutX - 5, gzY, 35, 14, '#22c55e', 'up');
-            this.addGradientLobeDark(svg, readoutX + 30, gzY, 18, 7, '#22c55e', 'down');
-
-            // Gy: Phase encoding after readout
-            this.addGradientLobeDark(svg, readoutX + 45, gyY, 25, 12, '#eab308', 'up');
-
-            // Gx: Frequency encode
-            this.addGradientLobeDark(svg, readoutX + 45, gxY, 30, 14, '#60a5fa', 'down');
-            this.addGradientLobeDark(svg, readoutX + 80, gxY, 55, 14, '#60a5fa', 'up');
-
-            // Signal echo
-            this.addSignalEchoDark(svg, teX, signalY, seqColor);
-
-            // TI and TE markers
-            this.addTimeMarkerDark(svg, tiX, 12, axisY, 'TI', '#a855f7');
-            this.addTimeMarkerDark(svg, teX, 12, axisY, 'TE', seqColor);
-        }
-
-        // Time axis
-        const axis = document.createElementNS(ns, 'line');
-        axis.setAttribute('x1', startX - 10);
-        axis.setAttribute('y1', axisY);
-        axis.setAttribute('x2', endX + 10);
-        axis.setAttribute('y2', axisY);
-        axis.setAttribute('stroke', '#64748b');
-        axis.setAttribute('stroke-width', '1');
-        svg.appendChild(axis);
-
-        // Arrow at end
-        const arrow = document.createElementNS(ns, 'polygon');
-        arrow.setAttribute('points', `${endX + 10},${axisY} ${endX + 5},${axisY - 3} ${endX + 5},${axisY + 3}`);
-        arrow.setAttribute('fill', '#64748b');
-        svg.appendChild(arrow);
-
-        // Time labels
-        this.addTimelineText(svg, startX, axisY + 12, '0', 'middle', '9px', '#64748b');
-        this.addTimelineText(svg, endX - 20, axisY + 12, 'TR', 'middle', '9px', '#64748b');
-
-        // Update parameter badge
-        const timelineBadge = document.getElementById('timeline-params');
-        if (timelineBadge) {
-            const params = [`TR=${this.params.tr}ms`, `TE=${this.params.te}ms`];
-            if (seq === 'IR') params.push(`TI=${this.params.ti}ms`);
-            if (seq === 'GRE' || seq === 'IR') params.push(`FA=${Math.round(this.params.fa)}°`);
-            timelineBadge.textContent = params.join(' | ');
+        // Module D specific initialization
+        if (module === 'D') {
+            updateErnstAngleDisplay();
+            document.getElementById('steady-state-val').textContent = '--';
         }
     }
 
-    // Dark theme versions of timeline helpers
-    addRFPulseDark(svg, x, y, height, label, color) {
-        const ns = 'http://www.w3.org/2000/svg';
-        const width = 30;
+    // Update signal panel glow for Module B/C/D
+    updateSignalPanelGlow(0, 0.5);
+}
 
-        // Sinc-like pulse shape
-        const path = document.createElementNS(ns, 'path');
-        const d = `M ${x} ${y} Q ${x + width * 0.25} ${y - height} ${x + width * 0.5} ${y - height} Q ${x + width * 0.75} ${y - height} ${x + width} ${y}`;
-        path.setAttribute('d', d);
-        path.setAttribute('fill', 'none');
-        path.setAttribute('stroke', color);
-        path.setAttribute('stroke-width', '3');
-        path.setAttribute('stroke-linecap', 'round');
-        path.setAttribute('filter', 'url(#timelineGlow)');
-        svg.appendChild(path);
+/**
+ * Initialize Module A: B0 Alignment Animation
+ * Creates ensemble with random orientations to visualize effect of B0 turning on
+ */
+function initModuleA() {
+    const numSpins = parseInt(document.getElementById('num-spins-A').value);
+    const T1 = CONFIG.T1;
+    const T2 = CONFIG.T2;
 
-        // Label
-        const text = document.createElementNS(ns, 'text');
-        text.setAttribute('x', x + width / 2);
-        text.setAttribute('y', y - height - 5);
-        text.setAttribute('font-size', '9');
-        text.setAttribute('font-weight', '600');
-        text.setAttribute('fill', color);
-        text.setAttribute('text-anchor', 'middle');
-        text.setAttribute('font-family', 'Inter, sans-serif');
-        text.textContent = label;
-        svg.appendChild(text);
+    // Create alignment ensemble
+    alignmentEnsemble = new SpinEnsemble(numSpins, T1, T2, 0, CONFIG.B0);
+
+    // Randomize spin orientations (B0 OFF state)
+    alignmentEnsemble.randomizeOrientations();
+    b0IsOn = false;
+
+    // Create 3D arrows
+    createAlignmentArrows(numSpins);
+
+    // Sync arrow directions with ensemble
+    alignmentEnsemble.spins.forEach((spin, i) => {
+        if (alignmentArrows[i]) {
+            const dir = new THREE.Vector3(spin.Mx, spin.My, spin.Mz);
+            alignmentArrows[i].setDirection(dir.normalize());
+        }
+    });
+
+    // Update UI
+    const sum = alignmentEnsemble.getSumMagnetization();
+    const avgMz = alignmentEnsemble.getAverageMz();
+    document.getElementById('alignment-fill').style.width = Math.max(0, avgMz * 100) + '%';
+    document.getElementById('net-mz').textContent = Math.max(0, avgMz * 100).toFixed(0) + '%';
+    document.getElementById('Mx-val').textContent = sum.Mx.toFixed(2);
+    document.getElementById('My-val').textContent = sum.My.toFixed(2);
+    document.getElementById('Mz-val').textContent = sum.Mz.toFixed(2);
+}
+
+function updateInfoPanel(module) {
+    const infoTitle = document.querySelector('#info-panel h4');
+    const infoText = document.getElementById('info-text');
+
+    switch (module) {
+        case 'A':
+            infoTitle.textContent = 'Module A: B₀ Alignment';
+            infoText.innerHTML = `
+                <strong>Without B₀:</strong> Spins point in random directions (thermal equilibrium). Net M ≈ 0.<br>
+                <strong>With B₀:</strong> Spins gradually align with field through T1 relaxation. Net M grows along +z.<br>
+                <strong>T1 (spin-lattice):</strong> Time constant for alignment. Mz(t) = M₀(1 - e<sup>-t/T1</sup>)<br>
+                <em style="color: #f59e0b;">Rotating frame: Simulation at Larmor frequency ω₀. B₀ slider shows clinical field strength but physics is normalized (M₀=1).</em>
+            `;
+            break;
+        case 'B':
+            infoTitle.textContent = 'Module B: FID & Signal Detection';
+            infoText.innerHTML = `
+                <strong>Dephasing:</strong> Spins precess at ω₀ + Δω (field inhomogeneity). Different phases → destructive interference → FID decay.<br>
+                <strong>Signal:</strong> In lab frame, rotating Mxy induces EMF ∝ ω₀|Mxy|. Signal panel glows with signal strength.<br>
+                <strong>T2* decay:</strong> Mxy(t) = M₀·e<sup>-t/T2*</sup>. White arrow = net magnetization = signal envelope.<br>
+                <em style="color: #f59e0b;">Note: 3D shows rotating frame. Net M ~1/√N, shown normalized.</em>
+            `;
+            break;
+        case 'C':
+            infoTitle.textContent = 'Module C: Echo Formation';
+            infoText.innerHTML = `
+                <strong>Spin Echo:</strong> 180° pulse inverts phases → rephasing → echo at TE. Refocuses B₀ inhomogeneity (T2 weighting).<br>
+                <strong>Gradient Echo:</strong> Gradient reversal → rephasing → echo. Does NOT refocus B₀ (T2* weighting).<br>
+                <strong>Signal:</strong> Watch the Signal/FID panel glow brighten at echo!<br>
+                <em style="color: #f59e0b;">Note: 3D shows rotating frame. Net M ~1/√N, shown normalized.</em>
+            `;
+            break;
+        case 'D':
+            infoTitle.textContent = 'Module D: GRE Variants';
+            infoText.innerHTML = `
+                <strong>Spoiled GRE (SPGR/FLASH):</strong> Mxy destroyed each TR → only T1 recovery matters → <strong>T1-weighted</strong>.<br>
+                <strong>SSFP (bSSFP/TrueFISP):</strong> Mxy preserved → builds to steady-state → <strong>T2/T1-weighted</strong> (bright fluid).<br>
+                <strong>Ernst Angle:</strong> α<sub>E</sub> = arccos(e<sup>-TR/T1</sup>) gives maximum signal for spoiled GRE.<br>
+                <em style="color: #f59e0b;">Watch Mxy and Mz approach steady-state over multiple TRs.</em>
+            `;
+            break;
     }
 
-    addGradientLobeDark(svg, x, y, w, h, color, direction) {
-        const ns = 'http://www.w3.org/2000/svg';
-        const yOffset = direction === 'up' ? -h : 0;
-        const points = direction === 'up'
-            ? `${x},${y} ${x + w * 0.15},${y + yOffset} ${x + w * 0.85},${y + yOffset} ${x + w},${y}`
-            : `${x},${y} ${x + w * 0.15},${y + h} ${x + w * 0.85},${y + h} ${x + w},${y}`;
-
-        const polygon = document.createElementNS(ns, 'polygon');
-        polygon.setAttribute('points', points);
-        polygon.setAttribute('fill', color);
-        polygon.setAttribute('fill-opacity', '0.3');
-        polygon.setAttribute('stroke', color);
-        polygon.setAttribute('stroke-width', '1.5');
-        svg.appendChild(polygon);
-    }
-
-    addSignalEchoDark(svg, x, y, color, scale = 1) {
-        const ns = 'http://www.w3.org/2000/svg';
-        const width = 50 * scale;
-        const height = 18 * scale;
-
-        // Echo shape
-        const path = document.createElementNS(ns, 'path');
-        const d = `M ${x - width / 2} ${y} Q ${x - width / 4} ${y - height * 0.3} ${x} ${y - height} Q ${x + width / 4} ${y - height * 0.3} ${x + width / 2} ${y}`;
-        path.setAttribute('d', d);
-        path.setAttribute('fill', color);
-        path.setAttribute('fill-opacity', '0.4');
-        path.setAttribute('stroke', color);
-        path.setAttribute('stroke-width', '2');
-        path.setAttribute('filter', 'url(#timelineGlow)');
-        svg.appendChild(path);
-    }
-
-    addTimeMarkerDark(svg, x, y1, y2, label, color = '#94a3b8') {
-        const ns = 'http://www.w3.org/2000/svg';
-
-        // Vertical dashed line
-        const line = document.createElementNS(ns, 'line');
-        line.setAttribute('x1', x);
-        line.setAttribute('y1', y1);
-        line.setAttribute('x2', x);
-        line.setAttribute('y2', y2);
-        line.setAttribute('stroke', color);
-        line.setAttribute('stroke-width', '1');
-        line.setAttribute('stroke-dasharray', '3,2');
-        line.setAttribute('opacity', '0.6');
-        svg.appendChild(line);
-
-        // Label
-        const text = document.createElementNS(ns, 'text');
-        text.setAttribute('x', x);
-        text.setAttribute('y', y1 - 3);
-        text.setAttribute('font-size', '8');
-        text.setAttribute('font-weight', '500');
-        text.setAttribute('fill', color);
-        text.setAttribute('text-anchor', 'middle');
-        text.setAttribute('font-family', 'Inter, sans-serif');
-        text.textContent = label;
-        svg.appendChild(text);
-    }
-
-    addTimelineLabel(svg, x, y, text, color) {
-        const ns = 'http://www.w3.org/2000/svg';
-        const label = document.createElementNS(ns, 'text');
-        label.setAttribute('x', x);
-        label.setAttribute('y', y + 4);
-        label.setAttribute('font-size', '12');
-        label.setAttribute('font-weight', '600');
-        label.setAttribute('fill', color);
-        label.textContent = text;
-        svg.appendChild(label);
-    }
-
-    addRFPulse(svg, x, y, height, label, color) {
-        const ns = 'http://www.w3.org/2000/svg';
-        const width = 35;
-
-        // Sinc-like pulse shape
-        const path = document.createElementNS(ns, 'path');
-        const d = `M ${x} ${y}
-                   Q ${x + width * 0.25} ${y - height} ${x + width * 0.5} ${y - height}
-                   Q ${x + width * 0.75} ${y - height} ${x + width} ${y}`;
-        path.setAttribute('d', d);
-        path.setAttribute('fill', 'none');
-        path.setAttribute('stroke', color);
-        path.setAttribute('stroke-width', '4');
-        path.setAttribute('stroke-linecap', 'round');
-        svg.appendChild(path);
-
-        // Label
-        const text = document.createElementNS(ns, 'text');
-        text.setAttribute('x', x + width / 2);
-        text.setAttribute('y', y - height - 8);
-        text.setAttribute('font-size', '12');
-        text.setAttribute('font-weight', '700');
-        text.setAttribute('fill', color);
-        text.setAttribute('text-anchor', 'middle');
-        text.textContent = label;
-        svg.appendChild(text);
-    }
-
-    addSignalEcho(svg, x, y, color, scale = 1) {
-        const ns = 'http://www.w3.org/2000/svg';
-        const width = 60 * scale;
-        const height = 25 * scale;
-
-        // Echo shape (Gaussian-like)
-        const path = document.createElementNS(ns, 'path');
-        const d = `M ${x - width / 2} ${y}
-                   Q ${x - width / 4} ${y - height * 0.3} ${x} ${y - height}
-                   Q ${x + width / 4} ${y - height * 0.3} ${x + width / 2} ${y}`;
-        path.setAttribute('d', d);
-        path.setAttribute('fill', color);
-        path.setAttribute('fill-opacity', '0.3');
-        path.setAttribute('stroke', color);
-        path.setAttribute('stroke-width', '2');
-        svg.appendChild(path);
-    }
-
-    addTimeMarker(svg, x, y1, y2, label, color = '#64748b') {
-        const ns = 'http://www.w3.org/2000/svg';
-
-        // Vertical dashed line
-        const line = document.createElementNS(ns, 'line');
-        line.setAttribute('x1', x);
-        line.setAttribute('y1', y1);
-        line.setAttribute('x2', x);
-        line.setAttribute('y2', y2);
-        line.setAttribute('stroke', color);
-        line.setAttribute('stroke-width', '1.5');
-        line.setAttribute('stroke-dasharray', '4,3');
-        svg.appendChild(line);
-
-        // Label
-        const text = document.createElementNS(ns, 'text');
-        text.setAttribute('x', x);
-        text.setAttribute('y', y1 - 5);
-        text.setAttribute('font-size', '10');
-        text.setAttribute('font-weight', '600');
-        text.setAttribute('fill', color);
-        text.setAttribute('text-anchor', 'middle');
-        text.textContent = label;
-        svg.appendChild(text);
-    }
-
-    updateMechanicsColors(seq) {
-        // Set sequence-specific colors for mechanics tab
-        const colors = {
-            'SE': '#3b82f6',   // Blue
-            'GRE': '#10b981',  // Green
-            'IR': '#a855f7'    // Purple
-        };
-        const color = colors[seq] || '#3b82f6';
-
-        // Update panel title colors via CSS custom property
-        document.documentElement.style.setProperty('--seq-color', color);
-    }
-
-    addRFBlock(svg, x, y, w, h, color, label) {
-        const ns = 'http://www.w3.org/2000/svg';
-        const rect = document.createElementNS(ns, 'rect');
-        rect.setAttribute('x', x);
-        rect.setAttribute('y', y);
-        rect.setAttribute('width', w);
-        rect.setAttribute('height', h);
-        rect.setAttribute('fill', color);
-        rect.setAttribute('stroke', '#1e293b');
-        rect.setAttribute('stroke-width', '1');
-        rect.setAttribute('rx', '4');
-        svg.appendChild(rect);
-
-        const text = document.createElementNS(ns, 'text');
-        text.setAttribute('x', x + w / 2);
-        text.setAttribute('y', y + h / 2 + 4);
-        text.setAttribute('text-anchor', 'middle');
-        text.setAttribute('font-size', '14');
-        text.setAttribute('font-weight', 'bold');
-        text.setAttribute('fill', '#fff');
-        text.textContent = label;
-        svg.appendChild(text);
-    }
-
-    addGradientLobe(svg, x, y, w, h, color, direction) {
-        const ns = 'http://www.w3.org/2000/svg';
-        const points = direction === 'down'
-            ? `${x},${y} ${x + w / 2},${y + h} ${x + w},${y}`
-            : `${x},${y + h} ${x + w / 2},${y} ${x + w},${y + h}`;
-
-        const polygon = document.createElementNS(ns, 'polygon');
-        polygon.setAttribute('points', points);
-        polygon.setAttribute('fill', color);
-        polygon.setAttribute('stroke', '#1e40af');
-        polygon.setAttribute('stroke-width', '1.5');
-        svg.appendChild(polygon);
-    }
-
-    addEchoMarker(svg, x, y1, y2, label) {
-        const ns = 'http://www.w3.org/2000/svg';
-        const line = document.createElementNS(ns, 'line');
-        line.setAttribute('x1', x);
-        line.setAttribute('y1', y1);
-        line.setAttribute('x2', x);
-        line.setAttribute('y2', y2);
-        line.setAttribute('stroke', '#ef4444');
-        line.setAttribute('stroke-width', '2');
-        line.setAttribute('stroke-dasharray', '5,5');
-        svg.appendChild(line);
-
-        const text = document.createElementNS(ns, 'text');
-        text.setAttribute('x', x);
-        text.setAttribute('y', y1 - 5);
-        text.setAttribute('text-anchor', 'middle');
-        text.setAttribute('font-size', '13');
-        text.setAttribute('font-weight', '600');
-        text.setAttribute('fill', '#ef4444');
-        text.textContent = label;
-        svg.appendChild(text);
-    }
-
-    addTimelineText(svg, x, y, text, anchor = 'start', size = '14px', color = '#475569') {
-        const ns = 'http://www.w3.org/2000/svg';
-        const textEl = document.createElementNS(ns, 'text');
-        textEl.setAttribute('x', x);
-        textEl.setAttribute('y', y);
-        textEl.setAttribute('text-anchor', anchor);
-        textEl.setAttribute('font-size', size);
-        textEl.setAttribute('fill', color);
-        textEl.textContent = text;
-        svg.appendChild(textEl);
+    // Re-render MathJax
+    if (window.MathJax) {
+        MathJax.typesetPromise([infoText]);
     }
 }
 
-// Initialize
-const app = new MRPhysics();
-app.init();
+// ============================================================================
+// CONTROL HANDLERS
+// ============================================================================
+
+function setupEventListeners() {
+    // Animation controls
+    document.getElementById('btn-play').addEventListener('click', () => {
+        CONFIG.isPlaying = true;
+    });
+
+    document.getElementById('btn-pause').addEventListener('click', () => {
+        CONFIG.isPlaying = false;
+    });
+
+    document.getElementById('btn-reset').addEventListener('click', resetSimulation);
+
+    document.getElementById('speed-slider').addEventListener('input', (e) => {
+        CONFIG.animationSpeed = parseFloat(e.target.value);
+        document.getElementById('speed-val').textContent = CONFIG.animationSpeed.toFixed(1) + 'x';
+    });
+
+    // Module tabs
+    document.querySelectorAll('.module-tab').forEach(tab => {
+        tab.addEventListener('click', () => {
+            switchModule(tab.dataset.module);
+        });
+    });
+
+    // Module A controls
+    document.getElementById('num-spins-A').addEventListener('input', (e) => {
+        const numSpins = parseInt(e.target.value);
+        document.getElementById('num-spins-A-val').textContent = numSpins + ' spins';
+    });
+
+    document.getElementById('num-spins-A').addEventListener('change', () => {
+        if (CONFIG.currentModule === 'A') {
+            initModuleA();
+        }
+    });
+
+    document.getElementById('T1-val').addEventListener('input', (e) => {
+        CONFIG.T1 = parseInt(e.target.value);
+        document.getElementById('T1-display').textContent = CONFIG.T1 + ' ms';
+        if (alignmentEnsemble) {
+            alignmentEnsemble.setT1(CONFIG.T1);
+        }
+    });
+
+    document.getElementById('B0-val').addEventListener('input', (e) => {
+        CONFIG.B0 = parseFloat(e.target.value);
+        const freq = (GAMMA * CONFIG.B0).toFixed(1);
+        document.getElementById('B0-display').textContent = `${CONFIG.B0} T (${freq} MHz)`;
+        // NOTE: B0 slider is primarily cosmetic/educational in this simulation.
+        // In the rotating frame at ω₀ = γB₀, the main field effect is removed.
+        // What matters is the off-resonance (ΔB₀ inhomogeneity), which is controlled
+        // by the "Frequency Spread" parameter and determines T2* decay.
+        // The B0 value is stored for reference but doesn't change the physics
+        // because we're simulating relative frequencies, not absolute precession.
+        if (alignmentEnsemble) {
+            alignmentEnsemble.setB0(CONFIG.B0);
+        }
+        ensemble.setB0(CONFIG.B0);
+    });
+
+    document.getElementById('btn-b0-on').addEventListener('click', () => {
+        if (!alignmentEnsemble) {
+            initModuleA();
+        }
+        // Turn B0 ON - starts alignment animation
+        b0IsOn = true;
+        CONFIG.isPlaying = true;
+        clearChartData();
+        CONFIG.currentTime = 0;
+    });
+
+    document.getElementById('btn-b0-off').addEventListener('click', () => {
+        // Turn B0 OFF - randomize spins
+        b0IsOn = false;
+        CONFIG.isPlaying = false;
+        CONFIG.currentTime = 0;
+        clearChartData();
+
+        if (alignmentEnsemble) {
+            alignmentEnsemble.randomizeOrientations();
+
+            // Sync arrow directions with ensemble
+            alignmentEnsemble.spins.forEach((spin, i) => {
+                if (alignmentArrows[i]) {
+                    const dir = new THREE.Vector3(spin.Mx, spin.My, spin.Mz);
+                    alignmentArrows[i].setDirection(dir.normalize());
+                }
+            });
+
+            // Update UI
+            const sum = alignmentEnsemble.getSumMagnetization();
+            const avgMz = alignmentEnsemble.getAverageMz();
+            document.getElementById('alignment-fill').style.width = Math.max(0, avgMz * 100) + '%';
+            document.getElementById('net-mz').textContent = Math.max(0, avgMz * 100).toFixed(0) + '%';
+            document.getElementById('Mx-val').textContent = sum.Mx.toFixed(2);
+            document.getElementById('My-val').textContent = sum.My.toFixed(2);
+            document.getElementById('Mz-val').textContent = sum.Mz.toFixed(2);
+
+            if (netMagArrowA) netMagArrowA.visible = false;
+        }
+    });
+
+    // Module B controls
+    document.getElementById('num-spins').addEventListener('input', (e) => {
+        CONFIG.numSpins = parseInt(e.target.value);
+        document.getElementById('num-spins-val').textContent = CONFIG.numSpins + ' spins';
+    });
+
+    document.getElementById('num-spins').addEventListener('change', () => {
+        ensemble = new SpinEnsemble(CONFIG.numSpins, CONFIG.T1, CONFIG.T2ensemble, CONFIG.freqSpread, CONFIG.B0);
+        if (CONFIG.currentModule === 'B') createEnsembleArrows();
+    });
+
+    document.getElementById('freq-spread').addEventListener('input', (e) => {
+        CONFIG.freqSpread = parseInt(e.target.value);
+        document.getElementById('freq-spread-val').textContent = CONFIG.freqSpread + ' Hz';
+    });
+
+    document.getElementById('freq-spread').addEventListener('change', () => {
+        ensemble = new SpinEnsemble(CONFIG.numSpins, CONFIG.T1, CONFIG.T2ensemble, CONFIG.freqSpread, CONFIG.B0);
+        if (CONFIG.currentModule === 'B') createEnsembleArrows();
+    });
+
+    document.getElementById('T2-ensemble').addEventListener('input', (e) => {
+        CONFIG.T2ensemble = parseInt(e.target.value);
+        document.getElementById('T2-ensemble-val').textContent = CONFIG.T2ensemble + ' ms';
+        // FIX: Update T2 for all spins in the ensemble
+        ensemble.setT2(CONFIG.T2ensemble);
+    });
+
+    // Module B flip angle control
+    document.getElementById('flip-angle').addEventListener('input', (e) => {
+        CONFIG.flipAngle = parseInt(e.target.value);
+        document.getElementById('flip-angle-val').textContent = CONFIG.flipAngle + '°';
+    });
+
+    document.getElementById('btn-excite').addEventListener('click', () => {
+        resetSimulation();
+        ensemble.applyRFPulse(CONFIG.flipAngle, 0);
+        updateEnsembleArrows();
+        CONFIG.isPlaying = true;
+    });
+
+    document.getElementById('show-individual').addEventListener('change', (e) => {
+        CONFIG.showIndividual = e.target.checked;
+        spinArrows.forEach(a => a.visible = CONFIG.showIndividual);
+    });
+
+    // Module C controls
+    document.getElementById('echo-type').addEventListener('change', (e) => {
+        CONFIG.echoType = e.target.value;
+        updateT2starSliderForEchoType();
+    });
+
+    document.getElementById('TE-val').addEventListener('input', (e) => {
+        CONFIG.TE = parseInt(e.target.value);
+        document.getElementById('TE-display').textContent = CONFIG.TE + ' ms';
+    });
+
+    document.getElementById('T2-echo').addEventListener('input', (e) => {
+        CONFIG.T2echo = parseInt(e.target.value);
+        document.getElementById('T2-echo-val').textContent = CONFIG.T2echo + ' ms';
+    });
+
+    document.getElementById('T2star-echo').addEventListener('input', (e) => {
+        CONFIG.T2starEcho = parseInt(e.target.value);
+        document.getElementById('T2star-echo-val').textContent = CONFIG.T2starEcho + ' ms';
+        // Save to appropriate storage based on current echo type
+        if (CONFIG.echoType === 'gradient') {
+            CONFIG.T2starEchoGRE = CONFIG.T2starEcho;
+        } else {
+            CONFIG.T2starEchoSE = CONFIG.T2starEcho;
+        }
+    });
+
+    document.getElementById('num-spins-C').addEventListener('input', (e) => {
+        const numSpins = parseInt(e.target.value);
+        document.getElementById('num-spins-C-val').textContent = numSpins + ' spins';
+        CONFIG.numSpins = numSpins;
+    });
+
+    document.getElementById('btn-run-sequence').addEventListener('click', runEchoSequence);
+
+    document.getElementById('show-individual-C').addEventListener('change', (e) => {
+        CONFIG.showIndividual = e.target.checked;
+        spinArrows.forEach(a => a.visible = CONFIG.showIndividual);
+    });
+
+    // Module D controls
+    document.getElementById('gre-type').addEventListener('change', (e) => {
+        CONFIG.greType = e.target.value;
+        updateErnstAngleDisplay();
+    });
+
+    document.getElementById('flip-angle-D').addEventListener('input', (e) => {
+        CONFIG.flipAngleD = parseInt(e.target.value);
+        document.getElementById('flip-angle-D-val').textContent = CONFIG.flipAngleD + '°';
+    });
+
+    document.getElementById('TR-val').addEventListener('input', (e) => {
+        CONFIG.TR = parseInt(e.target.value);
+        document.getElementById('TR-display').textContent = CONFIG.TR + ' ms';
+        updateErnstAngleDisplay();
+    });
+
+    document.getElementById('T1-D').addEventListener('input', (e) => {
+        CONFIG.T1D = parseInt(e.target.value);
+        document.getElementById('T1-D-val').textContent = CONFIG.T1D + ' ms';
+        updateErnstAngleDisplay();
+    });
+
+    document.getElementById('T2-D').addEventListener('input', (e) => {
+        CONFIG.T2D = parseInt(e.target.value);
+        document.getElementById('T2-D-val').textContent = CONFIG.T2D + ' ms';
+    });
+
+    document.getElementById('num-TR').addEventListener('input', (e) => {
+        CONFIG.numTR = parseInt(e.target.value);
+        document.getElementById('num-TR-val').textContent = CONFIG.numTR + ' TRs';
+    });
+
+    document.getElementById('btn-run-gre').addEventListener('click', runGRESequence);
+
+    document.getElementById('show-individual-D').addEventListener('change', (e) => {
+        CONFIG.showIndividual = e.target.checked;
+        spinArrows.forEach(a => a.visible = CONFIG.showIndividual);
+    });
+}
+
+/**
+ * Update T2* slider based on echo type selection
+ * Saves current value before switching and restores saved value for new type
+ */
+function updateT2starSliderForEchoType() {
+    const slider = document.getElementById('T2star-echo');
+    const display = document.getElementById('T2star-echo-val');
+    const previousType = CONFIG.echoType === 'gradient' ? 'spin' : 'gradient';
+
+    // Save current slider value to the PREVIOUS echo type (before user switched)
+    if (previousType === 'spin') {
+        CONFIG.T2starEchoSE = CONFIG.T2starEcho;
+    } else {
+        CONFIG.T2starEchoGRE = CONFIG.T2starEcho;
+    }
+
+    // Restore saved value for the NEW echo type
+    if (CONFIG.echoType === 'gradient') {
+        CONFIG.T2starEcho = CONFIG.T2starEchoGRE;
+    } else {
+        CONFIG.T2starEcho = CONFIG.T2starEchoSE;
+    }
+
+    // Update UI
+    slider.value = CONFIG.T2starEcho;
+    display.textContent = CONFIG.T2starEcho + ' ms';
+}
+
+function resetSimulation() {
+    CONFIG.isPlaying = false;
+    CONFIG.currentTime = 0;
+    lastTimestamp = 0;
+
+    // FIX: Always restore maxTime to default
+    CONFIG.maxTime = DEFAULT_MAX_TIME;
+
+    // Clear data
+    clearChartData();
+
+    // Reset spins
+    ensemble.reset();
+
+    // Reset echo state
+    echoSequenceState = 'idle';
+    echoSequenceTime = 0;
+    gradientFlipped = false;
+
+    // Reset GRE multi-TR state
+    greSequenceState = 'idle';
+    currentTRIndex = 0;
+    timeInTR = 0;
+    rfPhase = 0;
+    steadyStateMxy = [];
+    steadyStateMz = [];
+
+    // Reset signal detection state
+    previousMxy = 0;
+
+    // Reset B0 state for Module A
+    b0IsOn = false;
+
+    // Update UI
+    document.getElementById('time-val').textContent = '0.00 ms';
+
+    if (CONFIG.currentModule === 'A') {
+        // Module A resets are handled by initModuleA()
+        // Don't auto-reinitialize here to preserve user's choice
+        if (alignmentEnsemble) {
+            const sum = alignmentEnsemble.getSumMagnetization();
+            document.getElementById('Mx-val').textContent = sum.Mx.toFixed(2);
+            document.getElementById('My-val').textContent = sum.My.toFixed(2);
+            document.getElementById('Mz-val').textContent = sum.Mz.toFixed(2);
+        }
+    } else {
+        updateEnsembleArrows();
+        document.getElementById('coherent-count').textContent = '0%';
+    }
+}
+
+function runEchoSequence() {
+    resetSimulation();
+
+    // T2* determines B0 inhomogeneity spread
+    // SE: user's T2* setting (will be refocused by 180°)
+    // GRE: slider auto-set to 100ms for visible echo
+    const T2star = CONFIG.T2starEcho;
+    const freqSpread = 1000 / (Math.PI * T2star); // Convert T2* to freq spread
+
+    ensemble = new SpinEnsemble(CONFIG.numSpins, CONFIG.T1, CONFIG.T2echo, freqSpread, CONFIG.B0);
+    createEnsembleArrows();
+
+    // Apply initial 90° pulse and add marker
+    ensemble.applyRFPulse(90, 0);
+    addEventMarker(0, 'rf90', '90°');
+
+    // For Gradient Echo, apply gradient for controlled dephasing/rephasing
+    // Gradient causes fast dephasing that IS refocused
+    // B0 inhomogeneity causes slow decay that is NOT refocused
+    if (CONFIG.echoType === 'gradient') {
+        // Strong gradient (100 Hz) for rapid, visible dephasing
+        ensemble.applyGradientFixed(100);
+    }
+
+    // Add echo marker at TE
+    addEventMarker(CONFIG.TE, 'echo', 'Echo');
+
+    // Start sequence
+    echoSequenceState = 'dephasing';
+    echoSequenceTime = 0;
+    gradientFlipped = false;
+    CONFIG.isPlaying = true;
+
+    // Set maxTime to show echo and more time after for longer observation
+    // At least 3x TE or 300ms, whichever is larger
+    CONFIG.maxTime = Math.max(CONFIG.TE * 3, 300);
+}
+
+// ============================================================================
+// INITIALIZATION
+// ============================================================================
+
+function init() {
+    init3D();
+    initCharts();
+    setupEventListeners();
+
+    // Start with Module A
+    switchModule('A');
+
+    // Start animation loop
+    animate(0);
+}
+
+// Start when DOM is ready
+document.addEventListener('DOMContentLoaded', init);
