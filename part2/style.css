@@ -104,8 +104,8 @@ body {
     background: transparent;
     flex-shrink: 0;
     align-self: stretch;
-    width: 200px;
-    min-width: 200px;
+    width: 240px;
+    min-width: 240px;
 }
 
 .tissue-card {
@@ -156,21 +156,21 @@ body {
 }
 
 .tissue-card .tissue-name {
-    font-size: 0.8rem;
+    font-size: 1.0rem;
     font-weight: 600;
     color: var(--text-primary);
     margin-bottom: 2px;
 }
 
 .tissue-card .tissue-params {
-    font-size: 0.65rem;
+    font-size: 0.8rem;
     color: var(--text-secondary);
     font-family: 'Courier New', monospace;
     letter-spacing: -0.5px;
 }
 
 .tissue-card .tissue-signal {
-    font-size: 0.75rem;
+    font-size: 0.95rem;
     color: var(--accent-color);
     font-weight: 600;
     margin-top: 2px;
