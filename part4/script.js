@@ -106,10 +106,10 @@ function generatePhantom(type) {
     // Reset acquisition
     resetAcquisition();
 
-    if (type === 'brain-real') {
+    if (type === 'brain-real' || type === 'mri-easter') {
         const img = new Image();
         img.onload = () => {
-            console.log('Brain image loaded successfully');
+            console.log('Image loaded successfully');
             const tempCanvas = document.createElement('canvas');
             tempCanvas.width = N;
             tempCanvas.height = N;
@@ -127,15 +127,19 @@ function generatePhantom(type) {
             }
             computeFullKSpace();
             renderAll();
-            updateStatus('Brain image loaded. Ready to acquire.');
+            updateStatus('Image loaded. Ready to acquire.');
         };
         img.onerror = (e) => {
-            console.error("Failed to load brain image:", e);
-            updateStatus('Error loading brain image. Try another phantom.');
+            console.error("Failed to load image:", e);
+            updateStatus('Error loading image. Try another phantom.');
         };
         // Set crossOrigin before src for CORS compatibility
         img.crossOrigin = 'anonymous';
-        img.src = brainBase64;
+        if (type === 'mri-easter') {
+            img.src = 'MRI.png';
+        } else {
+            img.src = brainBase64;
+        }
         return; // Async update will trigger render
     }
 
@@ -156,14 +160,6 @@ function generatePhantom(type) {
                 if (Math.abs(x - cx) <= s && Math.abs(y - cy) <= s) {
                     val = 1;
                 }
-            } else if (type === 'brain') {
-                // Simple simulated brain (ellipses)
-                // Main ellipse
-                if (((x - cx) / 40) ** 2 + ((y - cy) / 50) ** 2 <= 1) val += 0.5;
-                // "Ventricles"
-                if (((x - cx - 10) / 5) ** 2 + ((y - cy) / 15) ** 2 <= 1) val -= 0.3;
-                if (((x - cx + 10) / 5) ** 2 + ((y - cy) / 15) ** 2 <= 1) val -= 0.3;
-                val = Math.max(0, val);
             }
 
             groundTruthImage[y][x] = new Complex(val, 0);
