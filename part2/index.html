@@ -157,7 +157,7 @@
                     <h2 class="section-title">Sequence Mechanics</h2>
 
                     <div class="mechanics-grid">
-                        <!-- Phase Wheel Panel -->
+                        <!-- Phase Wheel Panel (Left) -->
                         <div class="phase-wheel-panel">
                             <h3>Magnetization Dynamics</h3>
                             <svg id="phase-wheel" viewBox="0 0 300 300" xmlns="http://www.w3.org/2000/svg">
@@ -177,28 +177,31 @@
                             </div>
                         </div>
 
-                        <!-- R2/R2* Comparison Chart -->
-                        <div class="r2-comparison-panel">
-                            <h3>Decay Rate Comparison</h3>
-                            <canvas id="r2Chart"></canvas>
-                            <div class="r2-annotations">
-                                <p id="se-annotation" class="annotation">SE: Only R2 contributes (180° cancels R2')</p>
-                                <p id="gre-annotation" class="annotation">GRE: R2* = R2 + R2' (static ΔB0 persists)</p>
+                        <!-- Right Column: Stacked panels -->
+                        <div class="mechanics-right-column">
+                            <!-- R2/R2* Comparison Chart -->
+                            <div class="r2-comparison-panel">
+                                <h3>Decay Rate Comparison</h3>
+                                <canvas id="r2Chart"></canvas>
+                                <div class="r2-annotations">
+                                    <p id="se-annotation" class="annotation">SE: Only R2 contributes (180° cancels R2')</p>
+                                    <p id="gre-annotation" class="annotation">GRE: R2* = R2 + R2' (static ΔB0 persists)</p>
+                                </div>
+                                <div class="param-badge" id="r2-params">
+                                    Decay rate values
+                                </div>
                             </div>
-                            <div class="param-badge" id="r2-params">
-                                Decay rate values
-                            </div>
-                        </div>
-                    </div>
 
-                    <!-- RF/Gradient Timeline -->
-                    <div class="timeline-panel">
-                        <h3>Pulse Sequence Timeline</h3>
-                        <svg id="rf-gradient-timeline" viewBox="0 0 800 200" xmlns="http://www.w3.org/2000/svg">
-                            <!-- Will be populated by JS -->
-                        </svg>
-                        <div class="param-badge" id="timeline-params">
-                            Timing parameters
+                            <!-- RF/Gradient Timeline -->
+                            <div class="timeline-panel">
+                                <h3>Pulse Sequence Timeline</h3>
+                                <svg id="rf-gradient-timeline" viewBox="0 0 800 200" xmlns="http://www.w3.org/2000/svg">
+                                    <!-- Will be populated by JS -->
+                                </svg>
+                                <div class="param-badge" id="timeline-params">
+                                    Timing parameters
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </div>
