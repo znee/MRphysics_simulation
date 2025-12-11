@@ -183,6 +183,8 @@ class SpatialEncodingSimulator {
         canvas.style.height = rect.height + 'px';
 
         const ctx = canvas.getContext('2d');
+        // Reset transform before scaling to prevent cumulative scaling on resize
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
         ctx.scale(dpr, dpr);
     }
 
@@ -801,17 +803,20 @@ class SpatialEncodingSimulator {
 
                         // Calculate arrow direction
                         // In rotating frame: arrows show accumulated phase from gradients
-                        // - Gx creates a phase ramp across x: φ = γ·Gx·x·t (shown as freqPhase * time)
-                        // - Gy creates a phase offset: φ = γ·Gy·y·t (shown as phaseOffset)
+                        // - Gx creates a phase ramp across x: φ = γ·Gx·x·t
+                        // - Gy creates a phase offset: φ = γ·Gy·y·t
                         let arrowPhase;
                         if (this.labFrameMode) {
+                            // Lab frame: show precession + gradient effects
                             const basePhase = 2 * Math.PI * this.baseFrequency * this.animationTime;
                             const freqContribution = this.gxEnabled ? freqPhase * this.animationTime * 2 : 0;
                             arrowPhase = basePhase + freqContribution + phaseOffset;
                         } else {
                             // Rotating frame: show phase from both Gx and Gy
-                            // Gx contribution: phase ramp across x (proportional to time during readout)
-                            const freqContribution = this.gxEnabled ? freqPhase * this.animationTime * 2 : 0;
+                            // Use fixed readout time (1.0) so Gx phase ramp is visible even when animation stopped
+                            // This represents the phase at a snapshot during readout
+                            const readoutTime = 1.0;
+                            const freqContribution = this.gxEnabled ? freqPhase * readoutTime * 2 : 0;
                             arrowPhase = freqContribution + phaseOffset;
                         }
 
