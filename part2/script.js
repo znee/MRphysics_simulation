@@ -506,7 +506,10 @@ class MRPhysics {
             // Update signal display in tissue card
             const signalEl = document.getElementById(`signal-${tissue.id}`);
             if (signalEl) {
-                signalEl.textContent = `S: ${Math.abs(s).toFixed(2)}`;
+                const absSignal = Math.abs(s);
+                signalEl.textContent = `S: ${absSignal.toFixed(3)}`;
+                // Also update the color intensity based on signal
+                signalEl.style.opacity = Math.max(0.5, Math.min(1, absSignal + 0.3));
             }
         }
         console.log('Tissue signals:', signalDebug, 'Params:', this.params);
