@@ -360,8 +360,8 @@ class SpatialEncodingSimulator {
         } else {
             if (kspaceTitle) kspaceTitle.textContent = 'K-Space (Cartesian)';
             if (kspaceBadge) kspaceBadge.textContent = '';
-            if (objectTitle) objectTitle.textContent = 'Object Density';
-            if (spinBadge) spinBadge.textContent = 'Phase Spheres';
+            if (objectTitle) objectTitle.textContent = 'Signal Vector';
+            if (spinBadge) spinBadge.textContent = 'Phase Encoding';
         }
     }
 
@@ -1560,7 +1560,8 @@ class SpatialEncodingSimulator {
         if (this.currentModule === 'A') {
             this.renderResultantVector(ctx, w, h);
         } else {
-            this.renderObjectDensity(ctx, w, h);
+            // Module B: Show k-space sample as vector in complex plane
+            this.renderKSpaceVector(ctx, w, h);
             // Update signal display
             const signal = this.calculateSignalAtKSpace(this.kxPosition, this.kyPosition);
             const realEl = document.getElementById('signal-real');
@@ -1569,6 +1570,130 @@ class SpatialEncodingSimulator {
             if (realEl) realEl.textContent = signal.real.toFixed(2);
             if (imagEl) imagEl.textContent = signal.imag.toFixed(2);
             if (magEl) magEl.textContent = signal.magnitude.toFixed(2);
+        }
+    }
+
+    renderKSpaceVector(ctx, w, h) {
+        // Module B: Show the k-space sample as a phasor/vector in complex plane
+        // This matches Figure 16 in "Physics of MRI: A Primer"
+        const signal = this.calculateSignalAtKSpace(this.kxPosition, this.kyPosition);
+
+        // Calculate max signal for scaling (at k=0)
+        const signalAtZero = this.calculateSignalAtKSpace(0, 0);
+        const maxSignal = Math.max(signalAtZero.magnitude, 1);
+
+        // Layout
+        const cx = w / 2;
+        const cy = h / 2 + 10;
+        const radius = Math.min(w, h) * 0.38;
+
+        // Title
+        ctx.font = 'bold 10px Inter';
+        ctx.textAlign = 'center';
+        ctx.fillStyle = '#a855f7';
+        ctx.fillText(`K-Space Sample (${this.kxPosition}, ${this.kyPosition})`, cx, 14);
+
+        // Draw complex plane axes
+        ctx.strokeStyle = '#475569';
+        ctx.lineWidth = 1;
+        // Real axis
+        ctx.beginPath();
+        ctx.moveTo(cx - radius - 10, cy);
+        ctx.lineTo(cx + radius + 10, cy);
+        ctx.stroke();
+        // Imag axis
+        ctx.beginPath();
+        ctx.moveTo(cx, cy - radius - 10);
+        ctx.lineTo(cx, cy + radius + 10);
+        ctx.stroke();
+
+        // Axis labels
+        ctx.font = '9px Inter';
+        ctx.fillStyle = '#64748b';
+        ctx.textAlign = 'left';
+        ctx.fillText('Re', cx + radius + 2, cy - 3);
+        ctx.textAlign = 'center';
+        ctx.fillText('Im', cx + 8, cy - radius - 2);
+
+        // Draw reference circle (unit circle scaled)
+        ctx.strokeStyle = '#334155';
+        ctx.setLineDash([3, 3]);
+        ctx.beginPath();
+        ctx.arc(cx, cy, radius * 0.8, 0, 2 * Math.PI);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // Scale factor for the vector
+        const scale = (radius * 0.8) / maxSignal;
+
+        // Draw the signal vector
+        const vx = signal.real * scale;
+        const vy = -signal.imag * scale;  // Flip for screen coordinates (y up)
+
+        // Vector line
+        ctx.strokeStyle = '#22d3ee';
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.moveTo(cx, cy);
+        ctx.lineTo(cx + vx, cy + vy);
+        ctx.stroke();
+
+        // Arrowhead
+        if (signal.magnitude > 0.1) {
+            const angle = Math.atan2(vy, vx);
+            ctx.fillStyle = '#22d3ee';
+            ctx.beginPath();
+            ctx.moveTo(cx + vx, cy + vy);
+            ctx.lineTo(cx + vx - 10 * Math.cos(angle - 0.4), cy + vy - 10 * Math.sin(angle - 0.4));
+            ctx.lineTo(cx + vx - 10 * Math.cos(angle + 0.4), cy + vy - 10 * Math.sin(angle + 0.4));
+            ctx.closePath();
+            ctx.fill();
+        }
+
+        // Draw endpoint marker
+        ctx.beginPath();
+        ctx.arc(cx + vx, cy + vy, 5, 0, 2 * Math.PI);
+        ctx.fillStyle = '#f59e0b';
+        ctx.fill();
+        ctx.strokeStyle = '#fff';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+
+        // Show magnitude as arc
+        if (signal.magnitude > 0.5) {
+            ctx.strokeStyle = 'rgba(34, 211, 238, 0.3)';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            const magRadius = signal.magnitude * scale;
+            ctx.arc(cx, cy, magRadius, 0, 2 * Math.PI);
+            ctx.stroke();
+        }
+
+        // Phase angle indicator
+        if (signal.magnitude > 0.5) {
+            ctx.strokeStyle = 'rgba(245, 158, 11, 0.5)';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(cx + 15, cy);
+            ctx.arc(cx, cy, 15, 0, -signal.phase, signal.phase > 0);
+            ctx.stroke();
+        }
+
+        // Info text
+        ctx.font = '9px Inter';
+        ctx.fillStyle = '#94a3b8';
+        ctx.textAlign = 'center';
+        ctx.fillText('Signal = Σ spins × e^(-i·phase)', cx, h - 8);
+
+        // Show k-space position context
+        ctx.font = '8px Inter';
+        ctx.fillStyle = '#64748b';
+        ctx.textAlign = 'left';
+        if (this.kxPosition === 0 && this.kyPosition === 0) {
+            ctx.fillStyle = '#10b981';
+            ctx.fillText('Center (DC): Max signal', 5, h - 22);
+        } else {
+            ctx.fillText(`kx=${this.kxPosition}, ky=${this.kyPosition}`, 5, h - 22);
         }
     }
 
@@ -1583,7 +1708,7 @@ class SpatialEncodingSimulator {
         const currentKx = this.isAnimating ? (this.animationTime * 2 - 1) * 8 :
                           (this.gxEnabled ? (this.gxStrength / 10) * 8 : 0);
 
-        // Calculate current signal
+        // Calculate current signal (same convention as calculateSignalAtKSpace)
         let realSum = 0, imagSum = 0;
         for (let iy = 0; iy < n; iy++) {
             for (let ix = 0; ix < n; ix++) {
@@ -1593,7 +1718,7 @@ class SpatialEncodingSimulator {
                 const y = (iy / (n - 1)) * 2 - 1;
                 const phase = 2 * Math.PI * (currentKx * x + kyValue * y) / 16;
                 realSum += rho * Math.cos(phase);
-                imagSum -= rho * Math.sin(phase);
+                imagSum += rho * Math.sin(phase);  // Same sign as calculateSignalAtKSpace
             }
         }
         const magnitude = Math.sqrt(realSum * realSum + imagSum * imagSum);
@@ -1648,7 +1773,7 @@ class SpatialEncodingSimulator {
             const phase = 2 * Math.PI * (currentKx * x + kyValue * 0) / 16;
 
             const dx = Math.cos(phase) * arrowLength * 0.4;
-            const dy = -Math.sin(phase) * arrowLength * 0.4;
+            const dy = Math.sin(phase) * arrowLength * 0.4;  // Consistent sign convention
 
             // Arrow color based on position (left=cyan, right=orange)
             const t = i / (numArrows - 1);
@@ -1677,7 +1802,7 @@ class SpatialEncodingSimulator {
 
         // Draw resultant vector (sum) - thick white arrow
         const sumDx = (realSum / maxSignal) * arrowLength;
-        const sumDy = -(imagSum / maxSignal) * arrowLength;
+        const sumDy = (imagSum / maxSignal) * arrowLength;  // Consistent sign
 
         if (magnitude > 0.1) {
             ctx.strokeStyle = '#fff';
