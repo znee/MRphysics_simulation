@@ -1138,9 +1138,18 @@ function animate(timestamp) {
     lastTimestamp = timestamp;
 
     // Update simulation if playing
-    if (CONFIG.isPlaying && CONFIG.currentTime < CONFIG.maxTime) {
+    // When B0 is OFF (Module A), continue animation indefinitely for gradual randomization
+    const shouldAnimate = CONFIG.isPlaying &&
+        (CONFIG.currentTime < CONFIG.maxTime || (CONFIG.currentModule === 'A' && !b0IsOn));
+
+    if (shouldAnimate) {
         const simDt = CONFIG.dt * CONFIG.animationSpeed;
         CONFIG.currentTime += simDt;
+
+        // For B0 OFF mode, wrap time to prevent overflow (animation loops indefinitely)
+        if (CONFIG.currentModule === 'A' && !b0IsOn && CONFIG.currentTime > CONFIG.maxTime) {
+            CONFIG.currentTime = CONFIG.maxTime; // Keep at max, animation continues
+        }
 
         // Update physics based on module
         switch (CONFIG.currentModule) {
@@ -1167,27 +1176,50 @@ function animate(timestamp) {
 }
 
 function updateModuleA(dt) {
-    if (!alignmentEnsemble || !b0IsOn) return;
+    if (!alignmentEnsemble) return;
 
-    // When B0 is on, spins align toward +z through T1 relaxation
-    // Each spin evolves independently
+    // B0 ON: spins align toward +z through T1 relaxation
+    // B0 OFF: spins gradually return to random orientations (decay toward thermal equilibrium)
     alignmentEnsemble.spins.forEach(spin => {
-        // T1 relaxation drives Mz toward equilibrium (M0 = 1)
-        const E1 = Math.exp(-dt / spin.T1);
-        spin.Mz = spin.Mz * E1 + (1 - E1);
+        if (b0IsOn) {
+            // T1 relaxation drives Mz toward equilibrium (M0 = 1)
+            const E1 = Math.exp(-dt / spin.T1);
+            spin.Mz = spin.Mz * E1 + (1 - E1);
 
-        // Transverse components decay (but more slowly since no RF was applied)
-        // In reality, random thermal motion causes some T2-like decay
-        const E2 = Math.exp(-dt / spin.T2);
-        spin.Mx *= E2;
-        spin.My *= E2;
+            // Transverse components decay (but more slowly since no RF was applied)
+            // In reality, random thermal motion causes some T2-like decay
+            const E2 = Math.exp(-dt / spin.T2);
+            spin.Mx *= E2;
+            spin.My *= E2;
 
-        // Normalize the magnetization vector (keep it on unit sphere during alignment)
-        const mag = Math.sqrt(spin.Mx * spin.Mx + spin.My * spin.My + spin.Mz * spin.Mz);
-        if (mag > 0.01) {
-            spin.Mx /= mag;
-            spin.My /= mag;
-            spin.Mz /= mag;
+            // Normalize the magnetization vector (keep it on unit sphere during alignment)
+            const mag = Math.sqrt(spin.Mx * spin.Mx + spin.My * spin.My + spin.Mz * spin.Mz);
+            if (mag > 0.01) {
+                spin.Mx /= mag;
+                spin.My /= mag;
+                spin.Mz /= mag;
+            }
+        } else {
+            // B0 OFF: No preferred direction, spins gradually lose alignment
+            // Use a much shorter time constant than T1 for visible de-alignment
+            // (In reality, without B0, thermal fluctuations quickly randomize spins)
+            const deAlignmentTimeConstant = 200; // ms - fast enough to see animation
+            const E1 = Math.exp(-dt / deAlignmentTimeConstant);
+
+            // Each spin drifts toward a random orientation
+            // The random walk on a sphere: perturb direction, then normalize
+            const driftStrength = (1 - E1) * 1.5;  // Stronger drift for visible effect
+            spin.Mx = spin.Mx * E1 + (Math.random() - 0.5) * driftStrength;
+            spin.My = spin.My * E1 + (Math.random() - 0.5) * driftStrength;
+            spin.Mz = spin.Mz * E1 + (Math.random() - 0.5) * driftStrength;
+
+            // Normalize to unit sphere (spins have constant magnitude)
+            const mag = Math.sqrt(spin.Mx * spin.Mx + spin.My * spin.My + spin.Mz * spin.Mz);
+            if (mag > 0.01) {
+                spin.Mx /= mag;
+                spin.My /= mag;
+                spin.Mz /= mag;
+            }
         }
     });
 
@@ -1700,34 +1732,17 @@ function setupEventListeners() {
     });
 
     document.getElementById('btn-b0-off').addEventListener('click', () => {
-        // Turn B0 OFF - randomize spins
+        // Turn B0 OFF - gradually randomize spins (not instant)
+        // This simulates the loss of alignment when the external field is removed
         b0IsOn = false;
-        CONFIG.isPlaying = false;
-        CONFIG.currentTime = 0;
+
+        // Continue playing to show gradual de-alignment animation
+        CONFIG.isPlaying = true;
         clearChartData();
+        CONFIG.currentTime = 0;
 
-        if (alignmentEnsemble) {
-            alignmentEnsemble.randomizeOrientations();
-
-            // Sync arrow directions with ensemble
-            alignmentEnsemble.spins.forEach((spin, i) => {
-                if (alignmentArrows[i]) {
-                    const dir = new THREE.Vector3(spin.Mx, spin.My, spin.Mz);
-                    alignmentArrows[i].setDirection(dir.normalize());
-                }
-            });
-
-            // Update UI
-            const sum = alignmentEnsemble.getSumMagnetization();
-            const avgMz = alignmentEnsemble.getAverageMz();
-            document.getElementById('alignment-fill').style.width = Math.max(0, avgMz * 100) + '%';
-            document.getElementById('net-mz').textContent = Math.max(0, avgMz * 100).toFixed(0) + '%';
-            document.getElementById('Mx-val').textContent = sum.Mx.toFixed(2);
-            document.getElementById('My-val').textContent = sum.My.toFixed(2);
-            document.getElementById('Mz-val').textContent = sum.Mz.toFixed(2);
-
-            if (netMagArrowA) netMagArrowA.visible = false;
-        }
+        // The actual randomization happens gradually in updateModuleA()
+        // when b0IsOn is false - spins drift toward random orientations over time
     });
 
     // Module B controls
