@@ -65,7 +65,7 @@ Understand how gradients encode spatial position into signal phase - the foundat
 - **Moon-Phase Spheres**: Each spin's phase is displayed as a moon-like illumination pattern
   - Phase 0 = Full moon (all white) → Phase π = New moon (all dark)
   - The illuminated area changes smoothly like lunar phases
-- **Lab Frame Animation**: Toggle to see phase evolution during readout
+- **Animate Readout**: Toggle to see phase evolution as kx sweeps during signal acquisition
 - **Readout Signal**: Watch the signal graph as spins dephase during frequency encoding
 - **Vector Sum**: Watch how individual spins combine into net signal
 
