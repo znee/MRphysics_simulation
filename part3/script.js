@@ -870,11 +870,9 @@ class SpatialEncodingSimulator {
         const isModuleA = this.currentModule === 'A';
         const animProgress = isModuleA ? this.animationTime : 0;
 
-        // Calculate readout width factor (shared between Gx and Signal)
-        // Duration varies with Gx strength, keeping amplitude fixed
-        const gxWidthFactor = isModuleA && this.gxEnabled ?
-            (Math.abs(this.gxStrength) / 20 + 0.3) : 1.0;
-        const readoutWidth = plotW * 0.35 * gxWidthFactor;
+        // Pulse sequence timing is FIXED (TE doesn't change with Gx strength)
+        // The strength slider only affects the phase pattern, not timing
+        const readoutWidth = plotW * 0.35;
         const readoutStart = margin.left + plotW * 0.55;
 
         // Draw each channel
@@ -977,14 +975,14 @@ class SpatialEncodingSimulator {
                         // Module A: Show on/off state
                         if (this.gxEnabled) {
                             const readAmp = amp;  // Fixed amplitude
-                            const dephaserWidth = plotW * 0.08 * gxWidthFactor;
+                            const dephaserWidth = plotW * 0.08;
 
                             ctx.strokeStyle = ch.color;
                             ctx.fillStyle = ch.color;
                             ctx.lineWidth = 2;
                             // Dephaser (half area, opposite polarity)
                             this.drawTrapezoid(ctx, xStart + plotW * 0.35, y, dephaserWidth, -readAmp * 0.5, ch.color);
-                            // Readout gradient - width varies with strength (uses shared readoutWidth)
+                            // Readout gradient - fixed timing (TE constant)
                             this.drawTrapezoid(ctx, readoutStart, y, readoutWidth, readAmp, ch.color);
                             // Animation time marker - shows current position during readout
                             if (this.isAnimating && animProgress > 0) {
