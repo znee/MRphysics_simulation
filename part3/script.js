@@ -870,6 +870,13 @@ class SpatialEncodingSimulator {
         const isModuleA = this.currentModule === 'A';
         const animProgress = isModuleA ? this.animationTime : 0;
 
+        // Calculate readout width factor (shared between Gx and Signal)
+        // Duration varies with Gx strength, keeping amplitude fixed
+        const gxWidthFactor = isModuleA && this.gxEnabled ?
+            (Math.abs(this.gxStrength) / 20 + 0.3) : 1.0;
+        const readoutWidth = plotW * 0.35 * gxWidthFactor;
+        const readoutStart = margin.left + plotW * 0.55;
+
         // Draw each channel
         channels.forEach((ch, i) => {
             const y = margin.top + i * channelHeight + baselineOffset;
@@ -970,21 +977,18 @@ class SpatialEncodingSimulator {
                         // Module A: Show on/off state
                         if (this.gxEnabled) {
                             const readAmp = amp;  // Fixed amplitude
-                            const widthFactor = Math.abs(this.gxStrength) / 20 + 0.3;  // Duration varies (0.3 to 1.3)
-                            const readWidth = plotW * 0.35 * widthFactor;
-                            const dephaserWidth = plotW * 0.08 * widthFactor;
-                            const readStart = xStart + plotW * 0.55;
+                            const dephaserWidth = plotW * 0.08 * gxWidthFactor;
 
                             ctx.strokeStyle = ch.color;
                             ctx.fillStyle = ch.color;
                             ctx.lineWidth = 2;
                             // Dephaser (half area, opposite polarity)
                             this.drawTrapezoid(ctx, xStart + plotW * 0.35, y, dephaserWidth, -readAmp * 0.5, ch.color);
-                            // Readout gradient - width varies with strength
-                            this.drawTrapezoid(ctx, readStart, y, readWidth, readAmp, ch.color);
+                            // Readout gradient - width varies with strength (uses shared readoutWidth)
+                            this.drawTrapezoid(ctx, readoutStart, y, readoutWidth, readAmp, ch.color);
                             // Animation time marker - shows current position during readout
                             if (this.isAnimating && animProgress > 0) {
-                                const timeX = readStart + readWidth * animProgress;
+                                const timeX = readoutStart + readoutWidth * animProgress;
                                 // Vertical line
                                 ctx.strokeStyle = '#22d3ee';
                                 ctx.lineWidth = 2;
@@ -1013,7 +1017,7 @@ class SpatialEncodingSimulator {
                             ctx.font = 'bold 7px Inter';
                             ctx.fillStyle = '#10b981';
                             ctx.textAlign = 'center';
-                            ctx.fillText('ON', readStart + readWidth / 2, y - amp - 3);
+                            ctx.fillText('ON', readoutStart + readoutWidth / 2, y - amp - 3);
                         } else {
                             // Show dimmed placeholder
                             ctx.globalAlpha = 0.2;
@@ -1069,7 +1073,8 @@ class SpatialEncodingSimulator {
                     ctx.strokeStyle = ch.color;
                     ctx.fillStyle = ch.color;
                     ctx.lineWidth = 2;
-                    this.drawEcho(ctx, xStart + plotW * 0.55, y, plotW * 0.35, amp * 0.8);
+                    // Signal spans same duration as readout gradient - echo at center
+                    this.drawEcho(ctx, readoutStart, y, readoutWidth, amp * 0.8);
                     break;
             }
         });
@@ -1096,8 +1101,8 @@ class SpatialEncodingSimulator {
         ctx.textAlign = 'center';
         ctx.fillText('time', margin.left + plotW - 15, h - 3);
 
-        // TE marker (short marker near signal line)
-        const teX = margin.left + plotW * 0.725;
+        // TE marker (at center of readout = echo position)
+        const teX = readoutStart + readoutWidth / 2;
         const signalY = margin.top + 4 * channelHeight + baselineOffset;  // Signal channel position
         ctx.fillStyle = '#f59e0b';
         ctx.font = 'bold 7px Inter';
