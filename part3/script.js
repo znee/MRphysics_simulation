@@ -964,20 +964,27 @@ class SpatialEncodingSimulator {
 
                 case 'read':
                     // Frequency encoding gradient
+                    // k-space coverage = gradient AREA (amplitude × time)
+                    // For educational clarity: amplitude fixed, duration varies with strength
                     if (isModuleA) {
                         // Module A: Show on/off state
                         if (this.gxEnabled) {
-                            const readAmp = amp * (this.gxStrength / 10);
+                            const readAmp = amp;  // Fixed amplitude
+                            const widthFactor = Math.abs(this.gxStrength) / 20 + 0.3;  // Duration varies (0.3 to 1.3)
+                            const readWidth = plotW * 0.35 * widthFactor;
+                            const dephaserWidth = plotW * 0.08 * widthFactor;
+                            const readStart = xStart + plotW * 0.55;
+
                             ctx.strokeStyle = ch.color;
                             ctx.fillStyle = ch.color;
                             ctx.lineWidth = 2;
-                            // Dephaser
-                            this.drawTrapezoid(ctx, xStart + plotW * 0.35, y, plotW * 0.08, -readAmp * 0.5, ch.color);
-                            // Readout (highlight if animating)
-                            this.drawTrapezoid(ctx, xStart + plotW * 0.55, y, plotW * 0.35, readAmp, ch.color);
+                            // Dephaser (half area, opposite polarity)
+                            this.drawTrapezoid(ctx, xStart + plotW * 0.35, y, dephaserWidth, -readAmp * 0.5, ch.color);
+                            // Readout gradient - width varies with strength
+                            this.drawTrapezoid(ctx, readStart, y, readWidth, readAmp, ch.color);
                             // Animation time marker - shows current position during readout
                             if (this.isAnimating && animProgress > 0) {
-                                const timeX = xStart + plotW * 0.55 + plotW * 0.35 * animProgress;
+                                const timeX = readStart + readWidth * animProgress;
                                 // Vertical line
                                 ctx.strokeStyle = '#22d3ee';
                                 ctx.lineWidth = 2;
@@ -1006,7 +1013,7 @@ class SpatialEncodingSimulator {
                             ctx.font = 'bold 7px Inter';
                             ctx.fillStyle = '#10b981';
                             ctx.textAlign = 'center';
-                            ctx.fillText('ON', xStart + plotW * 0.725, y - amp - 3);
+                            ctx.fillText('ON', readStart + readWidth / 2, y - amp - 3);
                         } else {
                             // Show dimmed placeholder
                             ctx.globalAlpha = 0.2;
