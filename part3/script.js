@@ -870,10 +870,14 @@ class SpatialEncodingSimulator {
         const isModuleA = this.currentModule === 'A';
         const animProgress = isModuleA ? this.animationTime : 0;
 
-        // Pulse sequence timing is FIXED (TE doesn't change with Gx strength)
-        // The strength slider only affects the phase pattern, not timing
-        const readoutWidth = plotW * 0.35;
-        const readoutStart = margin.left + plotW * 0.55;
+        // Gx width varies with strength (more area = more k-space coverage)
+        // But TE (echo center) stays at a fixed position
+        const tePosition = margin.left + plotW * 0.725;  // Fixed TE position
+        const gxWidthFactor = isModuleA && this.gxEnabled ?
+            (Math.abs(this.gxStrength) / 20 + 0.3) : 1.0;  // 0.3 to 1.3
+        const readoutWidth = plotW * 0.35 * gxWidthFactor;
+        // Gx expands from center (TE) - starts earlier, ends later
+        const readoutStart = tePosition - readoutWidth / 2;
 
         // Draw each channel
         channels.forEach((ch, i) => {
@@ -975,7 +979,7 @@ class SpatialEncodingSimulator {
                         // Module A: Show on/off state
                         if (this.gxEnabled) {
                             const readAmp = amp;  // Fixed amplitude
-                            const dephaserWidth = plotW * 0.08;
+                            const dephaserWidth = plotW * 0.08 * gxWidthFactor;
 
                             ctx.strokeStyle = ch.color;
                             ctx.fillStyle = ch.color;
