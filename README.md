@@ -57,22 +57,28 @@ Demonstrates how MRI sequences produce different tissue contrasts based on T1, T
 
 Understand how gradients encode spatial position into signal phase - the foundation of all MRI imaging.
 
+> Reference: J Magn Reson Imaging 35:1038-1054 (2012) "Physics of MRI: A Primer"
+
 ### Features
 - **Module A - Gradient Encoding**: Visualize frequency (Gx) and phase (Gy) encoding
 - **Module B - K-Space & Signal**: See how k-space samples are formed
-- **Lab Frame vs Rotating Frame**: Toggle to see precession animation
-- **Visual Encoding**: Circle color = frequency contribution, Arrow direction = actual phase
+- **Moon-Phase Spheres**: Each spin's phase is displayed as a moon-like illumination pattern
+  - Phase 0 = Full moon (all white) → Phase π = New moon (all dark)
+  - The illuminated area changes smoothly like lunar phases
+- **Lab Frame Animation**: Toggle to see phase evolution during readout
+- **Readout Signal**: Watch the signal graph as spins dephase during frequency encoding
 - **Vector Sum**: Watch how individual spins combine into net signal
 
 ### Physics Model
 - **Phase Equation**: φ(x,y) = γ · (Gx·x + Gy·y) · t
+- **Moon-Phase Visualization**: illumination = (1 + cos(φ)) / 2, with terminator ellipse width = |cos(φ)| · radius
 - **K-Space Sampling**: S(kx,ky) = Σ ρ(x,y) · e^(-i2π(kx·x + ky·y))
-- **Frequency Encoding**: Applied during readout → continuous phase accumulation
-- **Phase Encoding**: Applied before readout → fixed phase imprint
+- **Frequency Encoding**: Applied during readout → continuous phase accumulation → oscillating signal
+- **Phase Encoding**: Applied before readout → fixed phase imprint → constant magnitude shift
 
 ---
 
-## Part 4: K-Space & Image Reconstruction
+## Part 4: K-Space & Reconstruction
 
 **[Launch Part 4](https://znee.github.io/MRphysics_simulation/part4/)**
 
@@ -112,7 +118,7 @@ This simplified demo shows the **concept** that parallel imaging can recover mis
 
 ---
 
-## Part 5: QSM & Susceptibility Simulation
+## Part 5: QSM & Susceptibility
 
 **[Launch Part 5](https://znee.github.io/MRphysics_simulation/part5/)**
 

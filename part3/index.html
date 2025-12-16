@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Part 1.5: Spatial Encoding | MR Physics Simulation</title>
+    <title>Part 3: Spatial Encoding | MR Physics Simulation</title>
     <link rel="stylesheet" href="style.css">
     <!-- Google Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -43,8 +43,8 @@
                             <span class="toggle-text">Phase Gradient (G<sub>y</sub>)</span>
                         </label>
                         <div class="gradient-strength" id="gy-strength-container" style="display: none;">
-                            <input type="range" id="gy-strength" min="1" max="10" value="5">
-                            <span id="gy-strength-val">5</span>
+                            <input type="range" id="gy-strength" min="-20" max="20" value="10">
+                            <span id="gy-strength-val">10</span>
                         </div>
                     </div>
 
@@ -54,18 +54,18 @@
                             <span class="toggle-text">Frequency Gradient (G<sub>x</sub>)</span>
                         </label>
                         <div class="gradient-strength" id="gx-strength-container" style="display: none;">
-                            <input type="range" id="gx-strength" min="1" max="10" value="5">
-                            <span id="gx-strength-val">5</span>
+                            <input type="range" id="gx-strength" min="-20" max="20" value="10">
+                            <span id="gx-strength-val">10</span>
                         </div>
                     </div>
 
                     <div class="control-row">
                         <label for="grid-size">Grid Size</label>
                         <select id="grid-size">
-                            <option value="4">4 × 4</option>
-                            <option value="8" selected>8 × 8</option>
-                            <option value="12">12 × 12</option>
-                            <option value="16">16 × 16</option>
+                            <option value="8">8 × 8</option>
+                            <option value="16" selected>16 × 16</option>
+                            <option value="24">24 × 24</option>
+                            <option value="32">32 × 32</option>
                         </select>
                     </div>
 
@@ -82,7 +82,7 @@
                     <div class="toggle-group frame-toggle">
                         <label class="toggle-label">
                             <input type="checkbox" id="lab-frame-toggle">
-                            <span class="toggle-text">Show Lab Frame (animate precession)</span>
+                            <span class="toggle-text">Animate Readout (kx sweep over time)</span>
                         </label>
                     </div>
 
@@ -138,10 +138,10 @@
                     <div class="control-row">
                         <label for="grid-size-b">Grid Size</label>
                         <select id="grid-size-b">
-                            <option value="4">4 × 4</option>
-                            <option value="8" selected>8 × 8</option>
-                            <option value="12">12 × 12</option>
-                            <option value="16">16 × 16</option>
+                            <option value="8">8 × 8</option>
+                            <option value="16" selected>16 × 16</option>
+                            <option value="24">24 × 24</option>
+                            <option value="32">32 × 32</option>
                         </select>
                     </div>
 
@@ -196,6 +196,9 @@
                 </div>
 
                 <div class="sidebar-footer">
+                    <p style="margin-bottom: 8px; font-size: 0.75rem; color: #94a3b8;">
+                        Based on: J Magn Reson Imaging 35:1038-1054 (2012)
+                    </p>
                     <p>Jinhee Jang, MD, PhD</p>
                     <p>Department of Radiology, Seoul St. Mary's Hospital</p>
                 </div>
@@ -215,10 +218,11 @@
                         </div>
                     </div>
 
-                    <!-- Phase Colorwheel / Legend -->
+                    <!-- Pulse Sequence Diagram -->
                     <div class="viz-panel small" id="legend-panel">
                         <div class="panel-header">
-                            <h2>Phase Legend</h2>
+                            <h2>Pulse Sequence</h2>
+                            <span class="panel-badge">Cartesian</span>
                         </div>
                         <div class="panel-content centered">
                             <canvas id="legend-canvas"></canvas>
