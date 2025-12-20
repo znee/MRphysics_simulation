@@ -189,3 +189,7 @@ Educational use permitted. Created for medical physics teaching.
 
 Jinhee Jang, MD, PhD
 Department of Radiology, Seoul St. Mary's Hospital
+
+## Acknowledgment
+
+This work was supported by the National Research Foundation of Korea (NRF) funded by the Korean government (MSIT) (RS-2023-00208409)
