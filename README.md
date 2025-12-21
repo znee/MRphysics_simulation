@@ -181,6 +181,9 @@ Works best in modern browsers with ES6+ support:
 - Safari 14+
 - Edge 90+
 
+### Safari Note
+Safari's "Advanced Tracking and Fingerprinting Protection" adds noise to canvas elements, which may cause visible artifacts (stippling pattern) in the brain phantom visualization (Part 2). This is intentional browser behavior for privacy protection, not a bug. To disable: Safari → Settings → Advanced → set "Advanced Tracking and Fingerprinting Protection" to "Private Browsing" only. This protection is enabled by default in Private Browsing mode and will be enabled for all browsing in future macOS/iOS versions.
+
 ## License
 
 Educational use permitted. Created for medical physics teaching.
