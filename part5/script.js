@@ -80,62 +80,6 @@ const FFT = {
         }
     },
 
-    fft2D: function (complexArray, width, height, inverse = false) {
-        // FFT Rows
-        for (let y = 0; y < height; y++) {
-            const offset = y * width;
-            // Extract row
-            const rowRe = new Float32Array(width);
-            const rowIm = new Float32Array(width);
-            for (let i = 0; i < width; i++) { rowRe[i] = complexArray.real[offset + i]; rowIm[i] = complexArray.imag[offset + i]; }
-
-            this.fft1D(rowRe, rowIm, width, inverse);
-
-            for (let i = 0; i < width; i++) { complexArray.real[offset + i] = rowRe[i]; complexArray.imag[offset + i] = rowIm[i]; }
-        }
-
-        // FFT Columns
-        const cRe = new Float32Array(height);
-        const cIm = new Float32Array(height);
-        for (let x = 0; x < width; x++) {
-            for (let y = 0; y < height; y++) {
-                cRe[y] = complexArray.real[y * width + x];
-                cIm[y] = complexArray.imag[y * width + x];
-            }
-
-            this.fft1D(cRe, cIm, height, inverse);
-
-            for (let y = 0; y < height; y++) {
-                complexArray.real[y * width + x] = cRe[y];
-                complexArray.imag[y * width + x] = cIm[y];
-            }
-        }
-    },
-
-    // Shift zero frequency to center
-    fftShift: function (complexArray, width, height) {
-        // Swap quadrants
-        const halfW = width / 2;
-        const halfH = height / 2;
-
-        for (let y = 0; y < halfH; y++) {
-            for (let x = 0; x < halfW; x++) {
-                const i1 = y * width + x;
-                const i2 = (y + halfH) * width + (x + halfW);
-                const i3 = y * width + (x + halfW);
-                const i4 = (y + halfH) * width + x;
-
-                // Swap 1 and 2
-                [complexArray.real[i1], complexArray.real[i2]] = [complexArray.real[i2], complexArray.real[i1]];
-                [complexArray.imag[i1], complexArray.imag[i2]] = [complexArray.imag[i2], complexArray.imag[i1]];
-
-                // Swap 3 and 4
-                [complexArray.real[i3], complexArray.real[i4]] = [complexArray.real[i4], complexArray.real[i3]];
-                [complexArray.imag[i3], complexArray.imag[i4]] = [complexArray.imag[i4], complexArray.imag[i3]];
-            }
-        }
-    },
-
     // 3D FFT - separable implementation (1D FFT along each axis)
     fft3D: function (complexArray, nx, ny, nz, inverse = false) {
         // FFT along X (fastest varying index)
@@ -236,116 +180,12 @@ const FFT = {
 // --- QSM Physics ---
 
 const QSM = {
-    // Generate 2D Dipole Kernel in K-Space
-    //
-    // Clinical MRI: B0 always points along +Z (S/I direction)
-    // The dipole kernel depends on the scan plane orientation:
-    //
-    // 3D Dipole: D(k) = 1/3 - kz²/|k|² where kz is along B0
-    //
-    // For 2D slices:
-    // - Axial (XY plane): B0 is perpendicular to slice (kz = 0 in-plane)
-    //   → D = 1/3 for all k (no dipole pattern - this is the "magic angle" effect!)
-    // - Coronal (XZ plane): B0 has in-plane component along Z
-    //   → D = 1/3 - kz²/(kx² + kz²)
-    // - Sagittal (YZ plane): B0 has in-plane component along Z
-    //   → D = 1/3 - kz²/(ky² + kz²)
-
-    generateDipoleKernel: function (size, scanPlane) {
-        const kernel = new ComplexArray(size * size);
-        const center = size / 2;
-
-        for (let iy = 0; iy < size; iy++) {
-            for (let ix = 0; ix < size; ix++) {
-                // k-space coordinates in the 2D slice plane
-                const k1 = (ix - center) / size; // First in-plane axis
-                const k2 = (iy - center) / size; // Second in-plane axis
-
-                const kMag2 = k1 * k1 + k2 * k2;
-                const idx = iy * size + ix;
-
-                if (kMag2 === 0) {
-                    kernel.real[idx] = 0; // Singularity at DC
-                } else {
-                    let D;
-                    switch (scanPlane) {
-                        case 'axial':
-                            // XY plane: B0 (along Z) is perpendicular to slice
-                            // kz = 0 for all in-plane frequencies
-                            // D = 1/3 - 0²/k² = 1/3 (constant - no dipole pattern!)
-                            D = 1.0 / 3.0;
-                            break;
-                        case 'coronal':
-                            // XZ plane: k1 = kx, k2 = kz (B0 direction)
-                            // D = 1/3 - kz²/(kx² + kz²)
-                            D = (1.0 / 3.0) - (k2 * k2) / kMag2;
-                            break;
-                        case 'sagittal':
-                            // YZ plane: k1 = ky, k2 = kz (B0 direction)
-                            // D = 1/3 - kz²/(ky² + kz²)
-                            D = (1.0 / 3.0) - (k2 * k2) / kMag2;
-                            break;
-                        default:
-                            D = 1.0 / 3.0;
-                    }
-                    kernel.real[idx] = D;
-                }
-            }
-        }
-
-        return kernel;
-    },
-
-    multiplyKSpace: function (kData, kKernel) {
-        // Result = kData * kKernel (Element-wise complex multiply)
-        // Since Kernel is Real-only (symmetric dipole), simplifies things.
-        const size = kData.size;
-        const result = new ComplexArray(size);
-        for (let i = 0; i < size; i++) {
-            const val = kKernel.real[i]; // Kernel is real
-            result.real[i] = kData.real[i] * val;
-            result.imag[i] = kData.imag[i] * val;
-        }
-        return result;
-    },
-
-    divideKSpace: function (kData, kKernel, lambda = 0, method = 'tikhonov') {
-        const size = kData.size;
-        const result = new ComplexArray(size);
-
-        for (let i = 0; i < size; i++) {
-            let d = kKernel.real[i];
-            let invD = 0;
-
-            if (method === 'tkd') {
-                // Truncated K-Space Division
-                // If |D| < threshold, replace D.
-                // Threshold is lambda.
-                const threshold = lambda || 0.05; // Default if lambda is 0? Or allow 0.
-                if (Math.abs(d) < threshold) {
-                    // Sign of d * threshold
-                    const sign = d >= 0 ? 1 : -1;
-                    d = sign * threshold;
-                }
-                invD = 1.0 / d; // Simple division after thresholding
-
-            } else {
-                // Tikhonov Regularization (Default)
-                // inv = d / (d^2 + lambda)
-                // If lambda is 0, behaves like 1/d (with slight singularity protection needed?)
-                if (lambda === 0) {
-                    if (Math.abs(d) > 1e-6) invD = 1.0 / d;
-                    else invD = 0;
-                } else {
-                    invD = d / (d * d + lambda);
-                }
-            }
-
-            result.real[i] = kData.real[i] * invD;
-            result.imag[i] = kData.imag[i] * invD;
-        }
-        return result;
-    },
+    // NOTE: A 2D in-plane dipole kernel cannot represent the intrinsically
+    // 3D dipole field (the through-plane kz structure is lost), so the
+    // simulation always uses the full 3D kernel below. The susceptibility
+    // dipole is a 3D object: an axial slice through a sphere still shows
+    // its external field, and the magic angle (54.7°) is a property of
+    // cones in 3D k-space — not of any single scan plane.
 
     // Generate 3D Dipole Kernel in K-Space with rotatable B0 direction
     // D(k) = 1/3 - kb0²/|k|² where kb0 is the k-component along B0 direction
@@ -503,7 +343,6 @@ const CONFIG = {
     simMode: 'forward', // 'forward' | 'inverse'
     lambda: 0.01, // Regularization parameter (match slider default)
     reconMethod: 'tikhonov', // 'tikhonov' | 'tkd'
-    use3D: true, // Use full 3D simulation for realistic dipole artifacts
     b0Angle: 0, // B0 tilt angle from Z-axis in degrees (0 = standard supine)
     objects: [] // List of susceptibility sources {x, y, z, r, val}
 };
@@ -512,8 +351,6 @@ const CONFIG = {
 let chiMap = new Float32Array(CONFIG.gridSize * CONFIG.gridSize); // Current slice susceptibility
 let fieldMap = new Float32Array(CONFIG.gridSize * CONFIG.gridSize); // Current slice phase
 let reconMap = new Float32Array(CONFIG.gridSize * CONFIG.gridSize); // Current slice reconstruction
-let cleanFieldMap = new Float32Array(CONFIG.gridSize * CONFIG.gridSize); // Field without noise
-let cachedNoise = new Float32Array(CONFIG.gridSize * CONFIG.gridSize); // Cached noise for current slice
 let needsForwardRecalc = true; // Flag to recalculate forward model (chi → field)
 let needsInverseRecalc = true; // Flag to recalculate inverse model only (field → recon)
 
@@ -522,7 +359,6 @@ let chiVolume = null; // 3D susceptibility volume
 let fieldVolume = null; // 3D phase volume (after dipole convolution)
 let reconVolume = null; // 3D reconstruction volume
 let cachedNoiseVolume = null; // 3D noise volume
-let kSpaceObj = null; // ComplexArray (Visualization)
 let sliceTextureMode = 'chi'; // Which map to show on 3D slice: 'chi', 'phase', 'recon'
 
 // DOM Elements
@@ -1029,19 +865,10 @@ function setupEventListeners() {
 
     document.getElementById('clear-canvas').addEventListener('click', resetSimulation);
 
-    // Slice Slider - physics change, needs forward recalc
+    // Slice Slider - just extract new slice from precomputed 3D volumes
     sliceSlider.addEventListener('input', () => {
         updateSliceVisual();
-        if (CONFIG.use3D) {
-            // In 3D mode, just extract new slice from precomputed volumes
-            // No need to recalculate - volumes are already computed
-            runSimulation(false);
-        } else {
-            // In 2D mode, each slice needs fresh calculation
-            updateChiMapFromObjects();
-            needsForwardRecalc = true;
-            runSimulation();
-        }
+        runSimulation(false);
     });
 
     // Slice texture selector - choose which map to show on 3D plane
@@ -1060,8 +887,6 @@ function resetSimulation() {
     chiMap.fill(0);
     fieldMap.fill(0);
     reconMap.fill(0);
-    cleanFieldMap.fill(0);
-    cachedNoise.fill(0);
 
     // Clear 3D Objects
     objectMeshes.forEach(mesh => scene.remove(mesh));
@@ -1670,92 +1495,32 @@ function run3DSimulation() {
 }
 
 function runSimulation(forceForwardRecalc = false) {
-    const N = CONFIG.gridSize;
-    const totalSize = N * N;
     const slicePos = parseInt(sliceSlider.value);
 
-    if (CONFIG.use3D) {
-        // 3D simulation mode
-        // Run full forward+inverse if forward model needs recalculation
-        if (needsForwardRecalc || forceForwardRecalc || !chiVolume || !fieldVolume) {
-            try {
-                run3DSimulation();
-            } catch (e) {
-                console.error('3D simulation error:', e);
-            }
+    // Run full forward+inverse if forward model needs recalculation
+    if (needsForwardRecalc || forceForwardRecalc || !chiVolume || !fieldVolume) {
+        try {
+            run3DSimulation();
+        } catch (e) {
+            console.error('3D simulation error:', e);
         }
-        // Run inverse-only if just λ or recon method changed (keeps same noise)
-        else if (needsInverseRecalc && fieldVolume && cachedKKernel) {
-            try {
-                run3DInverseModel();
-            } catch (e) {
-                console.error('3D inverse model error:', e);
-            }
-        }
-
-        // Extract current slice from 3D volumes
-        chiMap = extractSliceFromVolume(chiVolume, slicePos);
-        fieldMap = extractSliceFromVolume(fieldVolume, slicePos);
-
-        // Extract reconstruction from 3D volume (using proper 3D physics)
-        // Lambda/method changes now reuse same noisy field for fair comparison
-        reconMap = extractSliceFromVolume(reconVolume, slicePos);
-
-    } else {
-        // Original 2D simulation mode (kept for comparison)
-        if (needsForwardRecalc || forceForwardRecalc) {
-            const chiComplex = new ComplexArray(totalSize);
-            chiComplex.real.set(chiMap);
-
-            FFT.fft2D(chiComplex, N, N);
-            FFT.fftShift(chiComplex, N, N);
-
-            const kKernel = QSM.generateDipoleKernel(N, CONFIG.scanPlane);
-            const kField = QSM.multiplyKSpace(chiComplex, kKernel);
-            kSpaceObj = kField;
-
-            const spatialFieldComplex = new ComplexArray(totalSize);
-            spatialFieldComplex.real.set(kField.real);
-            spatialFieldComplex.imag.set(kField.imag);
-            FFT.fftShift(spatialFieldComplex, N, N);
-            FFT.fft2D(spatialFieldComplex, N, N, true);
-            cleanFieldMap.set(spatialFieldComplex.real);
-
-            const maxVal = Math.max(...cleanFieldMap.map(Math.abs));
-            const sigma = maxVal * 0.05;
-
-            for (let i = 0; i < totalSize; i++) {
-                const u1 = Math.random();
-                const u2 = Math.random();
-                const z0 = Math.sqrt(-2.0 * Math.log(u1 || 0.001)) * Math.cos(2.0 * Math.PI * u2);
-                cachedNoise[i] = z0 * sigma;
-            }
-
-            needsForwardRecalc = false;
-        }
-
-        const noisyFieldMap = new Float32Array(totalSize);
-        for (let i = 0; i < totalSize; i++) {
-            noisyFieldMap[i] = cleanFieldMap[i] + cachedNoise[i];
-        }
-        fieldMap = noisyFieldMap;
-
-        const kKernel = QSM.generateDipoleKernel(N, CONFIG.scanPlane);
-        const fieldComplex = new ComplexArray(totalSize);
-        fieldComplex.real.set(noisyFieldMap);
-        FFT.fft2D(fieldComplex, N, N);
-        FFT.fftShift(fieldComplex, N, N);
-
-        const kRecon = QSM.divideKSpace(fieldComplex, kKernel, CONFIG.lambda, CONFIG.reconMethod);
-
-        const spatialRecon = new ComplexArray(totalSize);
-        spatialRecon.real.set(kRecon.real);
-        spatialRecon.imag.set(kRecon.imag);
-        FFT.fftShift(spatialRecon, N, N);
-        FFT.fft2D(spatialRecon, N, N, true);
-
-        reconMap = new Float32Array(spatialRecon.real);
     }
+    // Run inverse-only if just λ or recon method changed (keeps same noise)
+    else if (needsInverseRecalc && fieldVolume && cachedKKernel) {
+        try {
+            run3DInverseModel();
+        } catch (e) {
+            console.error('3D inverse model error:', e);
+        }
+    }
+
+    // Extract current slice from 3D volumes
+    chiMap = extractSliceFromVolume(chiVolume, slicePos);
+    fieldMap = extractSliceFromVolume(fieldVolume, slicePos);
+
+    // Extract reconstruction from 3D volume (using proper 3D physics)
+    // Lambda/method changes now reuse same noisy field for fair comparison
+    reconMap = extractSliceFromVolume(reconVolume, slicePos);
 
     // Fixed dynamic range for both chi and recon maps: -1.5 to +1.5 ppm
     const fixedAbsMax = 1.5;
