@@ -468,9 +468,6 @@ let steadyStateMz = [];        // Store Mz at each TR
 // Event markers for chart annotations (RF pulses, gradients)
 let eventMarkers = []; // Array of { time, type, label }
 
-// Previous Mxy for computing dMxy/dt (signal detection is EMF ∝ dMxy/dt)
-let previousMxy = 0;
-
 // Three.js globals
 let scene, camera, renderer;
 let spinArrows = [];        // Individual spin arrows (ensemble for Module B/C)
@@ -614,34 +611,25 @@ function createAxisLabels() {
  * The Signal/FID chart panel border glows when signal is detected
  * This avoids the rotating frame vs lab frame confusion of showing a coil in 3D
  *
- * PHYSICS: Signal detection uses Faraday's law: EMF ∝ -dΦ/dt ∝ dMxy/dt
- * In lab frame, Mxy rotates at ω₀, so EMF ∝ ω₀ × Mxy × sin(ω₀t)
- * The envelope of detected signal is proportional to |dMxy/dt|
+ * PHYSICS: Signal detection uses Faraday's law: EMF ∝ -dΦ/dt
+ * In the lab frame Mxy rotates at ω₀, so EMF ∝ ω₀ · Mxy · sin(ω₀t + φ).
+ * Because ω₀ (MHz range) dwarfs the relaxation rates, the ENVELOPE of the
+ * detected signal is proportional to |Mxy| itself: a large, steadily
+ * precessing Mxy induces the strongest voltage. Slow changes of Mxy
+ * (T2 decay, echo rephasing) contribute negligibly to dΦ/dt compared
+ * with the ω₀ rotation.
  *
- * For educational purposes, we use |dMxy/dt| to show:
- * - Strong glow during rapid changes (RF excitation, echo formation)
- * - Weak glow when Mxy is large but stable
- * - Fading glow during slow T2/T2* decay
+ * Glow ∝ |Mxy|: bright right after excitation and at echo peaks,
+ * fading as dephasing/relaxation shrink Mxy.
  *
  * @param {number} mxy - Current transverse magnetization magnitude (0 to 1)
- * @param {number} dt - Time step in ms
  */
-function updateSignalPanelGlow(mxy, dt) {
+function updateSignalPanelGlow(mxy) {
     const signalPanel = document.querySelector('.signal-panel:last-child');
     if (!signalPanel) return;
 
-    // Compute |dMxy/dt| - rate of change of transverse magnetization
-    // This is what a receiver coil actually detects (Faraday's law)
-    const dMxyDt = Math.abs(mxy - previousMxy) / (dt || 0.5);  // units: 1/ms
-    previousMxy = mxy;
-
-    // Scale factor: dMxy/dt during RF pulse is very fast (~1/ms)
-    // During echo rephasing, it's slower (~0.01-0.1/ms)
-    // Normalize to 0-1 range with sensitivity to typical signal changes
-    // Also include a small contribution from |Mxy| for continuous visibility
-    const rateContribution = Math.min(dMxyDt * 5, 1.0);  // Fast changes → strong glow
-    const steadyContribution = mxy * 0.3;  // Some glow when Mxy exists (rotating signal)
-    const glowIntensity = Math.min(rateContribution + steadyContribution, 1.0);
+    // Envelope of induced EMF ∝ ω₀ · |Mxy| → glow tracks |Mxy| directly
+    const glowIntensity = Math.min(mxy, 1.0);
 
     if (glowIntensity > 0.05) {
         // Glow color: orange to yellow based on intensity
@@ -1238,9 +1226,9 @@ function updateModuleB(dt) {
     document.getElementById('coherent-count').textContent = ensemble.getPhaseCoherence().toFixed(0) + '%';
     updateCharts();
 
-    // Update receiver coil glow based on dMxy/dt (detected signal - Faraday's law)
+    // Update signal panel glow: detected EMF envelope ∝ |Mxy| (Faraday's law at ω₀)
     const mxy = Math.sqrt(sum.Mx * sum.Mx + sum.My * sum.My);
-    updateSignalPanelGlow(mxy, dt);
+    updateSignalPanelGlow(mxy);
 }
 
 function updateModuleC(dt) {
@@ -1297,9 +1285,9 @@ function updateModuleC(dt) {
     document.getElementById('coherent-count').textContent = ensemble.getPhaseCoherence().toFixed(0) + '%';
     updateCharts();
 
-    // Update receiver coil glow based on dMxy/dt (detected signal - Faraday's law)
+    // Update signal panel glow: detected EMF envelope ∝ |Mxy| (Faraday's law at ω₀)
     const mxy = Math.sqrt(sum.Mx * sum.Mx + sum.My * sum.My);
-    updateSignalPanelGlow(mxy, dt);
+    updateSignalPanelGlow(mxy);
 }
 
 /**
@@ -1383,7 +1371,7 @@ function updateModuleD(dt) {
 
     // Update signal glow
     const mxy = Math.sqrt(sum.Mx * sum.Mx + sum.My * sum.My);
-    updateSignalPanelGlow(mxy, dt);
+    updateSignalPanelGlow(mxy);
 }
 
 /**
@@ -1535,7 +1523,7 @@ function switchModule(module) {
     }
 
     // Update signal panel glow for Module B/C/D
-    updateSignalPanelGlow(0, 0.5);
+    updateSignalPanelGlow(0);
 }
 
 /**
@@ -1911,9 +1899,6 @@ function resetSimulation() {
     rfPhase = 0;
     steadyStateMxy = [];
     steadyStateMz = [];
-
-    // Reset signal detection state
-    previousMxy = 0;
 
     // Reset B0 state for Module A
     b0IsOn = false;
