@@ -19,7 +19,7 @@ Watch how spinning protons create the MR signal. Visualize magnetization dynamic
 - **Module D - GRE Variants**: Multi-TR steady-state visualization of Spoiled GRE vs SSFP
 - **3D Visualization**: Individual spins + net magnetization vector + Mxy/Mz component arrows
 - **Real-time Charts**: Mxy decay, Mz recovery, and complex signal (Re, Im, magnitude)
-- **Signal Detection**: Panel glow based on dMxy/dt (Faraday's law)
+- **Signal Detection**: Panel glow proportional to |Mxy| — the envelope of the EMF induced at ω₀ (Faraday's law)
 
 ### Physics Model
 - **Bloch Equations**: Full magnetization evolution with T1/T2 relaxation
@@ -103,7 +103,7 @@ Visualizes the relationship between spatial frequency domain (k-space) and image
 
 ### Physics Model
 - 2D FFT/IFFT for image ↔ k-space transformation
-- SNR ∝ (voxel size)² - quadratic relationship with pixel area
+- SNR ∝ voxel area × √(samples) → SNR ∝ 1/matrix at fixed FOV and bandwidth (doubling resolution halves SNR)
 - K-space coverage scales as (matrix/N)² for area-based truncation
 - Partial Fourier: Exploits conjugate symmetry S(-k) = S*(k) for real images
 - Parallel Imaging SNR: SNR_PI = SNR_full / (g · √R) where g is geometry factor
