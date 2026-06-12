@@ -198,7 +198,10 @@
                             <strong>Lower Resolution:</strong> Truncates more k-space. Larger voxels → higher SNR.
                         </p>
                         <p class="explanation-text">
-                            <strong>Higher Resolution:</strong> Uses more k-space. Smaller voxels → lower SNR. 512×512 = 0.25× SNR.
+                            <strong>Higher Resolution:</strong> Uses more k-space. Smaller voxels → lower SNR. 512×512 = 0.5× SNR.
+                        </p>
+                        <p class="explanation-text">
+                            SNR ∝ voxel area × √(samples) → doubling the matrix halves SNR (at fixed FOV, bandwidth, and averages).
                         </p>
                     </div>
 

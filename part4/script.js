@@ -852,24 +852,28 @@ function updateResolutionInfo() {
     // Must account for undersampling factor (skipY) and partial Fourier
     const kspaceCoverageArea = (matrixSize / N) * (matrixSize / N) * partialFourierFraction * (1 / skipY) * 100;
 
-    // SNR relationship for 2D imaging with constant FOV:
-    // Signal per voxel ∝ voxel_area = (pixel_size)^2
-    // Noise per voxel is constant (thermal noise in receiver)
-    // Therefore: SNR ∝ (pixel_size)^2 = (baseline/matrixSize)^2
+    // SNR relationship for 2D imaging at constant FOV and constant
+    // receiver bandwidth (fixed dwell time, single average):
+    // Signal per voxel ∝ voxel_area ∝ (1/matrixSize)^2
+    // Noise per voxel ∝ 1/√(total samples) = 1/√(matrixSize^2) = 1/matrixSize
+    // Therefore: SNR ∝ voxel_area × √(samples) ∝ 1/matrixSize
+    //   → relative SNR = baseline/matrixSize (LINEAR in pixel size)
+    //
+    // This is the same assumption that makes the undersampling penalty
+    // below SNR ∝ 1/√R (fewer samples → more noise). Using voxel_area²
+    // here would silently switch to a constant-scan-time assumption and
+    // contradict the 1/√R term.
     //
     // With acceleration (undersampling + partial Fourier):
     // SNR_accelerated = SNR_full / √R_total
     //
-    // Parallel imaging can recover some SNR loss (g-factor dependent)
-    // For demo: assume perfect recovery up to R = numCoils
-    //
-    // Lower resolution (128x128): 2x pixels vs baseline → SNR = 4.00
+    // Lower resolution (128x128): 2x pixels vs baseline → SNR = 2.00
     // Baseline resolution (256x256): 1x pixels → SNR = 1.00
-    // Higher resolution (512x512): 0.5x pixels → SNR = 0.25
+    // Higher resolution (512x512): 0.5x pixels → SNR = 0.50
     // With 4x undersampling: SNR reduced by factor of 2 (√4)
     //
     // This demonstrates the fundamental resolution-SNR tradeoff!
-    const resolutionSNR = pixelSizeRatio * pixelSizeRatio;
+    const resolutionSNR = pixelSizeRatio;
 
     // SNR penalty from acceleration:
     // - Undersampling alone (no PI): SNR ∝ 1/√R (fewer samples = more noise)
@@ -896,16 +900,16 @@ function updateResolutionInfo() {
     document.getElementById('snrVal').innerText = relativeSNR.toFixed(2);
 
     // Update SNR bar visualization
-    // Map SNR from range 0.25 (512) to 64 (32) to bar width
-    // Use log scale: log2(SNR) maps 0.25->-2, 1->0, 64->6
+    // Map SNR from ~0.15 (512 + max acceleration) to 8 (32) to bar width
+    // Use log scale: log2(SNR) maps 0.125->-3, 1->0, 8->3
     // Normalize to 0-100% range
     const logSNR = Math.log2(relativeSNR);
-    const snrBarWidth = Math.min(100, Math.max(5, ((logSNR + 2) / 8) * 100));
+    const snrBarWidth = Math.min(100, Math.max(5, ((logSNR + 3) / 6) * 100));
     const snrBar = document.getElementById('snrBar');
     snrBar.style.width = snrBarWidth + '%';
 
     // Color code: green for high SNR, cyan for baseline, red for low
-    if (relativeSNR >= 4) {
+    if (relativeSNR >= 2) {
         snrBar.style.backgroundColor = 'rgba(74, 222, 128, 0.8)'; // Green - high SNR
     } else if (relativeSNR >= 0.5) {
         snrBar.style.backgroundColor = 'rgba(56, 189, 248, 0.8)'; // Cyan - baseline
@@ -921,14 +925,16 @@ function getEffectiveNoiseLevel() {
     // SNR baseline is 256×256
     const SNR_BASELINE = 256;
 
-    // When simulating SNR, noise scales inversely with voxel area
-    // SNR ∝ (pixel_size)^2 = (baseline/matrixSize)^2
-    // Noise ∝ 1/SNR = (matrixSize/baseline)^2
-    const snrFactor = (matrixSize / SNR_BASELINE) * (matrixSize / SNR_BASELINE);
+    // When simulating SNR, noise scales inversely with SNR
+    // At fixed FOV and receiver bandwidth: SNR ∝ baseline/matrixSize
+    // (voxel area shrinks as 1/N², but total samples grow as N², and
+    //  noise averages down as 1/√samples → net SNR ∝ 1/N)
+    // Noise ∝ 1/SNR = matrixSize/baseline
+    const snrFactor = matrixSize / SNR_BASELINE;
 
     // At 256x256 (baseline), snrFactor = 1, noise = base
-    // At 128x128, snrFactor = 0.25 (less noise, 4x SNR)
-    // At 512x512, snrFactor = 4 (more noise, 0.25x SNR)
+    // At 128x128, snrFactor = 0.5 (less noise, 2x SNR)
+    // At 512x512, snrFactor = 2 (more noise, 0.5x SNR)
     //
     // Higher resolution = smaller voxels = less signal = more visible noise
     const baseSimulatedNoise = 25;
