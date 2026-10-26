@@ -236,20 +236,70 @@
                         <span id="recon-speed-val">1.00&times;</span>
                     </div>
 
-                    <div class="equation-box">
+                    <div class="control-row">
+                        <label for="recon-noise">Receiver Noise &sigma; (per k-space sample)</label>
+                        <input type="range" id="recon-noise" min="0" max="1.6" step="0.05" value="0.4">
+                        <span id="recon-noise-val">&sigma; = 0.40 &rarr; expected image SNR &asymp; 20</span>
+                    </div>
+
+                    <div class="btn-row" style="align-items: center;">
+                        <label for="recon-nex" style="flex: 1; font-size: 0.8rem; color: var(--text-secondary);">Averages (NEX)</label>
+                        <select id="recon-nex" class="compact-select">
+                            <option value="1" selected>1</option>
+                            <option value="2">2</option>
+                            <option value="4">4</option>
+                            <option value="8">8</option>
+                        </select>
+                        <button id="recon-newnoise" class="small-btn secondary">New noise</button>
+                    </div>
+
+                    <div class="equation-box compact">
                         \(S(k_x,k_y) = \sum_{x,y} \rho\, e^{-i2\pi(k_x x + k_y y)}\)<br>
                         \(\rho(x,y) = \dfrac{1}{N^2}\sum_{k_x,k_y} S\, e^{+i2\pi(k_x x + k_y y)}\)
                     </div>
 
-                    <div class="info-panel">
-                        <h4>What You're Seeing</h4>
-                        <p><strong>Acquire:</strong> every voxel sends its own signal (frequency set by x, starting phase by k<sub>y</sub>&middot;y).
-                        The coil records only their <strong>sum</strong>: each sum is <strong>one k-space sample</strong>;
-                        one readout fills one k<sub>y</sub> line.<br>
-                        <strong>Decompose:</strong> each k-space value is the weight of one stripe pattern (spatial frequency).
-                        The inverse Fourier transform adds the patterns back, center first: low k gives the blurry shape and contrast,
-                        high k gives the edges.</p>
-                    </div>
+                    <details class="explain" open>
+                        <summary>What you're seeing (panel guide)</summary>
+                        <ul>
+                            <li><b>Panel 1</b> (top-left): each voxel's own signal during this readout &mdash; wiggle speed &prop; x,
+                            starting phase &prop; k<sub>y</sub>&middot;y, height &prop; &rho;. All of them flow into &Sigma; = the coil.
+                            In stage 2 it shows the image being rebuilt.</li>
+                            <li><b>Panel 2</b>: the G<sub>y</sub> step sets k<sub>y</sub> for this line; the cursor marks the readout sample being taken.</li>
+                            <li><b>Panel 3</b>: line = noiseless sum, dots = measured samples (sum + noise). Each dot is written into one
+                            k-space cell. Stage 2: components used so far and the stripe pattern each one stands for.</li>
+                            <li><b>Panel 4</b>: coloured arrows = voxels, white = their sum, magenta = noise, cyan = what is measured.
+                            Stage 2: weight (size + phase) of the current pattern.</li>
+                        </ul>
+                    </details>
+
+                    <details class="explain" open>
+                        <summary>Try this</summary>
+                        <ul>
+                            <li><b>Step</b> through the first line: when the voxel arrows line up the sum is big; when they fan out they cancel.</li>
+                            <li>Pick <b>Single voxel</b>: |S| is the same in every k-space cell, only the phase changes &mdash; a point contains all spatial frequencies.</li>
+                            <li>Set <b>noise to 0</b> &rarr; the background turns black. Raise it &rarr; speckle appears everywhere, even far from the object.</li>
+                            <li><b>NEX 1 &rarr; 4</b>: SNR doubles (&radic;4) but the scan takes 4&times; longer.</li>
+                            <li><b>Skip to decompose</b>: the first ~10 components give a blurry blob; the last ones sharpen the edges (and, with noise, add mostly noise).</li>
+                        </ul>
+                    </details>
+
+                    <details class="explain">
+                        <summary>Key points</summary>
+                        <ul>
+                            <li>The coil measures only the <b>sum</b> of all voxels: one sum = one k-space sample, one readout = one k<sub>y</sub> line.</li>
+                            <li>Each k-space value is the weight (amplitude + phase) of one stripe pattern; the inverse FT adds them back.</li>
+                            <li>Noise is added to every sample at the receiver, so after the inverse FT it spreads evenly over the whole image.
+                            Image SNR = N&middot;&radic;NEX/&sigma; here (more samples &rarr; more averaging).</li>
+                        </ul>
+                        <p class="explain-note">This demo keeps &rho; = 1 per voxel when N changes. In a real scan at the same FOV, 16&times;16 voxels
+                        hold &frac14; of the signal, so SNR drops (see Part 4).</p>
+                    </details>
+
+                    <details class="explain">
+                        <summary>Common misconception</summary>
+                        <p class="explain-note"><b>"A k-space point is a pixel."</b> No: every k-space sample contains signal from every voxel,
+                        and every pixel is built from every k-space sample.</p>
+                    </details>
                 </div>
 
                 <!-- Module E: Slice Selection -->
@@ -302,20 +352,42 @@
                         \(\Delta z = \dfrac{BW}{\bar{\gamma}\, G_z}, \quad z_c = \dfrac{\Delta f_c}{\bar{\gamma}\, G_z}\)
                     </div>
 
-                    <div class="info-panel">
-                        <h4>What You're Seeing</h4>
-                        <p>With G<sub>z</sub> on, the Larmor frequency changes linearly with position:
-                        f(z) = &gamma;&#772;&middot;G<sub>z</sub>&middot;z. An RF pulse only tips spins whose frequency falls inside
-                        its bandwidth (resonance), so it excites one slab.
-                        <strong>Thinner slice:</strong> stronger G<sub>z</sub> or narrower BW (longer pulse).
-                        <strong>Move the slice:</strong> shift the RF center frequency.</p>
-                    </div>
+                    <details class="explain" open>
+                        <summary>What you're seeing (panel guide)</summary>
+                        <ul>
+                            <li><b>Panel 1</b> (top-left): cyan line = Larmor frequency along z with G<sub>z</sub> on,
+                            f(z) = &gamma;&#772;&middot;G<sub>z</sub>&middot;z. Orange band = frequencies in the RF pulse.
+                            Where they cross is the slice (green). The arrows below are spins: only those in the slice are tipped.</li>
+                            <li><b>Panel 2</b>: the sinc RF pulse plays during the G<sub>z</sub> lobe, followed by a negative rephaser lobe.</li>
+                            <li><b>Panel 3</b>: RF envelope in time (left) and its Fourier transform = the slice profile (right, small-tip approximation).</li>
+                            <li><b>Panel 4</b>: the numbers: BW = TBW/T, &Delta;z = BW/(&gamma;&#772;G<sub>z</sub>), z<sub>c</sub> = &Delta;f<sub>c</sub>/(&gamma;&#772;G<sub>z</sub>).</li>
+                        </ul>
+                    </details>
 
-                    <div class="info-panel secondary">
-                        <h4>RF Pulse &harr; Slice Profile</h4>
-                        <p>The slice profile is (approximately) the Fourier transform of the RF envelope:
-                        a sinc pulse gives a rectangular slab. Truncating the sinc (fewer lobes) rounds the edges.</p>
-                    </div>
+                    <details class="explain" open>
+                        <summary>Try this</summary>
+                        <ul>
+                            <li><b>Double G<sub>z</sub></b> (10 &rarr; 20 mT/m): the line gets steeper and &Delta;z halves.</li>
+                            <li><b>Halve the pulse</b> (2 &rarr; 1 ms): BW doubles &rarr; the slice is twice as thick.</li>
+                            <li>Change <b>&Delta;f<sub>c</sub></b>: the slice moves but keeps its thickness.</li>
+                            <li><b>TBW 2 vs 8</b>: few lobes give rounded slice edges; more lobes give a sharper, more rectangular profile.</li>
+                        </ul>
+                    </details>
+
+                    <details class="explain">
+                        <summary>Key points</summary>
+                        <ul>
+                            <li>Spins are tipped only where their Larmor frequency matches the RF (resonance).</li>
+                            <li>Thinner slice: stronger G<sub>z</sub> or narrower BW (longer pulse). Moving the slice = shifting the RF frequency.</li>
+                            <li>Slice profile &asymp; Fourier transform of the RF envelope: sinc pulse &rarr; rectangular slab.</li>
+                        </ul>
+                    </details>
+
+                    <details class="explain">
+                        <summary>Common misconception</summary>
+                        <p class="explain-note"><b>"The rephaser lobe is optional."</b> During the pulse, G<sub>z</sub> also spreads phase across
+                        the slice thickness. The negative lobe (about half the area) rewinds it; without it the slice's own signal would cancel.</p>
+                    </details>
                 </div>
 
                 <!-- Module D: Frequency Encoding -> Fourier -->
@@ -334,7 +406,7 @@
 
                     <div class="control-row">
                         <label for="freq-gx">Readout Gradient G<sub>x</sub> (mT/m)</label>
-                        <input type="range" id="freq-gx" min="1" max="20" step="0.5" value="5">
+                        <input type="range" id="freq-gx" min="0.5" max="20" step="0.5" value="5">
                         <span id="freq-gx-val">5.0 mT/m</span>
                     </div>
 
@@ -352,6 +424,23 @@
                             <option value="64" selected>64</option>
                             <option value="128">128</option>
                         </select>
+                    </div>
+
+                    <div class="btn-row" style="align-items: center; margin-bottom: 8px;">
+                        <label for="freq-noise" style="flex: 1; font-size: 0.8rem; color: var(--text-secondary);">Receiver noise</label>
+                        <select id="freq-noise" class="compact-select">
+                            <option value="off" selected>Off</option>
+                            <option value="low">Low</option>
+                            <option value="high">High</option>
+                        </select>
+                        <button id="freq-newnoise" class="small-btn secondary">New noise</button>
+                    </div>
+
+                    <div class="toggle-group" style="padding: 8px; margin-bottom: 10px;">
+                        <label class="toggle-label">
+                            <input type="checkbox" id="freq-lockfov">
+                            <span class="toggle-text" style="font-size: 0.78rem;">Lock FOV (scanner rescales G<sub>x</sub> when BW changes)</span>
+                        </label>
                     </div>
 
                     <div class="control-row">
@@ -378,25 +467,53 @@
                                 <span class="signal-value" id="freq-tacq-out">2.0 ms</span>
                             </div>
                         </div>
+                        <p class="explain-note" style="margin-top: 6px;" id="freq-snr-out">Relative SNR 1.00&times; (&prop; &Delta;x&middot;&radic;T<sub>acq</sub>; ref. 32 kHz, 5 mT/m, N = 64)</p>
                     </div>
 
-                    <div class="equation-box">
+                    <div class="equation-box compact">
                         \(FOV = \dfrac{BW}{\bar{\gamma}\, G_x}, \quad \Delta x = \dfrac{FOV}{N}\)
                     </div>
 
-                    <div class="info-panel">
-                        <h4>What You're Seeing</h4>
-                        <p>During readout every position "sings its own pitch": f(x) = &gamma;&#772;&middot;G<sub>x</sub>&middot;x.
-                        The coil hears only the <strong>chord</strong> (the sum). A Fourier transform splits the chord back
-                        into its notes &mdash; the strength of each frequency is the amount of tissue at that position.</p>
-                    </div>
+                    <details class="explain" open>
+                        <summary>What you're seeing (panel guide)</summary>
+                        <ul>
+                            <li><b>Panel 1</b> (top-left): tissue tubes along x. The coloured strip is the spin phase at the current readout time;
+                            each clock is one tube's net signal (thin hand = phase at its centre), spinning at its own pitch f = &gamma;&#772;G<sub>x</sub>x.</li>
+                            <li><b>Panel 2</b>: G<sub>x</sub> dephaser + readout; the ticks are the ADC samples, spaced &Delta;t = 1/BW.</li>
+                            <li><b>Panel 3</b>: top = received signal (thin = each tube, white = total, dots = samples). Bottom = FFT of the samples
+                            = profile along x (bars), dashed = true object.</li>
+                            <li><b>Panel 4</b>: the tubes' arrows added head-to-tail = the signal the coil receives at this moment.</li>
+                        </ul>
+                    </details>
 
-                    <div class="info-panel secondary">
-                        <h4>Try This</h4>
-                        <p>&bull; Increase N (longer readout) &rarr; finer &Delta;x.<br>
-                        &bull; Lower BW or raise G<sub>x</sub> &rarr; smaller FOV.<br>
-                        &bull; "Object wider than FOV": parts outside the FOV wrap to the other side (aliasing).</p>
-                    </div>
+                    <details class="explain" open>
+                        <summary>Try this</summary>
+                        <ul>
+                            <li><b>Play</b> the readout: at the echo (t = 0) all clocks line up &rarr; the biggest signal.</li>
+                            <li>Raise <b>N</b> (longer readout, more k coverage) &rarr; finer &Delta;x and sharper edges.</li>
+                            <li>Choose <b>Object wider than FOV</b>: tubes outside the dashed FOV reappear on the opposite side (aliasing).
+                            Raise BW or lower G<sub>x</sub> to widen the FOV.</li>
+                            <li>Noise <b>on</b> + <b>Lock FOV</b>, then lower BW: the noise floor drops (SNR &prop; 1/&radic;BW) but T<sub>acq</sub> gets longer.</li>
+                            <li>Noise on <b>without</b> Lock FOV: lowering BW shrinks FOV and &Delta;x, so the smaller voxels get noisier.</li>
+                        </ul>
+                    </details>
+
+                    <details class="explain">
+                        <summary>Key points</summary>
+                        <ul>
+                            <li>Frequency encodes position: f = &gamma;&#772;&middot;G<sub>x</sub>&middot;x; the FFT turns frequencies back into positions.</li>
+                            <li>FOV = BW/(&gamma;&#772;G<sub>x</sub>) is set by the sampling rate and G<sub>x</sub>; &Delta;x = FOV/N by the readout's total k coverage.</li>
+                            <li>Noise per sample &prop; &radic;BW, so at fixed voxel size SNR &prop; 1/&radic;BW &prop; &radic;T<sub>acq</sub>.</li>
+                        </ul>
+                        <p class="explain-note">What is held fixed: without Lock FOV, G<sub>x</sub> stays fixed (BW changes the FOV).
+                        With Lock FOV, G<sub>x</sub> is rescaled with BW as a scanner does, so FOV and &Delta;x stay fixed.</p>
+                    </details>
+
+                    <details class="explain">
+                        <summary>Common misconception</summary>
+                        <p class="explain-note"><b>"More bandwidth gives more resolution."</b> No: N and FOV set &Delta;x. A wider BW mainly shortens the
+                        readout &mdash; less time to average noise (lower SNR), but smaller chemical-shift/off-resonance shifts.</p>
+                    </details>
                 </div>
 
                 <div class="sidebar-footer">

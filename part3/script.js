@@ -88,6 +88,9 @@ class SpatialEncodingSimulator {
             image: [],          // N×N complex partial reconstruction
             flash: null,        // {ikx, iky, time} for the k-space "write" flash
             pauseUntil: 0,      // short hold between stages
+            noiseSigma: 0.4,    // receiver noise σ per k-space sample (one voxel's signal = 1)
+            nex: 1,             // number of averages: σ_eff = σ/√NEX
+            noise: [],          // N×N standard-normal draws {re, im} (fixed until "New noise")
             speed: 1,
             playing: false,
             animationId: null,
@@ -113,8 +116,13 @@ class SpatialEncodingSimulator {
             numSamples: 64, // N
             t: -0.5,        // readout cursor: -0.5 (start) → 0 (echo) → +0.5 (end)
             playing: false,
-            animationId: null
+            animationId: null,
+            noise: 'off',   // receiver noise level: 'off' | 'low' | 'high'
+            noiseZ: [],     // standard-normal draws per sample (fixed until "New noise")
+            lockFov: false, // true: Gx is rescaled with BW so the FOV stays fixed
+            fovLock: 150
         };
+        this.drawFreqNoise();
 
         // Canvas contexts
         this.spinCtx = null;
@@ -455,6 +463,7 @@ class SpatialEncodingSimulator {
         document.getElementById('recon-n')?.addEventListener('change', (e) => {
             this.recon.n = parseInt(e.target.value);
             resetReconView();
+            this.updateReconNoiseLabel();
         });
         document.getElementById('recon-reset')?.addEventListener('click', resetReconView);
         document.getElementById('recon-play')?.addEventListener('click', () => {
@@ -482,6 +491,23 @@ class SpatialEncodingSimulator {
             this.recon.speed = parseFloat(e.target.value);
             document.getElementById('recon-speed-val').textContent = `${this.recon.speed.toFixed(2)}×`;
         });
+        const noiseChanged = () => {
+            this.updateReconNoiseLabel();
+            this.recomputeReconImage();
+            this.render();
+        };
+        document.getElementById('recon-noise')?.addEventListener('input', (e) => {
+            this.recon.noiseSigma = parseFloat(e.target.value);
+            noiseChanged();
+        });
+        document.getElementById('recon-nex')?.addEventListener('change', (e) => {
+            this.recon.nex = parseInt(e.target.value);
+            noiseChanged();
+        });
+        document.getElementById('recon-newnoise')?.addEventListener('click', () => {
+            this.drawReconNoise();
+            noiseChanged();
+        });
 
         // Module E: Slice selection controls
         const sliceSliders = [
@@ -506,11 +532,32 @@ class SpatialEncodingSimulator {
         document.getElementById('freq-gx')?.addEventListener('input', (e) => {
             this.freq.gx = parseFloat(e.target.value);
             document.getElementById('freq-gx-val').textContent = `${this.freq.gx.toFixed(1)} mT/m`;
+            if (this.freq.lockFov) this.freq.fovLock = this.getFreqParams().fov;
             this.render();
         });
         document.getElementById('freq-bw')?.addEventListener('input', (e) => {
             this.freq.bwKHz = parseFloat(e.target.value);
             document.getElementById('freq-bw-val').textContent = `${this.freq.bwKHz} kHz`;
+            if (this.freq.lockFov) {
+                // Scanner behaviour: keep the FOV by rescaling Gx = BW / (γ̄·FOV)
+                const gx = this.freq.bwKHz * 1000 / (GAMMA_BAR_HZ_PER_MT_M_MM * this.freq.fovLock);
+                this.freq.gx = Math.max(0.5, Math.min(20, gx));
+                document.getElementById('freq-gx').value = this.freq.gx;
+                document.getElementById('freq-gx-val').textContent = `${this.freq.gx.toFixed(2)} mT/m (auto)`;
+            }
+            this.render();
+        });
+        document.getElementById('freq-noise')?.addEventListener('change', (e) => {
+            this.freq.noise = e.target.value;
+            this.render();
+        });
+        document.getElementById('freq-newnoise')?.addEventListener('click', () => {
+            this.drawFreqNoise();
+            this.render();
+        });
+        document.getElementById('freq-lockfov')?.addEventListener('change', (e) => {
+            this.freq.lockFov = e.target.checked;
+            this.freq.fovLock = this.getFreqParams().fov;
             this.render();
         });
         document.getElementById('freq-n')?.addEventListener('change', (e) => {
@@ -2217,6 +2264,63 @@ class SpatialEncodingSimulator {
         r.pauseUntil = 0;
         r.density = this.getReconDensity();
         r.total = r.density.reduce((acc, row) => acc + row.reduce((a, v) => a + v, 0), 0);
+        this.drawReconNoise();
+    }
+
+    // Standard normal deviate (Box-Muller)
+    gaussian() {
+        let u = 0;
+        while (u === 0) u = Math.random();
+        return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * Math.random());
+    }
+
+    // New thermal-noise realization: one complex Gaussian per k-space sample
+    drawReconNoise() {
+        const n = this.recon.n;
+        this.recon.noise = Array.from({ length: n }, () =>
+            Array.from({ length: n }, () => ({ re: this.gaussian(), im: this.gaussian() })));
+    }
+
+    // Noise SD per real/imaginary component of each k-space sample after NEX averages
+    getReconNoiseSD() {
+        return this.recon.noiseSigma / Math.sqrt(this.recon.nex);
+    }
+
+    /**
+     * Measured k-space sample = noiseless voxel sum + receiver noise.
+     * The noise is added at the coil, independent of the object.
+     */
+    measuredSample(iky, ikx) {
+        const r = this.recon;
+        const S = r.kspace[iky][ikx];
+        if (!S) return null;
+        const sd = this.getReconNoiseSD();
+        const z = r.noise[iky][ikx];
+        return { re: S.re + sd * z.re, im: S.im + sd * z.im };
+    }
+
+    // Expected image SNR for ρ = 1: each pixel's noise SD = σ_eff/N (N² samples averaged)
+    getReconExpectedSNR() {
+        const sd = this.getReconNoiseSD();
+        return sd > 0 ? this.recon.n / sd : Infinity;
+    }
+
+    // Rebuild the partial image after the noise changes during stage 2
+    recomputeReconImage() {
+        const r = this.recon;
+        if (r.stage === 'acquire') return;
+        const n = r.n;
+        r.image = Array.from({ length: n }, () => Array.from({ length: n }, () => ({ re: 0, im: 0 })));
+        for (let i = 0; i < r.compIndex; i++) this.addReconComponent(r.order[i]);
+    }
+
+    updateReconNoiseLabel() {
+        const label = document.getElementById('recon-noise-val');
+        if (!label) return;
+        const r = this.recon;
+        label.innerHTML = r.noiseSigma === 0
+            ? 'σ = 0 → noiseless (black background)'
+            : `σ = ${r.noiseSigma.toFixed(2)}${r.nex > 1 ? ` / √${r.nex}` : ''} → expected image SNR ≈ ${this.getReconExpectedSNR().toFixed(0)}`;
     }
 
     // One coil sample: S(kx, ky) = Σ ρ·e^(-iφ) (same convention as Module B)
@@ -2276,11 +2380,11 @@ class SpatialEncodingSimulator {
         this.updatePanelTitles();
     }
 
-    // Inverse FT, one term: image += S(k)·e^(+iφ) / N²
+    // Inverse FT, one term: image += S(k)·e^(+iφ) / N² (S = measured sample, noise included)
     addReconComponent(c) {
         const r = this.recon;
         const n = r.n;
-        const S = r.kspace[c.iky][c.ikx];
+        const S = this.measuredSample(c.iky, c.ikx);
         for (let iy = 0; iy < n; iy++) {
             for (let ix = 0; ix < n; ix++) {
                 const phase = this.kPhase(c.kx, c.ky, ix, iy, n);
@@ -2429,7 +2533,7 @@ class SpatialEncodingSimulator {
         const cellY = iky => y0 + (n - 1 - iky) * cell;
         for (let iky = 0; iky < n; iky++) {
             for (let ikx = 0; ikx < n; ikx++) {
-                const S = r.kspace[iky][ikx];
+                const S = this.measuredSample(iky, ikx);
                 if (S) {
                     const mag = Math.sqrt(S.re * S.re + S.im * S.im) / sMax;
                     const b = Math.floor(255 * Math.log10(1 + 100 * mag) / Math.log10(101));
@@ -2562,11 +2666,22 @@ class SpatialEncodingSimulator {
         ctx.fillStyle = '#ffffff';
         ctx.textAlign = 'center';
         ctx.fillText('Σ', nodeX, nodeY + 7);
+        // Receiver noise enters at the coil, not at the voxels
+        const noiseSD = this.getReconNoiseSD();
+        if (noiseSD > 0) {
+            this.drawArrow(ctx, nodeX, nodeY - 66, nodeX, nodeY - 25, '#f472b6', 1.8, 6);
+            ctx.font = 'bold 9px Inter';
+            ctx.fillStyle = '#f472b6';
+            ctx.textAlign = 'center';
+            ctx.fillText('+ receiver noise', nodeX, nodeY - 80);
+            ctx.font = '8px Inter';
+            ctx.fillText(w < 640 ? '(body + coil)' : '(body + electronics, every sample)', nodeX, nodeY - 70);
+        }
         ctx.font = '9px Inter';
         ctx.fillStyle = '#94a3b8';
         if (w < 640) {
             ctx.textAlign = 'center';
-            ctx.fillText('coil = sum only', nodeX, nodeY - 28);
+            ctx.fillText('coil = sum only', nodeX, nodeY + 86);
         } else {
             ctx.textAlign = 'left';
             // Backing box so the converging voxel lines don't run through the text
@@ -2584,13 +2699,13 @@ class SpatialEncodingSimulator {
         ctx.fillStyle = '#22d3ee';
         ctx.textAlign = 'center';
         if (r.sample >= 0) {
-            const S = r.kspace[r.line][r.sample];
+            const S = this.measuredSample(r.line, r.sample);
             ctx.fillText(`S(${curKx}, ${ky})`, nodeX, nodeY + 44);
             ctx.font = '9px Inter';
             ctx.fillStyle = '#e2e8f0';
             ctx.fillText(`${S.re.toFixed(2)} ${S.im < 0 ? '−' : '+'} ${Math.abs(S.im).toFixed(2)}i`, nodeX, nodeY + 57);
             ctx.fillStyle = '#94a3b8';
-            ctx.fillText('→ one k-space sample', nodeX, nodeY + 72);
+            ctx.fillText(noiseSD > 0 ? '→ one measured k-space sample' : '→ one k-space sample', nodeX, nodeY + 72);
         } else {
             ctx.fillText('press Play', nodeX, nodeY + 44);
         }
@@ -2598,7 +2713,9 @@ class SpatialEncodingSimulator {
         ctx.font = '9px Inter';
         ctx.fillStyle = '#64748b';
         ctx.textAlign = 'left';
-        ctx.fillText('−x … +x: frequency ∝ x · starting phase ∝ ky·y · amplitude ∝ ρ', gridLeft, h - 8);
+        ctx.fillText(w < 640 ? 'traces: clean voxel signals (noise is added at Σ)'
+                             : '−x … +x: frequency ∝ x · starting phase ∝ ky·y · amplitude ∝ ρ · traces are noise-free (noise is added at Σ)',
+                     gridLeft, h - 8);
     }
 
     renderReconSequence(ctx) {
@@ -2728,10 +2845,11 @@ class SpatialEncodingSimulator {
                 ctx.lineWidth = width;
                 ctx.stroke();
             };
-            drawPart('im', 'rgba(245, 158, 11, 0.7)', 1.2);
-            drawPart('re', 'rgba(255, 255, 255, 0.8)', 1.6);
+            const noisy = this.getReconNoiseSD() > 0;
+            drawPart('im', `rgba(245, 158, 11, ${noisy ? 0.35 : 0.7})`, 1.2);
+            drawPart('re', `rgba(255, 255, 255, ${noisy ? 0.4 : 0.8})`, 1.6);
             for (let s = 0; s <= r.sample; s++) {
-                const S = r.kspace[r.line][s];
+                const S = this.measuredSample(r.line, s);
                 const px = kxToX(s - half);
                 ctx.fillStyle = '#f59e0b';
                 ctx.beginPath();
@@ -2749,6 +2867,12 @@ class SpatialEncodingSimulator {
         for (let s = 0; s < n; s += Math.max(1, n / 8)) ctx.fillText(s - half, kxToX(s - half), bottom + 12);
         ctx.fillStyle = '#94a3b8';
         ctx.fillText(narrow ? 'sample kx (time →)' : 'readout sample kx (time →)   ● Re (white)  ● Im (amber)', left + sigW / 2, bottom + 26);
+        if (this.getReconNoiseSD() > 0 && r.sample >= 0) {
+            ctx.font = '8px Inter';
+            ctx.fillStyle = '#f472b6';
+            ctx.textAlign = 'left';
+            ctx.fillText(narrow ? 'line: clean · dots: measured' : 'faint line = noiseless sum · dots = measured samples (sum + noise)', left, 32);
+        }
 
         // ---- Right: k-space matrix filling row by row ----
         const ksX = w - ksSize - 22;
@@ -2833,18 +2957,39 @@ class SpatialEncodingSimulator {
                 im += dim;
             }
         }
-        this.drawArrow(ctx, cx, cy, cx + (re / sMax) * R, cy - (im / sMax) * R, '#ffffff', 2.2, 8);
+        const tipX = cx + (re / sMax) * R, tipY = cy - (im / sMax) * R;
+        this.drawArrow(ctx, cx, cy, tipX, tipY, '#ffffff', 2.2, 8);
 
-        const pct = Math.sqrt(re * re + im * im) / sMax * 100;
+        // Receiver noise: a random vector added to the clean sum → the measured sample
+        const noisy = this.getReconNoiseSD() > 0 && r.sample >= 0;
+        let measured = { re, im };
+        if (noisy) {
+            measured = this.measuredSample(r.line, r.sample);
+            const mx = cx + (measured.re / sMax) * R, my = cy - (measured.im / sMax) * R;
+            this.drawArrow(ctx, tipX, tipY, mx, my, '#f472b6', 2, 6);
+            ctx.setLineDash([4, 3]);
+            this.drawArrow(ctx, cx, cy, mx, my, '#22d3ee', 1.6, 7);
+            ctx.setLineDash([]);
+        }
+
+        const pct = Math.sqrt(measured.re * measured.re + measured.im * measured.im) / sMax * 100;
         ctx.font = 'bold 11px Inter';
         ctx.textAlign = 'center';
         ctx.fillStyle = pct > 50 ? '#10b981' : (pct > 20 ? '#f59e0b' : '#ef4444');
         ctx.fillText(`|S(${kx}, ${ky})| = ${pct.toFixed(0)}% of max`, w / 2, h - 58);
         ctx.font = '9px Inter';
         ctx.fillStyle = '#94a3b8';
-        ctx.fillText(r.sample >= 0 ? 'white arrow = this k-space value' : 'cursor at the start of the readout', w / 2, h - 42);
-        ctx.fillText('aligned phasors → big |S|', w / 2, h - 28);
-        ctx.fillText('spread phasors → they cancel', w / 2, h - 15);
+        if (noisy) {
+            ctx.fillText('white = Σ voxels (clean)', w / 2, h - 42);
+            ctx.fillStyle = '#f472b6';
+            ctx.fillText('magenta = noise', w / 2, h - 28);
+            ctx.fillStyle = '#22d3ee';
+            ctx.fillText('cyan = measured k-space value', w / 2, h - 15);
+        } else {
+            ctx.fillText(r.sample >= 0 ? 'white arrow = this k-space value' : 'cursor at the start of the readout', w / 2, h - 42);
+            ctx.fillText('aligned phasors → big |S|', w / 2, h - 28);
+            ctx.fillText('spread phasors → they cancel', w / 2, h - 15);
+        }
     }
 
     renderReconImage(ctx) {
@@ -2859,12 +3004,15 @@ class SpatialEncodingSimulator {
         ctx.fillText(narrow ? 'Image = Σ weight × pattern' : 'Image = Σ (k-space weight × stripe pattern), added center-first', 14, 18);
 
         const gridTop = 30;
-        const size = Math.min(h - gridTop - 24, w * 0.55);
+        const size = Math.min(h - gridTop - 30, w * 0.55);
         const gridLeft = 24;
         const cell = size / n;
+        // Real part. Noiseless: 0 → black. With noise: window −0.3 … 1.2 so background noise (±) stays visible
+        const noisy = this.getReconNoiseSD() > 0;
+        const wMin = noisy ? -0.3 : 0, wMax = noisy ? 1.2 : 1;
         for (let iy = 0; iy < n; iy++) {
             for (let ix = 0; ix < n; ix++) {
-                const v = r.image[iy][ix].re;
+                const v = (r.image[iy][ix].re - wMin) / (wMax - wMin);
                 const g = Math.floor(255 * Math.max(0, Math.min(1, v)));
                 ctx.fillStyle = `rgb(${g}, ${g}, ${g})`;
                 ctx.fillRect(gridLeft + ix * cell, gridTop + iy * cell, cell, cell);
@@ -2873,6 +3021,24 @@ class SpatialEncodingSimulator {
         ctx.strokeStyle = 'rgba(71, 85, 105, 0.5)';
         ctx.lineWidth = 0.5;
         ctx.strokeRect(gridLeft, gridTop, size, size);
+        ctx.font = '8px Inter';
+        ctx.fillStyle = '#64748b';
+        ctx.fillText(noisy ? 'display: real part, window −0.3 … 1.2 (0 = dark grey)' : 'display: real part, 0 = black',
+                     gridLeft, gridTop + size + 12);
+
+        // Object / background statistics of the current image (real part)
+        const objVals = [], bgVals = [];
+        let sq = 0;
+        for (let iy = 0; iy < n; iy++) {
+            for (let ix = 0; ix < n; ix++) {
+                const v = r.image[iy][ix].re;
+                (r.density[iy][ix] > 0 ? objVals : bgVals).push(v);
+                sq += (v - r.density[iy][ix]) ** 2;
+            }
+        }
+        const mean = a => a.reduce((acc, v) => acc + v, 0) / Math.max(1, a.length);
+        const bgMean = mean(bgVals);
+        const bgSD = Math.sqrt(bgVals.reduce((acc, v) => acc + (v - bgMean) ** 2, 0) / Math.max(1, bgVals.length - 1));
 
         // Right side: true object and progress
         const sideX = gridLeft + size + 30;
@@ -2913,7 +3079,7 @@ class SpatialEncodingSimulator {
                 ctx.fillText(lowK ? 'low k → overall shape & contrast' : 'high k → edges & fine detail', sideX, y);
             }
         }
-        if (r.stage === 'done') {
+        if (r.stage === 'done' && !noisy) {
             let err = 0;
             for (let iy = 0; iy < n; iy++) {
                 for (let ix = 0; ix < n; ix++) err = Math.max(err, Math.abs(r.image[iy][ix].re - r.density[iy][ix]));
@@ -2924,6 +3090,22 @@ class SpatialEncodingSimulator {
             ctx.font = '9px Inter';
             ctx.fillStyle = '#94a3b8';
             ctx.fillText(`max |error| = ${err.toExponential(1)}`, sideX, y + 14);
+        } else if (r.stage === 'done') {
+            const snr = mean(objVals) / Math.max(1e-12, bgSD);
+            ctx.fillStyle = '#10b981';
+            ctx.font = 'bold 12px Inter';
+            ctx.fillText(`SNR = ${snr.toFixed(1)}`, sideX, y);
+            ctx.font = '9px Inter';
+            ctx.fillStyle = '#94a3b8';
+            ctx.fillText(narrow ? 'mean(object) / SD(bkg)' : 'mean(object) / SD(background)', sideX, y + 13);
+            ctx.fillText(`expected ≈ ${this.getReconExpectedSNR().toFixed(0)} (N·√NEX/σ)`, sideX, y + 26);
+            const rms = Math.sqrt(sq / (n * n)).toFixed(3);
+            ctx.fillText(narrow ? `RMS err = ${rms}` : `RMS error vs noiseless = ${rms}`, sideX, y + 39);
+        } else if (noisy && r.compIndex > 0) {
+            ctx.fillStyle = '#f472b6';
+            ctx.fillText(`background SD so far = ${bgSD.toFixed(3)}`, sideX, y + 4);
+            ctx.fillStyle = '#94a3b8';
+            ctx.fillText(narrow ? 'grows as components add' : 'every component adds noise everywhere', sideX, y + 17);
         }
     }
 
@@ -2965,9 +3147,12 @@ class SpatialEncodingSimulator {
             return;
         }
         // Re{S·e^(+iφ)} = |S|·cos(φ + ∠S): a 2D cosine grating; ∠S shifts it, |S| scales it (shown normalized)
-        const S = r.kspace[current.iky][current.ikx];
+        const S = this.measuredSample(current.iky, current.ikx);
+        const clean = r.kspace[current.iky][current.ikx];
         const magS = Math.sqrt(S.re * S.re + S.im * S.im);
         const absent = magS < 1e-6 * Math.max(1e-9, r.total);
+        const noiseSD = this.getReconNoiseSD();
+        const mostlyNoise = noiseSD > 0 && Math.hypot(clean.re, clean.im) < 2 * noiseSD;
         const angle = absent ? 0 : Math.atan2(S.im, S.re);
         const pc = patSize / n;
         for (let iy = 0; iy < n; iy++) {
@@ -2988,8 +3173,9 @@ class SpatialEncodingSimulator {
                             : (narrow ? `|S|/N² ${(magS / (n * n)).toFixed(3)}, ∠${phaseText}`
                                       : `weight |S|/N² = ${(magS / (n * n)).toFixed(3)} · phase ${phaseText}`),
                      patX + patSize / 2, ksY + patSize + 13);
-        ctx.fillStyle = '#94a3b8';
-        ctx.fillText('image += weight × pattern', patX + patSize / 2, ksY + patSize + 26);
+        ctx.fillStyle = mostlyNoise ? '#f472b6' : '#94a3b8';
+        ctx.fillText(mostlyNoise ? (narrow ? 'mostly noise here' : 'mostly noise: the object has ~no content at this k')
+                                 : 'image += weight × pattern', patX + patSize / 2, ksY + patSize + 26);
     }
 
     renderReconWeight(ctx) {
@@ -3027,7 +3213,15 @@ class SpatialEncodingSimulator {
         ctx.fillText('Im', cx + 3, cy - R - 2);
 
         if (current) {
-            const S = r.kspace[current.iky][current.ikx];
+            const S = this.measuredSample(current.iky, current.ikx);
+            if (this.getReconNoiseSD() > 0) {
+                const clean = r.kspace[current.iky][current.ikx];
+                this.drawArrow(ctx, cx, cy, cx + (clean.re / sMax) * R, cy - (clean.im / sMax) * R, 'rgba(255, 255, 255, 0.55)', 1.2, 6);
+                ctx.font = '8px Inter';
+                ctx.fillStyle = '#94a3b8';
+                ctx.textAlign = 'left';
+                ctx.fillText('white: noiseless · cyan: measured', 6, 28);
+            }
             this.drawArrow(ctx, cx, cy, cx + (S.re / sMax) * R, cy - (S.im / sMax) * R, '#22d3ee', 2.5, 8);
             const magS = Math.sqrt(S.re * S.re + S.im * S.im);
             ctx.font = 'bold 11px Inter';
@@ -3572,11 +3766,37 @@ class SpatialEncodingSimulator {
      * Reconstruction: N samples S_n at k_n = (n - N/2)·Δk, N-point inverse DFT
      * ρ̂(x_m) = Δk · Σ S_n e^(+i2π k_n x_m),  x_m = (m - N/2)·Δx  (wraps outside the FOV)
      */
+    drawFreqNoise() {
+        this.freq.noiseZ = Array.from({ length: 128 }, () => ({ re: this.gaussian(), im: this.gaussian() }));
+    }
+
+    /**
+     * Receiver noise per sample (ρ·mm units). White noise of fixed spectral density,
+     * filtered to the receiver bandwidth → σ ∝ √BW. Scaled so that at the reference
+     * (32 kHz, 5 mT/m, N = 64) the profile noise SD is 0.06 (low) or 0.15 (high).
+     */
+    getFreqNoiseSigma(p) {
+        const sdRef = { off: 0, low: 0.06, high: 0.15 }[this.freq.noise];
+        const fovRef = 32000 / (GAMMA_BAR_HZ_PER_MT_M_MM * 5);
+        const sigmaRef = sdRef * fovRef / Math.sqrt(64);  // profile SD = Δk·√N·σ
+        return sigmaRef * Math.sqrt(p.bwHz / 32000);
+    }
+
+    // SNR ∝ voxel size × √(readout time), relative to 32 kHz, 5 mT/m, N = 64
+    getFreqRelativeSNR(p) {
+        const dxRef = 32000 / (GAMMA_BAR_HZ_PER_MT_M_MM * 5) / 64;
+        const tRef = 64 / 32000;
+        return (p.dx / dxRef) * Math.sqrt(p.tacq / tRef);
+    }
+
     reconstructFreq(segs, p) {
         const samples = [];
+        const sigma = this.getFreqNoiseSigma(p);
         for (let n = 0; n < p.N; n++) {
             const k = (n - p.N / 2) * p.dk;
-            samples.push({ k, ...this.freqSignal(segs, k) });
+            const clean = this.freqSignal(segs, k);
+            const z = this.freq.noiseZ[n];
+            samples.push({ k, re: clean.re + sigma * z.re, im: clean.im + sigma * z.im });
         }
         const recon = [];
         for (let m = 0; m < p.N; m++) {
@@ -3628,6 +3848,11 @@ class SpatialEncodingSimulator {
         document.getElementById('freq-fov-out').textContent = `${p.fov.toFixed(0)} mm`;
         document.getElementById('freq-dx-out').textContent = `${p.dx.toFixed(p.dx < 10 ? 1 : 0)} mm`;
         document.getElementById('freq-tacq-out').textContent = `${(p.tacq * 1000).toFixed(2)} ms`;
+        const snrOut = document.getElementById('freq-snr-out');
+        if (snrOut) {
+            snrOut.innerHTML = `Relative SNR <b>${this.getFreqRelativeSNR(p).toFixed(2)}×</b> (∝ Δx·√T<sub>acq</sub>; ref. 32 kHz, 5 mT/m, N = 64)` +
+                (this.freq.lockFov ? ` · FOV locked at ${this.freq.fovLock.toFixed(0)} mm` : ' · G<sub>x</sub> fixed');
+        }
         const tLabel = document.getElementById('freq-time-val');
         if (tLabel) {
             const tms = p.tNow * 1000;
@@ -3874,7 +4099,8 @@ class SpatialEncodingSimulator {
         ctx.textAlign = 'right';
         ctx.fillStyle = '#94a3b8';
         ctx.fillText(narrow ? 'white: Re · amber: Im · dots: samples'
-                            : 'thin: each tube (Re)   white: total Re   amber: total Im   dots: ADC samples', w - margin.right, 18);
+                            : (this.freq.noise === 'off' ? 'thin: each tube (Re)   white: total Re   amber: total Im   dots: ADC samples'
+                                                         : 'lines: noiseless signal   dots: measured samples (with noise)'), w - margin.right, 18);
 
         ctx.strokeStyle = '#475569';
         ctx.lineWidth = 1;
@@ -4007,8 +4233,17 @@ class SpatialEncodingSimulator {
         ctx.fillStyle = '#64748b';
         [-150, -100, -50, 0, 50, 100, 150].forEach(x => ctx.fillText(x, xToPx(x), recBottom + 11));
         ctx.fillStyle = '#94a3b8';
-        ctx.fillText(narrow ? `x (mm) — dashed: truth, bars: recon` : `x (mm)   — dashed: true object, bars: reconstruction (Δx = ${p.dx.toFixed(1)} mm)`,
-                     margin.left + plotW / 2, h - 6);
+        if (this.freq.noise !== 'off') {
+            // Theory: profile noise SD = Δk·√N·σ with σ ∝ √BW
+            const sd = p.dk * Math.sqrt(p.N) * this.getFreqNoiseSigma(p);
+            ctx.fillStyle = '#f472b6';
+            ctx.fillText(narrow ? `noise SD ≈ ${sd.toFixed(3)} · rel. SNR ${this.getFreqRelativeSNR(p).toFixed(2)}×`
+                                : `x (mm) — bars = |FFT| (noise = grass-like floor) · noise SD ≈ ${sd.toFixed(3)} · relative SNR ${this.getFreqRelativeSNR(p).toFixed(2)}×`,
+                         margin.left + plotW / 2, h - 6);
+        } else {
+            ctx.fillText(narrow ? `x (mm) — dashed: truth, bars: recon` : `x (mm)   — dashed: true object, bars: reconstruction (Δx = ${p.dx.toFixed(1)} mm)`,
+                         margin.left + plotW / 2, h - 6);
+        }
 
         // Aliasing warning
         const aliased = segs.some(seg => seg.x0 < -p.fov / 2 || seg.x1 > p.fov / 2);

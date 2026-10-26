@@ -231,6 +231,57 @@ body {
     line-height: 1.4;
 }
 
+/* Collapsible explanations (Modules C-E) */
+.explain {
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    padding: 8px 10px;
+    margin-top: 8px;
+}
+
+.explain summary {
+    cursor: pointer;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--accent-color);
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+}
+
+.explain ul {
+    margin: 6px 0 0 0;
+    padding-left: 16px;
+}
+
+.explain li {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    line-height: 1.45;
+    margin-bottom: 4px;
+}
+
+.explain b {
+    color: var(--text-primary);
+    font-weight: 600;
+}
+
+.explain-note {
+    font-size: 0.72rem;
+    color: var(--text-secondary);
+    line-height: 1.45;
+    margin-top: 6px;
+}
+
+.compact-select {
+    padding: 5px 6px;
+    background: var(--bg-color);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    color: var(--text-primary);
+    font-size: 0.8rem;
+}
+
 /* Small button */
 .small-btn {
     padding: 4px 10px;
@@ -313,6 +364,12 @@ body {
     padding: 12px;
     text-align: center;
     margin-top: 8px;
+    overflow-x: auto;
+}
+
+.equation-box.compact {
+    font-size: 0.8rem;
+    padding: 10px 6px;
 }
 
 /* Signal Display */
