@@ -115,10 +115,10 @@ Visualizes the relationship between spatial frequency domain (k-space) and image
   - Noise injection with SNR visualization
   - Motion artifacts (respiratory simulation)
   - Spike noise (bad pixel artifacts)
-  - Undersampling (aliasing/ghosting)
+  - Undersampling (aliasing/ghosting; zero-filled with density compensation, so overlapping wraps add)
 - **Acceleration Techniques**:
   - Partial Fourier (6/8, 5/8) with zero-fill or conjugate synthesis reconstruction
-  - Parallel Imaging demo (SENSE R=2, R=4) with g-factor SNR penalty
+  - Parallel Imaging demo (SENSE R=2, R=4) with g-factor SNR penalty (active when Undersampling skip is 2…R)
 - **Multiple Phantoms**: Circle, Square, Brain MRI (+ hidden easter egg)
 
 ### Physics Model
@@ -129,12 +129,12 @@ Visualizes the relationship between spatial frequency domain (k-space) and image
 - Parallel Imaging SNR: SNR_PI = SNR_full / (g · √R) where g is geometry factor
 
 ### Simplifications (Parallel Imaging)
-The parallel imaging demo uses k-space interpolation to fill skipped phase-encoding lines, demonstrating the SNR penalty (g-factor noise) but not true wrap-around aliasing artifacts. In real SENSE/GRAPPA:
+The parallel imaging demo idealizes the coil step: the skipped phase-encoding lines are recovered exactly (the information that coil sensitivities make available), and noise is raised so that SNR_PI = SNR_full / (g·√R), with g = 1 + 0.1·(R − 1) and R the undersampling factor. In real SENSE/GRAPPA:
 1. Undersampled k-space is reconstructed directly, producing aliased (wrapped) images
 2. Multiple coil sensitivity maps identify which pixels are superimposed
-3. Linear algebra unfolding separates the overlapped signals
+3. Linear algebra unfolding separates the overlapped signals (GRAPPA instead synthesizes the missing lines from neighboring coil data)
 
-This simplified demo shows the **concept** that parallel imaging can recover missing k-space data at the cost of SNR, but omits the coil sensitivity encoding that enables true alias unfolding. Without actual coil sensitivity maps, the demo cannot produce or unwrap the characteristic N/R-fold image wrap-around.
+This simplified demo shows the **concept** that parallel imaging recovers the missing k-space data at the cost of SNR. It omits the coil sensitivity encoding itself, so it shows neither residual aliasing nor the spatially varying g-factor map of a real reconstruction.
 
 ---
 

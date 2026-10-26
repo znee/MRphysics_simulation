@@ -146,7 +146,7 @@
                             <option value="4">SENSE R=4 (4 coils)</option>
                         </select>
                         <em style="font-size: 0.65rem; opacity: 0.7; display: block; margin-top: 3px;">
-                            Simplified demo - interpolates missing k-space lines
+                            Simplified demo - recovers skipped k-space lines (idealized) at the g-factor SNR cost (needs Undersampling 2 to R)
                         </em>
                     </div>
 
@@ -227,7 +227,7 @@
                             <strong>K-Space Colors:</strong> <span style="color: #fff;">White</span> = acquired, <span style="color: #4dd;">Cyan</span> = PI-recovered, <span style="color: #666;">Dark</span> = missing.
                         </p>
                         <p class="explanation-text" style="margin-top: 8px; font-size: 0.65rem; opacity: 0.8; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 8px;">
-                            <strong>Note:</strong> This PI demo uses k-space interpolation to fill skipped lines, which shows the SNR penalty (g-factor noise) but not true wrap-around aliasing artifacts. Real SENSE/GRAPPA reconstructs aliased images first, then unfolds using coil sensitivity maps.
+                            <strong>Note:</strong> This PI demo idealizes the coil step: skipped lines are recovered exactly and noise is raised so SNR = SNR<sub>full</sub>/(g·√R). Real SENSE reconstructs the aliased coil images first and unfolds them with coil sensitivity maps (GRAPPA fills the missing lines from neighboring coil data), so residual aliasing and a spatially varying g-factor can remain.
                         </p>
                     </div>
 

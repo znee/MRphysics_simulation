@@ -177,6 +177,7 @@ function generatePhantom(type) {
 function resetAcquisition() {
     acquiredKSpace = new Array(N).fill(0).map(() => new Array(N).fill(0).map(() => new Complex(0, 0)));
     reconstructedImage = new Array(N).fill(0).map(() => new Array(N).fill(0).map(() => new Complex(0, 0)));
+    displayedKSpace = null; // Otherwise the k-space panels keep showing the old data
     currentLine = 0;
     updateStatus(`Ready. Lines acquired: 0/${matrixSize}`);
 }
@@ -188,19 +189,25 @@ function computeFullKSpace() {
     // But for simulation, we start with Image -> FFT -> K-Space.
 
     // Deep copy ground truth
-    const temp = new Array(N).fill(0).map((_, y) =>
+    const copy = new Array(N).fill(0).map((_, y) =>
         new Array(N).fill(0).map((_, x) =>
             new Complex(groundTruthImage[y][x].re, groundTruthImage[y][x].im)
         )
     );
 
-    // 2. Perform 2D FFT
+    // 2. IFFT Shift (move image center to index 0)
+    // Without this, the FFT treats the top-left corner as the origin and the
+    // centered object picks up a (-1)^(kx+ky) checkerboard in k-space phase.
+    const temp = ifftShift(copy);
+
+    // 3. Perform 2D FFT
     fft2D(temp);
 
-    // 3. FFT Shift (center low frequencies)
+    // 4. FFT Shift (center low frequencies)
+    // Reconstruction mirrors this: fftShift(IFFT(ifftShift(k)))
     kSpaceData = fftShift(temp);
 
-    // 4. Calculate Global Max Magnitude (for spike scaling)
+    // 5. Calculate Global Max Magnitude (for spike scaling)
     globalMaxMag = 0;
     for (let y = 0; y < N; y++) {
         for (let x = 0; x < N; x++) {
@@ -345,99 +352,105 @@ function applyPartialFourierRecon(kspace, size) {
 }
 
 /**
- * Simplified Parallel Imaging Reconstruction (SENSE-like concept demo)
- * In real SENSE: aliased image is unfolded using coil sensitivity maps
- * Here we simulate the effect by reducing aliasing artifacts from undersampling
+ * Simplified Parallel Imaging Reconstruction (SENSE/GRAPPA concept demo)
+ * Real SENSE/GRAPPA use the coils' different sensitivity profiles to unfold
+ * the aliased images (equivalently, to synthesize the skipped k-space lines).
+ * This demo idealizes that step: skipped lines are recovered exactly, and the
+ * price of acceleration is shown as noise.
  *
- * Key physics: SNR_SENSE = SNR_full / (g * sqrt(R))
+ * Key physics: SNR_PI = SNR_full / (g * sqrt(R))
  * where g = geometry factor (typically 1.0-1.5 for modern coils)
- * We simulate g-factor noise penalty even when recovering aliasing
  */
 function applyParallelImagingRecon(kspace, size) {
-    // For the demo, we show the concept that parallel imaging can
-    // recover information from undersampled data, but with SNR penalty
-    //
-    // Real SENSE: Combines aliased coil images using sensitivity maps
-    // Our simplification: When parallel imaging is "on", we reduce the
-    // aliasing effect by partially filling skipped lines from interpolation
-    // BUT we add g-factor noise to show the SNR penalty
+    // Only acts when there is acceleration to undo (skipY > 1, R >= skipY)
+    if (!isParallelImagingActive()) return kspace;
 
-    if (numCoils <= 1) return kspace;
+    // Actual acceleration = undersampling factor being recovered
+    const R = skipY;
 
-    // The acceleration factor from parallel imaging
-    const R = parallelAcceleration;
+    const result = new Array(size).fill(0).map((_, y) =>
+        new Array(size).fill(0).map((_, x) =>
+            new Complex(kspace[y][x].re, kspace[y][x].im)
+        )
+    );
 
-    // If undersampling (skipY) is used, parallel imaging can help recover
-    // For demo purposes, we interpolate missing lines when R >= skipY
-    if (skipY > 1 && R >= skipY) {
-        const result = new Array(size).fill(0).map((_, y) =>
-            new Array(size).fill(0).map((_, x) =>
-                new Complex(kspace[y][x].re, kspace[y][x].im)
-            )
-        );
+    const halfRes = matrixSize / 2;
+    // Lines acquired so far (the animation fills from the top of the matrix)
+    const filledEnd = size / 2 - halfRes + currentLine;
 
-        // Fill skipped lines using weighted average of neighbors
-        // This simulates how SENSE can recover missing k-space lines
-        const centerY = size / 2;
-        const halfRes = matrixSize / 2;
+    const gFactor = getGFactor(R);
 
-        // g-factor: geometry factor that increases with R
-        // Typical values: R=2 -> g~1.1, R=4 -> g~1.3
-        const gFactor = 1.0 + 0.1 * (R - 1);
+    // g-factor noise penalty: target image noise σ_PI = g·√R·σ_ref, where
+    // σ_ref is the thermal noise per sample of the full acquisition. A full
+    // M×M acquisition with per-sample σ gives image noise σ·M/N² (see
+    // noiseLevelToSigma). The acquired lines (M/R of M) carry σ_acq; the
+    // recovered lines are noise-free, so white noise σ_add is added to every
+    // sample in the matrix:
+    //   M²·σ_acq²/R + M²·σ_add² = g²·R·σ_ref²·M²  →  σ_add² = g²·R·σ_ref² − σ_acq²/R
+    // σ_ref always includes the baseline, so the penalty stays visible with
+    // "Simulate SNR" off.
+    const sigmaAcq = noiseLevelToSigma(getEffectiveNoiseLevel());
+    const sigmaRef = noiseLevelToSigma(Math.hypot(noiseLevel, BASE_SIMULATED_NOISE));
+    const sigmaAdd = Math.sqrt(Math.max(0, R * gFactor * gFactor * sigmaRef * sigmaRef - sigmaAcq * sigmaAcq / R));
 
-        // Calculate noise to add (simulates g-factor SNR penalty)
-        // Find max magnitude for noise scaling
-        let maxMag = 0;
-        for (let y = 0; y < size; y++) {
-            for (let x = 0; x < size; x++) {
-                const mag = Math.sqrt(kspace[y][x].re * kspace[y][x].re + kspace[y][x].im * kspace[y][x].im);
-                if (mag > maxMag) maxMag = mag;
+    for (let y = 0; y < size; y++) {
+        if (!isInMatrix(y, halfRes) || y >= filledEnd || !isLineInPartialFourier(y, halfRes)) continue;
+
+        // Skipped line: recovered from the coil information (idealized), with the
+        // same motion state it would have had if it had been acquired
+        const isSkipped = (y % R !== 0);
+        const motionRamp = motionPhaseRamp(y);
+
+        for (let x = 0; x < size; x++) {
+            if (!isInMatrix(x, halfRes)) continue;
+
+            let val = kspace[y][x];
+            if (isSkipped) {
+                val = motionRamp ? kSpaceData[y][x].mul(motionRamp) : kSpaceData[y][x];
             }
+
+            // Add g-factor noise
+            result[y][x] = new Complex(
+                val.re + gaussianRandom() * sigmaAdd,
+                val.im + gaussianRandom() * sigmaAdd
+            );
         }
-        // Noise level proportional to g-factor and sqrt(R)
-        const noiseSigma = maxMag * 0.02 * gFactor * Math.sqrt(R);
-
-        for (let y = 0; y < size; y++) {
-            // Check if this line was skipped
-            if (y % skipY !== 0) {
-                const kyFromCenter = Math.abs(y - centerY);
-                if (kyFromCenter < halfRes) {
-                    // Find nearest acquired lines
-                    const prevLine = Math.floor(y / skipY) * skipY;
-                    const nextLine = Math.min(prevLine + skipY, size - 1);
-
-                    // Interpolate
-                    const t = (y - prevLine) / skipY;
-                    for (let x = 0; x < size; x++) {
-                        const re = (1 - t) * kspace[prevLine][x].re + t * kspace[nextLine][x].re;
-                        const im = (1 - t) * kspace[prevLine][x].im + t * kspace[nextLine][x].im;
-
-                        // Add g-factor noise to recovered lines
-                        const noiseRe = gaussianRandom() * noiseSigma;
-                        const noiseIm = gaussianRandom() * noiseSigma;
-
-                        result[y][x] = new Complex(re + noiseRe, im + noiseIm);
-                    }
-                }
-            } else {
-                // Acquired lines also get some g-factor noise penalty
-                const kyFromCenter = Math.abs(y - centerY);
-                if (kyFromCenter < halfRes) {
-                    for (let x = 0; x < size; x++) {
-                        const noiseRe = gaussianRandom() * noiseSigma * 0.5; // Less noise on acquired lines
-                        const noiseIm = gaussianRandom() * noiseSigma * 0.5;
-                        result[y][x] = new Complex(
-                            kspace[y][x].re + noiseRe,
-                            kspace[y][x].im + noiseIm
-                        );
-                    }
-                }
-            }
-        }
-        return result;
     }
+    return result;
+}
 
-    return kspace;
+// Partial Fourier: acquire the full +ky half plus a small overlap into -ky
+// e.g., 75% = acquire from -25% to +50% (relative to halfRes)
+function isLineInPartialFourier(lineIndex, halfRes) {
+    if (partialFourierFraction >= 1.0) return true;
+    const kyRelative = lineIndex - N / 2; // Negative = top half, positive = bottom half
+    const overlapFraction = (partialFourierFraction - 0.5) * 2; // Overlap into negative ky
+    return kyRelative >= -halfRes * overlapFraction && kyRelative < halfRes;
+}
+
+// Respiratory motion: the object's y-shift at the time line `lineIndex` is
+// acquired becomes a phase ramp along ky (shift theorem). Null when no motion.
+function motionPhaseRamp(lineIndex) {
+    if (motionLevel <= 0) return null;
+    // Calibrated: Increased max displacement from 5 to 15 pixels
+    const maxDisp = (motionLevel / 100) * 15;
+    const period = N / 4; // 4 cycles per image
+    // Phase of respiration depends on time (lineIndex)
+    const dy = maxDisp * Math.sin(2 * Math.PI * lineIndex / period);
+    const ky = lineIndex - N / 2;
+    return Complex.fromPolar(1, -2 * Math.PI * ky * dy / N);
+}
+
+// Parallel imaging only does something when lines are actually skipped
+// and the coil count supports that acceleration (R >= skipY)
+function isParallelImagingActive() {
+    return numCoils > 1 && skipY > 1 && parallelAcceleration >= skipY;
+}
+
+// g-factor: geometry factor that increases with the actual acceleration R
+// Typical values: R=2 -> g~1.1, R=4 -> g~1.3
+function getGFactor(R) {
+    return 1.0 + 0.1 * (R - 1);
 }
 
 // Simple Gaussian random number generator (Box-Muller, single value)
@@ -477,13 +490,28 @@ function reconstructImage() {
             )
         );
 
+        // 1d. Density compensation for zero-filled undersampling
+        // Keeping every skipY-th line scales the true image by 1/skipY (the rest
+        // goes into the aliased copies). Weighting the acquired lines by skipY
+        // preserves intensity so only the aliasing remains.
+        // Not needed when parallel imaging has filled the skipped lines.
+        if (skipY > 1 && !isParallelImagingActive()) {
+            for (let y = 0; y < N; y++) {
+                for (let x = 0; x < N; x++) {
+                    temp[y][x].re *= skipY;
+                    temp[y][x].im *= skipY;
+                }
+            }
+        }
+
         // 2. IFFT Shift (undo centering)
         const unshifted = ifftShift(temp);
 
         // 3. IFFT
         ifft2D(unshifted);
 
-        reconstructedImage = unshifted;
+        // 4. FFT Shift (move image origin back to the center, see computeFullKSpace)
+        reconstructedImage = fftShift(unshifted);
     } else {
         // Zero-padding reconstruction for higher resolution (interpolation)
         // FFT requires power-of-2 sizes, so round up to next power of 2
@@ -531,8 +559,11 @@ function reconstructImage() {
             }
         }
 
+        // FFT Shift (move image origin back to the center, see computeFullKSpace)
+        const paddedImage = ifftShiftVariable(unshifted, fftSize);
+
         // Store the full padded result
-        reconstructedImagePadded = unshifted;
+        reconstructedImagePadded = paddedImage;
         reconstructedImagePaddedSize = fftSize;
 
         // Downsample to N×N for display using bilinear interpolation
@@ -553,10 +584,10 @@ function reconstructImage() {
                 const fx = srcX - x0;
 
                 // Interpolate real and imaginary parts separately
-                const v00 = unshifted[y0][x0];
-                const v01 = unshifted[y0][x1];
-                const v10 = unshifted[y1][x0];
-                const v11 = unshifted[y1][x1];
+                const v00 = paddedImage[y0][x0];
+                const v01 = paddedImage[y0][x1];
+                const v10 = paddedImage[y1][x0];
+                const v11 = paddedImage[y1][x1];
 
                 const re = (1 - fy) * ((1 - fx) * v00.re + fx * v01.re) +
                            fy * ((1 - fx) * v10.re + fx * v11.re);
@@ -739,25 +770,13 @@ function gaussianNoise(sigma) {
 }
 
 function acquireLine(lineIndex) {
-    // 1. Noise Sigma (Object-Independent)
-    // Reference signal is N*N (theoretical max for all-ones image).
-    // We scale noise relative to this fixed reference.
-    const referenceSignal = N * N;
+    // 1. Noise Sigma (Object-Independent, same per-sample σ at every matrix size)
     // Use effective noise level (considers SNR simulation)
     const effectiveNoise = getEffectiveNoiseLevel();
-    // Calibrated: Reduced factor from 0.002 to 0.0005 based on user feedback
-    const sigma = (effectiveNoise / 100) * (referenceSignal * 0.0005);
+    const sigma = noiseLevelToSigma(effectiveNoise);
 
-    // 2. Motion Parameters (Deterministic/Periodic)
-    // Simulate respiration: Sine wave displacement in Y
-    let dy = 0;
-    if (motionLevel > 0) {
-        // Calibrated: Increased max displacement from 5 to 15 pixels
-        const maxDisp = (motionLevel / 100) * 15;
-        const period = N / 4; // 4 cycles per image
-        // Phase of respiration depends on time (lineIndex)
-        dy = maxDisp * Math.sin(2 * Math.PI * lineIndex / period);
-    }
+    // 2. Motion (Deterministic/Periodic): simulated respiration, see motionPhaseRamp
+    const motionRamp = motionPhaseRamp(lineIndex);
 
     // Is this line acquired? (undersampling)
     const isAcquired = (lineIndex % skipY === 0);
@@ -768,33 +787,18 @@ function acquireLine(lineIndex) {
     // For matrixSize <= N: truncate outer k-space for lower resolutions
     const effectiveMatrixForAcquisition = Math.min(matrixSize, N);
     const halfRes = effectiveMatrixForAcquisition / 2;
-    const centerY = N / 2;
-    const centerX = N / 2;
 
-    // Check if this line is within the resolution boundary
-    const kyFromCenter = Math.abs(lineIndex - centerY);
-    const lineInResolution = kyFromCenter < halfRes;
+    // Check if this line is within the resolution boundary (ky = -M/2 .. M/2-1)
+    const lineInResolution = isInMatrix(lineIndex, halfRes);
 
     // Partial Fourier: only acquire fraction of ky (asymmetric about center)
-    // Acquire from center to +ky edge, plus small margin into -ky for phase estimation
-    let lineInPartialFourier = true;
-    if (partialFourierFraction < 1.0) {
-        const kyRelative = lineIndex - centerY; // Negative = top half, positive = bottom half
-        // Acquire: full positive ky + small overlap into negative ky
-        // e.g., 75% = acquire from -25% to +50% (relative to halfRes)
-        const acquiredFraction = partialFourierFraction;
-        const overlapFraction = (acquiredFraction - 0.5) * 2; // Overlap into negative ky
-        const minKy = -halfRes * overlapFraction;
-        const maxKy = halfRes;
-        lineInPartialFourier = (kyRelative >= minKy && kyRelative < maxKy);
-    }
+    const lineInPartialFourier = isLineInPartialFourier(lineIndex, halfRes);
 
     for (let x = 0; x < N; x++) {
         let val = new Complex(0, 0);
 
         // Check if this x position is within resolution boundary
-        const kxFromCenter = Math.abs(x - centerX);
-        const pointInResolution = lineInResolution && (kxFromCenter < halfRes);
+        const pointInResolution = lineInResolution && isInMatrix(x, halfRes);
 
         // Combined check: undersampling + resolution + partial Fourier
         const shouldAcquire = isAcquired && pointInResolution && lineInPartialFourier;
@@ -803,10 +807,8 @@ function acquireLine(lineIndex) {
             val = kSpaceData[lineIndex][x];
 
             // Apply Motion: Phase Ramp in Y
-            if (motionLevel > 0) {
-                const ky = lineIndex - N / 2;
-                const phaseShift = -2 * Math.PI * ky * dy / N;
-                val = val.mul(Complex.fromPolar(1, phaseShift));
+            if (motionRamp) {
+                val = val.mul(motionRamp);
             }
         }
 
@@ -821,9 +823,7 @@ function acquireLine(lineIndex) {
     // Spike Noise: Inject a single bad point (only if within resolution)
     if (hasSpike) {
         if (lineIndex === spikeY) {
-            const kxFromCenter = Math.abs(spikeX - centerX);
-            const kyFromCenter = Math.abs(spikeY - centerY);
-            if (kxFromCenter < halfRes && kyFromCenter < halfRes) {
+            if (isInMatrix(spikeX, halfRes) && isInMatrix(spikeY, halfRes)) {
                 // Scale spike relative to TRUE global max
                 // Calibrated: Reduced from 2 to 0.5 to prevent image corruption
                 const spikeAmp = globalMaxMag * 0.5;
@@ -834,23 +834,17 @@ function acquireLine(lineIndex) {
     }
 }
 
-// Calculate and update resolution info display
-function updateResolutionInfo() {
+// Relative SNR vs the 256×256 baseline.
+// Single source for every SNR readout (sidebar and k-space label).
+function getRelativeSNR() {
     // SNR baseline is 256×256 for educational clarity
     const SNR_BASELINE = 256;
-
-    // Pixel size ratio relative to baseline (256×256)
-    const pixelSizeRatio = SNR_BASELINE / matrixSize;
 
     // Calculate total acceleration factor
     // R_total = R_undersampling × R_partial_fourier
     const R_undersampling = skipY;
     const R_partial_fourier = 1 / partialFourierFraction;
     const R_total = R_undersampling * R_partial_fourier;
-
-    // K-space coverage: percentage of k-space AREA relative to full N×N
-    // Must account for undersampling factor (skipY) and partial Fourier
-    const kspaceCoverageArea = (matrixSize / N) * (matrixSize / N) * partialFourierFraction * (1 / skipY) * 100;
 
     // SNR relationship for 2D imaging at constant FOV and constant
     // receiver bandwidth (fixed dwell time, single average):
@@ -873,22 +867,35 @@ function updateResolutionInfo() {
     // With 4x undersampling: SNR reduced by factor of 2 (√4)
     //
     // This demonstrates the fundamental resolution-SNR tradeoff!
-    const resolutionSNR = pixelSizeRatio;
+    const resolutionSNR = SNR_BASELINE / matrixSize;
 
     // SNR penalty from acceleration:
     // - Undersampling alone (no PI): SNR ∝ 1/√R (fewer samples = more noise)
     // - With Parallel Imaging: SNR ∝ 1/(g·√R) where g is geometry factor
     //   PI reduces aliasing but doesn't recover the lost SNR from fewer samples
     //   In fact, g-factor adds additional penalty (g ≥ 1)
-    //
-    // g-factor: geometry factor that increases with R
-    // Typical values: R=2 -> g~1.1, R=4 -> g~1.3
-    const gFactor = numCoils > 1 ? (1.0 + 0.1 * (numCoils - 1)) : 1.0;
+    // The g-factor only applies when PI is actually undoing acceleration
+    const gFactor = isParallelImagingActive() ? getGFactor(skipY) : 1.0;
 
     // Total acceleration penalty (always present regardless of PI)
     // PI helps with aliasing artifacts but SNR penalty remains
     const accelerationPenalty = 1 / (gFactor * Math.sqrt(R_total));
-    const relativeSNR = resolutionSNR * accelerationPenalty;
+    return resolutionSNR * accelerationPenalty;
+}
+
+// Calculate and update resolution info display
+function updateResolutionInfo() {
+    // SNR baseline is 256×256 for educational clarity
+    const SNR_BASELINE = 256;
+
+    // Pixel size ratio relative to baseline (256×256)
+    const pixelSizeRatio = SNR_BASELINE / matrixSize;
+
+    // K-space coverage: percentage of k-space AREA relative to full N×N
+    // Must account for undersampling factor (skipY) and partial Fourier
+    const kspaceCoverageArea = (matrixSize / N) * (matrixSize / N) * partialFourierFraction * (1 / skipY) * 100;
+
+    const relativeSNR = getRelativeSNR();
 
     document.getElementById('matrixSizeVal').innerText = matrixSize;
     document.getElementById('matrixSizeVal2').innerText = matrixSize;
@@ -918,30 +925,43 @@ function updateResolutionInfo() {
     }
 }
 
+// Baseline thermal noise (noise-slider units) used by "Simulate SNR" and as the
+// reference noise of the parallel imaging demo.
+// At 256×256 this gives image SNR ≈ 31 for a unit-intensity object.
+const BASE_SIMULATED_NOISE = 25;
+
+// Convert a noise level (slider units, 0-100) to per-sample k-space σ (re and im).
+// Reference signal is N*N (theoretical max for all-ones image).
+// With the unnormalized FFT and 1/N² IFFT used here, white noise σ on the M×M
+// acquired samples gives image noise σ·M/N² per component.
+function noiseLevelToSigma(level) {
+    // Calibrated: Reduced factor from 0.002 to 0.0005 based on user feedback
+    return (level / 100) * (N * N * 0.0005);
+}
+
+// K-space index inside the acquired M×M matrix?
+// Centered index k = index - N/2 runs from -M/2 to M/2-1 (M samples, FFT convention)
+function isInMatrix(index, halfRes) {
+    const k = index - N / 2;
+    return k >= -halfRes && k < halfRes;
+}
+
 // Get the effective noise level considering SNR simulation
 function getEffectiveNoiseLevel() {
     if (!simulateSNR) return noiseLevel;
 
-    // SNR baseline is 256×256
-    const SNR_BASELINE = 256;
-
-    // When simulating SNR, noise scales inversely with SNR
-    // At fixed FOV and receiver bandwidth: SNR ∝ baseline/matrixSize
-    // (voxel area shrinks as 1/N², but total samples grow as N², and
-    //  noise averages down as 1/√samples → net SNR ∝ 1/N)
-    // Noise ∝ 1/SNR = matrixSize/baseline
-    const snrFactor = matrixSize / SNR_BASELINE;
-
-    // At 256x256 (baseline), snrFactor = 1, noise = base
-    // At 128x128, snrFactor = 0.5 (less noise, 2x SNR)
-    // At 512x512, snrFactor = 2 (more noise, 0.5x SNR)
+    // When simulating SNR, add a fixed baseline thermal noise per k-space sample.
+    // The matrix-size dependence then comes from the reconstruction itself:
+    // image noise = σ·M/N² while the object intensity stays fixed, so
+    // SNR ∝ 1/matrixSize (fixed FOV and receiver bandwidth) - no extra scaling here.
+    // At 256x256 (baseline): SNR ≈ 31
+    // At 128x128: half the noise (2x SNR)
+    // At 512x512: twice the noise (0.5x SNR)
     //
     // Higher resolution = smaller voxels = less signal = more visible noise
-    const baseSimulatedNoise = 25;
-    const simulatedNoise = baseSimulatedNoise * snrFactor;
 
-    // Combine with user-set noise level
-    return Math.max(noiseLevel, simulatedNoise);
+    // Combine with user-set noise level (independent noise: variances add)
+    return Math.hypot(noiseLevel, BASE_SIMULATED_NOISE);
 }
 
 function acquireAllLines() {
@@ -988,6 +1008,19 @@ function renderImage() {
         }
     }
 
+    // Undersampling without parallel imaging: wrapped copies that overlap add up
+    // and exceed the object's maximum, so scale to the reconstruction instead of
+    // clipping the overlap to white
+    let reconMax = maxMag;
+    if (skipY > 1 && !isParallelImagingActive()) {
+        for (let y = 0; y < N; y++) {
+            for (let x = 0; x < N; x++) {
+                const mag = reconstructedImage[y][x].magnitude;
+                if (mag > reconMax) reconMax = mag;
+            }
+        }
+    }
+
     for (let y = 0; y < N; y++) {
         for (let x = 0; x < N; x++) {
             const idx = (y * N + x) * 4;
@@ -1002,7 +1035,7 @@ function renderImage() {
 
             // Reconstructed
             const reconMag = reconstructedImage[y][x].magnitude;
-            const reconNorm = maxMag > 0 ? (reconMag / maxMag) * 255 : 0;
+            const reconNorm = reconMax > 0 ? Math.min(255, (reconMag / reconMax) * 255) : 0;
             reconImgData.data[idx] = reconNorm;
             reconImgData.data[idx + 1] = reconNorm;
             reconImgData.data[idx + 2] = reconNorm;
@@ -1037,6 +1070,12 @@ function renderKSpace() {
         }
     }
 
+    // Phase for display: treat FFT round-off in the imaginary part (~1e-16 of max)
+    // as zero, so real-valued k-space (symmetric phantoms) shows clean 0/π regions
+    // instead of random +π/-π (white/black) speckle
+    const phaseEps = maxMag * 1e-10;
+    const displayPhase = (c) => Math.atan2(Math.abs(c.im) < phaseEps ? 0 : c.im, c.re);
+
     // Define acquired region boundary
     const halfRes = matrixSize / 2;
     const centerX = N / 2;
@@ -1047,12 +1086,12 @@ function renderKSpace() {
             const idx = (y * N + x) * 4;
 
             // Check if this point is within the acquired region
-            const inAcquiredRegion = Math.abs(x - centerX) < halfRes && Math.abs(y - centerY) < halfRes;
+            const inAcquiredRegion = isInMatrix(x, halfRes) && isInMatrix(y, halfRes);
 
             // Check if this line was actually acquired (for undersampling visualization)
             const lineAcquired = (y % skipY === 0);
-            // When PI is on and can recover, show interpolated lines differently
-            const lineRecovered = (numCoils > 1 && skipY > 1 && numCoils >= skipY);
+            // When PI is on and can recover, show recovered lines differently
+            const lineRecovered = isParallelImagingActive();
 
             if (inAcquiredRegion && maxMag > 0) {
                 // Magnitude (Log scaled)
@@ -1061,7 +1100,7 @@ function renderKSpace() {
 
                 // Color coding for k-space visualization:
                 // - White: directly acquired lines
-                // - Cyan: PI-interpolated lines (recovered by parallel imaging)
+                // - Cyan: lines recovered by parallel imaging
                 // - Dark: skipped lines (when PI is off or can't recover)
                 if (!lineAcquired && !lineRecovered) {
                     // Skipped line without PI recovery - show as dark/zero
@@ -1075,13 +1114,13 @@ function renderKSpace() {
                     phaseImgData.data[idx + 2] = 0;
                     phaseImgData.data[idx + 3] = 255;
                 } else if (!lineAcquired && lineRecovered) {
-                    // PI-interpolated line - show in cyan tint
+                    // PI-recovered line - show in cyan tint
                     magImgData.data[idx] = magNorm * 0.3;      // Less red
                     magImgData.data[idx + 1] = magNorm * 0.8;  // Moderate green
                     magImgData.data[idx + 2] = magNorm;        // Full blue (cyan tint)
                     magImgData.data[idx + 3] = 255;
 
-                    const phaseVal = kspaceToShow[y][x].phase;
+                    const phaseVal = displayPhase(kspaceToShow[y][x]);
                     const phaseNorm = ((phaseVal + Math.PI) / (2 * Math.PI)) * 255;
                     phaseImgData.data[idx] = phaseNorm * 0.3;
                     phaseImgData.data[idx + 1] = phaseNorm * 0.8;
@@ -1095,7 +1134,7 @@ function renderKSpace() {
                     magImgData.data[idx + 3] = 255;
 
                     // Phase
-                    const phaseVal = kspaceToShow[y][x].phase;
+                    const phaseVal = displayPhase(kspaceToShow[y][x]);
                     const phaseNorm = ((phaseVal + Math.PI) / (2 * Math.PI)) * 255;
                     phaseImgData.data[idx] = phaseNorm;
                     phaseImgData.data[idx + 1] = phaseNorm;
@@ -1123,12 +1162,12 @@ function renderKSpace() {
     // Visual Marker for Resolution Boundary (k-space coverage)
     // SNR baseline is 256×256; show color-coded boundary
     // (centerX, centerY, halfRes already defined above)
-    const SNR_BASELINE = 256;
-    const snr = (SNR_BASELINE / matrixSize) * (SNR_BASELINE / matrixSize);
+    // Same relative SNR as the sidebar (SNR ∝ 1/matrixSize, incl. acceleration)
+    const snr = getRelativeSNR();
 
     // Color based on SNR relative to baseline (256×256 = 1.0)
     let strokeColor, fillColor;
-    if (snr >= 4) {
+    if (snr >= 2) {
         // High SNR (low resolution, e.g., 128×128 or smaller)
         strokeColor = 'rgba(74, 222, 128, 0.8)';
         fillColor = 'rgba(74, 222, 128, 0.9)';
@@ -1136,7 +1175,7 @@ function renderKSpace() {
         // Baseline or slightly above (e.g., 256×256)
         strokeColor = 'rgba(56, 189, 248, 0.8)';
         fillColor = 'rgba(56, 189, 248, 0.9)';
-    } else if (snr >= 0.5) {
+    } else if (snr > 0.5) {
         // Below baseline (e.g., 384×384)
         strokeColor = 'rgba(251, 191, 36, 0.8)';
         fillColor = 'rgba(251, 191, 36, 0.9)';
@@ -1315,9 +1354,12 @@ function bindEvents() {
     document.getElementById('skipYRange').addEventListener('input', (e) => {
         skipY = parseInt(e.target.value);
         document.getElementById('skipYVal').innerText = skipY;
+        updateResolutionInfo(); // SNR and coverage depend on skipY
         if (!isAnimating && currentLine > 0) {
             acquireAllLines();
             renderAll();
+        } else if (!isAnimating) {
+            renderKSpace(); // Keep the k-space SNR label in sync
         }
     });
 
@@ -1346,6 +1388,8 @@ function bindEvents() {
             resetAcquisition();
             acquireAllLines();
             renderAll();
+        } else if (!isAnimating) {
+            renderKSpace(); // Keep the k-space boundary and SNR label in sync
         }
     });
 
@@ -1392,6 +1436,8 @@ function bindEvents() {
         if (!isAnimating && currentLine > 0) {
             acquireAllLines();
             renderAll();
+        } else if (!isAnimating) {
+            renderKSpace(); // Keep the k-space SNR label in sync
         }
     });
 
@@ -1407,11 +1453,13 @@ function bindEvents() {
     document.getElementById('parallelImagingSelect').addEventListener('change', (e) => {
         const val = parseInt(e.target.value);
         numCoils = val;
-        parallelAcceleration = val; // R = number of coils for simplified demo
+        parallelAcceleration = val; // Max R the coil array supports (simplified demo: R = number of coils)
         updateResolutionInfo();
         if (!isAnimating && currentLine > 0) {
             acquireAllLines();
             renderAll();
+        } else if (!isAnimating) {
+            renderKSpace(); // Keep the k-space SNR label in sync
         }
     });
 }
