@@ -97,12 +97,12 @@ body {
 
 /* Module Tabs */
 .module-tabs {
-    display: flex;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
     gap: 5px;
 }
 
 .module-tab {
-    flex: 1;
     padding: 10px 8px;
     background: rgba(255, 255, 255, 0.05);
     border: 1px solid var(--border-color);
@@ -117,6 +117,10 @@ body {
 
 .module-tab:hover {
     background: rgba(255, 255, 255, 0.1);
+}
+
+.module-tab.wide {
+    grid-column: 1 / -1;
 }
 
 .module-tab.active {
@@ -193,6 +197,38 @@ body {
 
 .frame-toggle .toggle-text {
     font-size: 0.8rem;
+}
+
+/* Button row (Module C) */
+.btn-row {
+    display: flex;
+    gap: 6px;
+}
+
+.btn-row .small-btn {
+    flex: 1;
+    padding: 7px 4px;
+}
+
+.small-btn.secondary {
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid var(--border-color);
+    color: var(--text-primary);
+}
+
+.small-btn.secondary:hover {
+    background: rgba(255, 255, 255, 0.15);
+}
+
+.stage-indicator {
+    font-size: 0.78rem;
+    color: #22d3ee;
+    background: rgba(34, 211, 238, 0.08);
+    border: 1px solid rgba(34, 211, 238, 0.3);
+    border-radius: 6px;
+    padding: 8px 10px;
+    margin-bottom: 10px;
+    line-height: 1.4;
 }
 
 /* Small button */
@@ -375,6 +411,10 @@ body {
     font-size: 0.8rem;
     font-weight: 600;
     color: var(--text-primary);
+}
+
+.panel-badge:empty {
+    display: none;
 }
 
 .panel-badge {

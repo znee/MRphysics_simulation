@@ -27,7 +27,28 @@
  *   - Shows how gradient areas determine k-space position
  *   - Demonstrates Cartesian trajectory through k-space
  *   - S(kx,ky) = Σ ρ(x,y) · e^(-i2π(kx·x + ky·y))
+ *
+ * K-SPACE UNITS (Modules A & B): k is in cycles per FOV (Δk = 1/FOV).
+ *   Phase-encode step m twists the phase by m full cycles across the FOV;
+ *   k_max = N/2 makes neighbouring voxels differ by π (Nyquist).
+ *
+ * Module C: Readout → K-Space → Image
+ *   - Stage 1: every voxel contributes ρ·e^(-iφ); the coil records only the sum,
+ *     one k-space sample per readout point, one ky line per phase-encode step
+ *   - Stage 2: inverse FT adds the spatial-frequency patterns back, center first
+ *
+ * Module D: Frequency Encoding → Fourier
+ *   - Readout gradient: each x precesses at f(x) = γ̄·Gx·x
+ *   - Received signal = sum of all frequencies; DFT recovers the 1D profile
+ *   - FOV = BW / (γ̄·Gx), Δx = FOV / N; objects outside the FOV wrap (alias)
+ *
+ * Module E: Slice Selection
+ *   - f(z) = γ̄·Gz·z; RF bandwidth BW excites Δz = BW / (γ̄·Gz)
+ *   - Sinc RF pulse ↔ slice profile (Fourier pair, small-tip approximation)
  */
+
+// Gyromagnetic ratio γ̄ = γ/2π for 1H in Hz per (mT/m · mm): f = 42.58 · G[mT/m] · x[mm]
+const GAMMA_BAR_HZ_PER_MT_M_MM = 42.58;
 
 class SpatialEncodingSimulator {
     constructor() {
@@ -51,8 +72,49 @@ class SpatialEncodingSimulator {
         this.kyPosition = 0;
         this.objectType = 'uniform';
         this.kspaceData = null;
-        this.kspaceSize = 17;  // -8 to +8 = 17 positions
+        this.kspaceSize = this.gridSize;  // k = -N/2 .. N/2-1 (cycles per FOV)
         this.initKSpaceData();
+
+        // Module C: Readout → k-space → image
+        this.recon = {
+            object: 'L',
+            n: 8,
+            stage: 'acquire',   // 'acquire' → 'decompose' → 'done'
+            line: 0,            // phase-encode line index (ky = line - N/2)
+            sample: -1,         // last acquired sample on the current line (-1 = none yet)
+            kspace: [],         // N×N complex samples (null = not acquired)
+            order: [],          // stage-2 component order (increasing |k|)
+            compIndex: 0,       // number of components added back
+            image: [],          // N×N complex partial reconstruction
+            flash: null,        // {ikx, iky, time} for the k-space "write" flash
+            pauseUntil: 0,      // short hold between stages
+            speed: 1,
+            playing: false,
+            animationId: null,
+            lastTime: 0,
+            accumulator: 0
+        };
+        this.resetRecon();
+
+        // Module E: Slice selection
+        this.slice = {
+            gz: 10,         // mT/m
+            duration: 2,    // ms (RF pulse length T)
+            tbw: 4,         // time-bandwidth product (sinc zero crossings)
+            fcKHz: 0,       // RF center frequency offset (kHz) → slice position
+            flip: 90        // nominal flip angle (degrees)
+        };
+
+        // Module D: Frequency encoding → Fourier
+        this.freq = {
+            object: 'two',
+            gx: 5,          // mT/m
+            bwKHz: 32,      // receiver bandwidth (kHz) = 1/Δt
+            numSamples: 64, // N
+            t: -0.5,        // readout cursor: -0.5 (start) → 0 (echo) → +0.5 (end)
+            playing: false,
+            animationId: null
+        };
 
         // Canvas contexts
         this.spinCtx = null;
@@ -75,6 +137,7 @@ class SpatialEncodingSimulator {
     }
 
     initKSpaceData() {
+        this.kspaceSize = this.gridSize;
         this.kspaceData = [];
         for (let ky = 0; ky < this.kspaceSize; ky++) {
             this.kspaceData[ky] = [];
@@ -85,20 +148,35 @@ class SpatialEncodingSimulator {
     }
 
     computeFullKSpace() {
+        if (this.kspaceSize !== this.gridSize) this.initKSpaceData();
+        const half = this.kspaceSize / 2;
         for (let iky = 0; iky < this.kspaceSize; iky++) {
             for (let ikx = 0; ikx < this.kspaceSize; ikx++) {
-                const kx = ikx - 8;
-                const ky = iky - 8;
+                const kx = ikx - half;
+                const ky = iky - half;
                 const signal = this.calculateSignalAtKSpace(kx, ky);
                 this.kspaceData[iky][ikx] = signal.magnitude;
             }
         }
     }
 
-    calculateSignalAtKSpace(kx, ky) {
-        const n = this.gridSize;
-        const density = this.getObjectDensity();
+    /**
+     * Phase of voxel (ix, iy) at k-space position (kx, ky), k in cycles per FOV:
+     * φ = 2π(kx·x + ky·y), with x, y the voxel-center positions in FOV units.
+     * Symmetric centering keeps symmetric objects' k-space real, and a uniform
+     * object gives exactly zero signal at every integer k ≠ 0.
+     */
+    kPhase(kx, ky, ix, iy, n) {
+        const xc = (ix - (n - 1) / 2) / n;
+        const yc = (iy - (n - 1) / 2) / n;
+        return 2 * Math.PI * (kx * xc + ky * yc);
+    }
 
+    /**
+     * Net signal S(kx, ky) = Σ ρ(x,y) · e^(-iφ) (convention of the UI equation)
+     */
+    signalAt(kx, ky, density = this.getObjectDensity()) {
+        const n = this.gridSize;
         let realSum = 0;
         let imagSum = 0;
 
@@ -106,14 +184,9 @@ class SpatialEncodingSimulator {
             for (let ix = 0; ix < n; ix++) {
                 const rho = density[iy][ix];
                 if (rho < 0.01) continue;
-
-                const x = (ix / (n - 1)) * 2 - 1;
-                const y = (iy / (n - 1)) * 2 - 1;
-
-                const phase = 2 * Math.PI * (kx * x + ky * y) / 16;
-
+                const phase = this.kPhase(kx, ky, ix, iy, n);
                 realSum += rho * Math.cos(phase);
-                imagSum += rho * Math.sin(phase);
+                imagSum -= rho * Math.sin(phase);  // e^(-iφ)
             }
         }
 
@@ -125,9 +198,50 @@ class SpatialEncodingSimulator {
         };
     }
 
+    calculateSignalAtKSpace(kx, ky) {
+        return this.signalAt(kx, ky);
+    }
+
+    /**
+     * Module A k-space position (cycles per FOV) implied by the gradient controls.
+     * Static view: kx = Gx/10, ky = Gy/10 (strength 10 = one cycle across FOV).
+     * Animated readout: kx sweeps -N/2 → +N/2 (echo at kx = 0).
+     */
+    getModuleAK() {
+        const ky = this.gyEnabled ? this.gyStrength / 10 : 0;
+        let kx = 0;
+        if (this.gxEnabled) {
+            kx = this.isAnimating ? this.getAnimatedKx() : this.gxStrength / 10;
+        }
+        return { kx, ky };
+    }
+
+    /**
+     * Clamp Module B k sliders to the k-space of the current grid: -N/2 .. N/2-1
+     */
+    updateKSliderRanges() {
+        const half = this.gridSize / 2;
+        const sliders = [
+            ['kx-position', 'kx-val', 'kxPosition'],
+            ['ky-position', 'ky-val', 'kyPosition']
+        ];
+        sliders.forEach(([sliderId, labelId, key]) => {
+            const slider = document.getElementById(sliderId);
+            this[key] = Math.max(-half, Math.min(half - 1, this[key]));
+            if (slider) {
+                slider.min = -half;
+                slider.max = half - 1;
+                slider.value = this[key];
+            }
+            const label = document.getElementById(labelId);
+            if (label) label.textContent = this[key];
+        });
+    }
+
     init() {
         this.setupCanvases();
         this.setupEventListeners();
+        this.updateKSliderRanges();
         this.render();
     }
 
@@ -224,6 +338,7 @@ class SpatialEncodingSimulator {
         const gridSize = document.getElementById('grid-size');
         gridSize?.addEventListener('change', (e) => {
             this.gridSize = parseInt(e.target.value);
+            this.updateKSliderRanges();
             this.render();
         });
 
@@ -285,6 +400,7 @@ class SpatialEncodingSimulator {
             this.gridSize = parseInt(e.target.value);
             const gridSizeA = document.getElementById('grid-size');
             if (gridSizeA) gridSizeA.value = e.target.value;
+            this.updateKSliderRanges();
             this.computeFullKSpace();
             this.render();
         });
@@ -323,10 +439,107 @@ class SpatialEncodingSimulator {
                     this.randomSignalEnabled ? 'flex' : 'none';
             }
         });
+
+        // Module C: Readout → k-space → image controls
+        const resetReconView = () => {
+            this.stopReconAnimation();
+            this.resetRecon();
+            this.stopReconAnimation();  // refresh the Play label for the new state
+            this.updatePanelTitles();
+            this.render();
+        };
+        document.getElementById('recon-object')?.addEventListener('change', (e) => {
+            this.recon.object = e.target.value;
+            resetReconView();
+        });
+        document.getElementById('recon-n')?.addEventListener('change', (e) => {
+            this.recon.n = parseInt(e.target.value);
+            resetReconView();
+        });
+        document.getElementById('recon-reset')?.addEventListener('click', resetReconView);
+        document.getElementById('recon-play')?.addEventListener('click', () => {
+            if (this.recon.playing) {
+                this.stopReconAnimation();
+                this.render();
+            } else {
+                this.startReconAnimation();
+            }
+        });
+        document.getElementById('recon-step')?.addEventListener('click', () => {
+            this.stopReconAnimation();
+            if (this.recon.stage !== 'done') this.reconStep();
+            this.stopReconAnimation();
+            this.render();
+        });
+        document.getElementById('recon-skip')?.addEventListener('click', () => {
+            if (this.recon.stage === 'acquire') {
+                this.startDecompose();
+                this.recon.pauseUntil = 0;
+                this.render();
+            }
+        });
+        document.getElementById('recon-speed')?.addEventListener('input', (e) => {
+            this.recon.speed = parseFloat(e.target.value);
+            document.getElementById('recon-speed-val').textContent = `${this.recon.speed.toFixed(2)}×`;
+        });
+
+        // Module E: Slice selection controls
+        const sliceSliders = [
+            ['slice-gz', 'gz', v => `${v} mT/m`],
+            ['slice-duration', 'duration', v => `${v.toFixed(1)} ms`],
+            ['slice-tbw', 'tbw', v => `TBW = ${v}`],
+            ['slice-fc', 'fcKHz', v => `${v.toFixed(1)} kHz`]
+        ];
+        sliceSliders.forEach(([id, key, fmt]) => {
+            document.getElementById(id)?.addEventListener('input', (e) => {
+                this.slice[key] = parseFloat(e.target.value);
+                document.getElementById(id + '-val').textContent = fmt(this.slice[key]);
+                this.render();
+            });
+        });
+
+        // Module D: Frequency encoding controls
+        document.getElementById('freq-object')?.addEventListener('change', (e) => {
+            this.freq.object = e.target.value;
+            this.render();
+        });
+        document.getElementById('freq-gx')?.addEventListener('input', (e) => {
+            this.freq.gx = parseFloat(e.target.value);
+            document.getElementById('freq-gx-val').textContent = `${this.freq.gx.toFixed(1)} mT/m`;
+            this.render();
+        });
+        document.getElementById('freq-bw')?.addEventListener('input', (e) => {
+            this.freq.bwKHz = parseFloat(e.target.value);
+            document.getElementById('freq-bw-val').textContent = `${this.freq.bwKHz} kHz`;
+            this.render();
+        });
+        document.getElementById('freq-n')?.addEventListener('change', (e) => {
+            this.freq.numSamples = parseInt(e.target.value);
+            this.render();
+        });
+        document.getElementById('freq-time')?.addEventListener('input', (e) => {
+            this.freq.t = parseInt(e.target.value) / 1000;
+            this.render();
+        });
+        document.getElementById('freq-play-btn')?.addEventListener('click', () => {
+            if (this.freq.playing) {
+                this.stopFreqAnimation();
+            } else {
+                this.startFreqAnimation();
+            }
+        });
     }
 
     switchModule(module) {
+        const previous = this.currentModule;
         this.currentModule = module;
+
+        // Only the visible module may animate
+        if (previous === 'C' && module !== 'C') this.stopReconAnimation();
+        if (previous === 'D' && module !== 'D') this.stopFreqAnimation();
+        if (previous === 'A' && module !== 'A' && this.isAnimating) this.stopAnimation();
+        const labFrameToggle = document.getElementById('lab-frame-toggle');
+        if (module === 'A' && labFrameToggle?.checked && !this.isAnimating) this.startAnimation();
 
         document.querySelectorAll('.module-tab').forEach(tab => {
             tab.classList.toggle('active', tab.dataset.module === module);
@@ -344,6 +557,10 @@ class SpatialEncodingSimulator {
 
         this.updatePanelTitles();
         this.render();
+
+        if (window.MathJax && MathJax.typesetPromise && controls) {
+            MathJax.typesetPromise([controls]).catch(() => {});
+        }
     }
 
     updatePanelTitles() {
@@ -351,6 +568,32 @@ class SpatialEncodingSimulator {
         const kspaceBadge = document.getElementById('kspace-badge');
         const objectTitle = document.getElementById('object-title');
         const spinBadge = document.getElementById('spin-badge');
+        const spinTitle = document.getElementById('spin-title');
+        const legendBadge = document.getElementById('legend-badge');
+
+        const titles = {
+            A: { spin: '2D Spin Array', legend: 'Cartesian' },
+            B: { spin: '2D Spin Array', legend: 'Cartesian' },
+            C: this.recon.stage === 'acquire'
+                ? { spin: 'Voxel Signals → Σ (Coil)', spinBadge: 'Stage 1: Acquire', legend: 'Readout',
+                    kspace: 'Summed Readout → K-Space', kspaceBadge: 'One sample per Σ', object: 'Phasor Sum = S(kx, ky)' }
+                : { spin: 'Reconstructed Image', spinBadge: 'Stage 2: Decompose', legend: 'Done',
+                    kspace: 'K-Space → Spatial-Frequency Patterns', kspaceBadge: 'Inverse FT', object: 'Component Weight' },
+            D: { spin: 'Object & Spin Phase', spinBadge: 'f(x) = γ̄·Gx·x', legend: 'Readout',
+                 kspace: 'Signal → FFT → Profile', kspaceBadge: '1D Imaging', object: 'Phasor Sum' },
+            E: { spin: 'Resonance vs Position', spinBadge: 'f(z) = γ̄·Gz·z', legend: 'Slice Select',
+                 kspace: 'RF Pulse ↔ Slice Profile', kspaceBadge: 'Fourier Pair', object: 'Slice Geometry' }
+        }[this.currentModule];
+        if (spinTitle) spinTitle.textContent = titles.spin;
+        if (legendBadge) legendBadge.textContent = titles.legend;
+
+        if (['C', 'D', 'E'].includes(this.currentModule)) {
+            if (spinBadge) spinBadge.textContent = titles.spinBadge;
+            if (kspaceTitle) kspaceTitle.textContent = titles.kspace;
+            if (kspaceBadge) kspaceBadge.textContent = titles.kspaceBadge;
+            if (objectTitle) objectTitle.textContent = titles.object;
+            return;
+        }
 
         if (this.currentModule === 'A') {
             if (kspaceTitle) kspaceTitle.textContent = 'Phase Pattern (1D View)';
@@ -429,9 +672,9 @@ class SpatialEncodingSimulator {
 
     // Get current kx position during animated readout
     getAnimatedKx() {
-        // During readout, kx sweeps from -max to +max
-        // animationTime: 0 → 1 maps to kx: -max → +max
-        const kxMax = (this.gxStrength / 10) * 8;
+        // During readout, kx sweeps from -kmax to +kmax (cycles per FOV)
+        // animationTime: 0 → 1 maps to kx: -N/2 → +N/2 (echo at the middle)
+        const kxMax = this.gridSize / 2;
         return (this.animationTime * 2 - 1) * kxMax;
     }
 
@@ -648,73 +891,40 @@ class SpatialEncodingSimulator {
     // ===================== PHASE CALCULATION =====================
 
     calculatePhase(ix, iy, n) {
-        const x = (ix / (n - 1)) * 2 - 1;  // -1 to 1
-        const y = (iy / (n - 1)) * 2 - 1;
-
-        let phase = 0;
-
         if (this.currentModule === 'A') {
-            // Phase encoding (Gy): Applied BEFORE readout, creates fixed phase offset
-            if (this.gyEnabled) {
-                const phaseFactor = (this.gyStrength / 10) * Math.PI;
-                phase += phaseFactor * y;
-            }
-
-            // Frequency encoding (Gx): Applied DURING readout
-            if (this.gxEnabled) {
-                if (this.isAnimating) {
-                    // During animated readout: phase accumulates with time
-                    // kx(t) sweeps from -max to +max as animationTime goes 0→1
-                    // Phase at position x: φ = 2π·kx·x / FOV_norm
-                    const kxMax = 8;
-                    const currentKx = (this.animationTime * 2 - 1) * kxMax;
-                    phase += 2 * Math.PI * currentKx * x / 16;
-                } else {
-                    // Static view: show phase pattern at "end of readout" (kx = max)
-                    const freqFactor = (this.gxStrength / 10) * Math.PI;
-                    phase += freqFactor * x;
-                }
-            }
-        } else {
-            // Module B: k-space position determines phase
-            phase = 2 * Math.PI * (this.kxPosition * x + this.kyPosition * y) / 16;
+            // Gy (phase encoding): applied BEFORE readout → fixed phase imprint (ky)
+            // Gx (frequency encoding): applied DURING readout → kx grows with time
+            const { kx, ky } = this.getModuleAK();
+            return this.kPhase(kx, ky, ix, iy, n);
         }
-
-        return phase;
+        // Module B: k-space position determines phase
+        return this.kPhase(this.kxPosition, this.kyPosition, ix, iy, n);
     }
 
     calculateSignal() {
-        // Calculate the net signal (sum of all spin vectors)
-        // Uses Fourier convention: S = Σ ρ·e^(-i·phase)
-        const n = this.gridSize;
-        const density = this.getObjectDensity();
-
-        let realSum = 0;
-        let imagSum = 0;
-
-        for (let iy = 0; iy < n; iy++) {
-            for (let ix = 0; ix < n; ix++) {
-                const rho = density[iy][ix];
-                if (rho < 0.01) continue;
-
-                const phase = this.calculatePhase(ix, iy, n);
-                // Fourier convention: e^(-iφ) = cos(φ) - i·sin(φ)
-                realSum += rho * Math.cos(phase);
-                imagSum -= rho * Math.sin(phase);
-            }
+        // Net signal (sum of all spin vectors), Fourier convention S = Σ ρ·e^(-i·phase)
+        if (this.currentModule === 'A') {
+            const { kx, ky } = this.getModuleAK();
+            return this.signalAt(kx, ky);
         }
-
-        return {
-            real: realSum,
-            imag: imagSum,
-            magnitude: Math.sqrt(realSum * realSum + imagSum * imagSum),
-            phase: Math.atan2(imagSum, realSum)
-        };
+        return this.signalAt(this.kxPosition, this.kyPosition);
     }
 
     // ===================== RENDERING =====================
 
     render() {
+        if (this.currentModule === 'C') {
+            this.renderReconModule();
+            return;
+        }
+        if (this.currentModule === 'E') {
+            this.renderSliceModule();
+            return;
+        }
+        if (this.currentModule === 'D') {
+            this.renderFreqModule();
+            return;
+        }
         this.renderSpinArray();
         this.renderPhaseLegend();
         this.renderKSpaceOrSignal();
@@ -951,7 +1161,7 @@ class SpatialEncodingSimulator {
                         }
                     } else {
                         // Module B: Show current ky position
-                        const phaseAmp = amp * (this.kyPosition / 8);
+                        const phaseAmp = amp * (this.kyPosition / (this.gridSize / 2));
                         ctx.strokeStyle = ch.color;
                         ctx.fillStyle = ch.color;
                         ctx.lineWidth = 2;
@@ -1009,8 +1219,7 @@ class SpatialEncodingSimulator {
                                 ctx.lineWidth = 1.5;
                                 ctx.stroke();
                                 // kx label
-                                const kxMax = 8;
-                                const currentKx = (animProgress * 2 - 1) * kxMax;
+                                const currentKx = this.getAnimatedKx();
                                 ctx.font = 'bold 7px Inter';
                                 ctx.fillStyle = '#22d3ee';
                                 ctx.textAlign = 'center';
@@ -1059,7 +1268,7 @@ class SpatialEncodingSimulator {
                         this.drawTrapezoid(ctx, xStart + plotW * 0.35, y, plotW * 0.08, -amp * 0.5, ch.color);
                         this.drawTrapezoid(ctx, xStart + plotW * 0.55, y, plotW * 0.35, amp, ch.color);
                         // kx marker
-                        const kxPos = (this.kxPosition + 8) / 16;
+                        const kxPos = (this.kxPosition + this.gridSize / 2) / this.gridSize;
                         const markerX = xStart + plotW * 0.55 + plotW * 0.35 * kxPos;
                         ctx.beginPath();
                         ctx.arc(markerX, y - amp - 5, 4, 0, 2 * Math.PI);
@@ -1250,45 +1459,21 @@ class SpatialEncodingSimulator {
         ctx.stroke();
 
         // Calculate signal S(kx, ky) using proper Fourier transform
-        // S(kx, ky) = Σ ρ(x,y) · e^(-i·2π·(kx·x + ky·y))
-        const numPoints = 80;
+        // S(kx, ky) = Σ ρ(x,y) · e^(-i·2π·(kx·x + ky·y)), k in cycles per FOV
+        const kxMax = n / 2;
+        const numPoints = Math.max(81, 20 * kxMax + 1);  // ~10 points per k unit → smooth sinc echo
         const signalData = [];
         const density = this.getObjectDensity();
 
         // Determine ky based on Gy setting (phase encode step)
-        const kyValue = this.gyEnabled ? (this.gyStrength / 10) * 8 : 0;
+        const kyValue = this.gyEnabled ? this.gyStrength / 10 : 0;
 
-        // Sweep through kx values (like during readout)
+        // Sweep through kx values (like during readout): -N/2 → +N/2
         for (let i = 0; i < numPoints; i++) {
             const t = (i / (numPoints - 1)) * 2 - 1;  // -1 to 1
-            const kx = t * 8;  // k-space position: -8 to +8
-
-            let realSum = 0;
-            let imagSum = 0;
-
-            for (let iy = 0; iy < n; iy++) {
-                for (let ix = 0; ix < n; ix++) {
-                    const rho = density[iy][ix];
-                    if (rho < 0.01) continue;
-
-                    const x = (ix / (n - 1)) * 2 - 1;  // -1 to 1
-                    const y = (iy / (n - 1)) * 2 - 1;
-
-                    // Standard k-space phase: φ = 2π(kx·x + ky·y) / FOV_norm
-                    // FOV normalization: divide by 16 since k ranges -8 to +8 and x ranges -1 to +1
-                    const phase = 2 * Math.PI * (kx * x + kyValue * y) / 16;
-
-                    realSum += rho * Math.cos(phase);
-                    imagSum -= rho * Math.sin(phase);  // Negative for e^(-iφ)
-                }
-            }
-
-            signalData.push({
-                kx,
-                real: realSum,
-                imag: imagSum,
-                mag: Math.sqrt(realSum * realSum + imagSum * imagSum)
-            });
+            const kx = t * kxMax;
+            const s = this.signalAt(kx, kyValue, density);
+            signalData.push({ kx, real: s.real, imag: s.imag, mag: s.magnitude });
         }
 
         // Find max for scaling - scale each component independently for visibility
@@ -1326,8 +1511,9 @@ class SpatialEncodingSimulator {
         });
         ctx.stroke();
 
-        // Add note if imaginary is scaled differently
-        if (!imagIsSignificant && maxImag > 0.01) {
+        // Add note if imaginary is scaled differently (skip when Imag is numerically zero)
+        const trueMaxImag = Math.max(...signalData.map(s => Math.abs(s.imag)));
+        if (!imagIsSignificant && trueMaxImag > maxReal * 1e-6) {
             ctx.font = '7px Inter';
             ctx.fillStyle = '#f59e0b';
             ctx.textAlign = 'right';
@@ -1339,8 +1525,7 @@ class SpatialEncodingSimulator {
         if (this.gxEnabled && this.isAnimating) {
             // kx sweeps from -max to +max as time progresses during readout
             // animationTime: 0→1 maps to kx: -kxMax → +kxMax
-            const kxMax = 8;  // Full k-space range
-            const currentKx = (this.animationTime * 2 - 1) * kxMax;
+            const currentKx = this.getAnimatedKx();
             const markerX = margin.left + this.animationTime * plotW;
 
             // Vertical line at current kx (time position)
@@ -1379,7 +1564,7 @@ class SpatialEncodingSimulator {
             ctx.font = '9px Inter';
             ctx.fillStyle = '#64748b';
             ctx.textAlign = 'center';
-            ctx.fillText('Toggle "Lab Frame" to animate readout sweep →', margin.left + plotW / 2, graphY - graphH / 2 - 5);
+            ctx.fillText('Toggle "Animate Readout" to sweep kx →', margin.left + plotW / 2, graphY - graphH / 2 - 5);
         }
 
         // Legend
@@ -1406,11 +1591,11 @@ class SpatialEncodingSimulator {
         ctx.font = '8px Inter';
         ctx.fillStyle = '#64748b';
         ctx.textAlign = 'left';
-        ctx.fillText('-kx (t=0)', margin.left, graphY + graphH / 2 + 12);
+        ctx.fillText(`kx = -${kxMax} (start)`, margin.left, graphY + graphH / 2 + 12);
         ctx.textAlign = 'right';
-        ctx.fillText('+kx (t=TE)', margin.left + plotW, graphY + graphH / 2 + 12);
+        ctx.fillText(`kx = +${kxMax} (end)`, margin.left + plotW, graphY + graphH / 2 + 12);
         ctx.textAlign = 'center';
-        ctx.fillText('0 (echo)', margin.left + plotW / 2, graphY + graphH / 2 + 12);
+        ctx.fillText('0 (echo, t = TE)', margin.left + plotW / 2, graphY + graphH / 2 + 12);
 
         // Show ky value if Gy is active
         if (this.gyEnabled) {
@@ -1473,8 +1658,10 @@ class SpatialEncodingSimulator {
         }
 
         // Draw axes at center
-        const centerX = offsetX + 8 * cellSize + cellSize / 2;
-        const centerY = offsetY + 8 * cellSize + cellSize / 2;
+        // DC (k = 0) sits at index N/2 of the -N/2 .. N/2-1 grid
+        const half = this.kspaceSize / 2;
+        const centerX = offsetX + half * cellSize + cellSize / 2;
+        const centerY = offsetY + (this.kspaceSize - 1 - half) * cellSize + cellSize / 2;
         ctx.strokeStyle = '#f59e0b';
         ctx.lineWidth = 1;
         ctx.beginPath();
@@ -1485,7 +1672,7 @@ class SpatialEncodingSimulator {
         ctx.stroke();
 
         // Highlight current ky LINE (Cartesian sampling line)
-        const currentIky = this.kyPosition + 8;
+        const currentIky = this.kyPosition + half;
         const lineY = offsetY + (this.kspaceSize - 1 - currentIky) * cellSize;
 
         ctx.fillStyle = 'rgba(239, 68, 68, 0.2)';
@@ -1510,7 +1697,7 @@ class SpatialEncodingSimulator {
         ctx.fill();
 
         // Highlight current kx position
-        const currentIkx = this.kxPosition + 8;
+        const currentIkx = this.kxPosition + half;
         const highlightX = offsetX + currentIkx * cellSize;
 
         ctx.beginPath();
@@ -1703,25 +1890,14 @@ class SpatialEncodingSimulator {
         const n = this.gridSize;
         const density = this.getObjectDensity();
 
-        // Get current kx for animation
-        const kyValue = this.gyEnabled ? (this.gyStrength / 10) * 8 : 0;
-        const currentKx = this.isAnimating ? (this.animationTime * 2 - 1) * 8 :
-                          (this.gxEnabled ? (this.gxStrength / 10) * 8 : 0);
+        // Current k-space position (same as the phase spheres)
+        const { kx: currentKx, ky: kyValue } = this.getModuleAK();
 
-        // Calculate current signal (same convention as calculateSignalAtKSpace)
-        let realSum = 0, imagSum = 0;
-        for (let iy = 0; iy < n; iy++) {
-            for (let ix = 0; ix < n; ix++) {
-                const rho = density[iy][ix];
-                if (rho < 0.01) continue;
-                const x = (ix / (n - 1)) * 2 - 1;
-                const y = (iy / (n - 1)) * 2 - 1;
-                const phase = 2 * Math.PI * (currentKx * x + kyValue * y) / 16;
-                realSum += rho * Math.cos(phase);
-                imagSum += rho * Math.sin(phase);  // Same sign as calculateSignalAtKSpace
-            }
-        }
-        const magnitude = Math.sqrt(realSum * realSum + imagSum * imagSum);
+        // Current signal S = Σ ρ·e^(-iφ)
+        const signal = this.signalAt(currentKx, kyValue, density);
+        const realSum = signal.real;
+        const imagSum = signal.imag;
+        const magnitude = signal.magnitude;
 
         // Calculate max signal (at kx=0, ky=0) for normalization
         let maxSignal = 0;
@@ -1744,13 +1920,10 @@ class SpatialEncodingSimulator {
         ctx.fillStyle = '#f59e0b';
         ctx.fillText('Why Signal Changes', w / 2, 14);
 
-        // Draw sample arrows showing phase spread
+        // Draw spin arrows showing phase spread
         const arrowCx = w / 2;
         const arrowCy = margin + 25 + arrowAreaHeight / 2;
         const arrowRadius = Math.min(arrowAreaHeight / 2 - 10, w / 2 - 20);
-
-        // Sample 8 positions across x to show phase variation
-        const numArrows = 8;
         const arrowLength = arrowRadius * 0.7;
 
         // Draw faint circle for reference
@@ -1760,30 +1933,26 @@ class SpatialEncodingSimulator {
         ctx.arc(arrowCx, arrowCy, arrowRadius * 0.85, 0, 2 * Math.PI);
         ctx.stroke();
 
-        // Draw individual spin arrows (sample from middle row)
+        // One arrow per voxel of the middle row (sampling fewer voxels would alias at high k:
+        // arrows would look aligned while their true sum cancels)
         const midRow = Math.floor(n / 2);
-        const sampleIndices = [];
-        for (let i = 0; i < numArrows; i++) {
-            sampleIndices.push(Math.floor(i * (n - 1) / (numArrows - 1)));
-        }
+        for (let ix = 0; ix < n; ix++) {
+            if (density[midRow][ix] < 0.01) continue;
+            const phase = this.kPhase(currentKx, kyValue, ix, midRow, n);
 
-        // Draw each sample arrow
-        sampleIndices.forEach((ix, i) => {
-            const x = (ix / (n - 1)) * 2 - 1;
-            const phase = 2 * Math.PI * (currentKx * x + kyValue * 0) / 16;
-
+            // Screen y points down: spin phasor e^(-iφ) drawn with Im up → dy = +sin(φ)
             const dx = Math.cos(phase) * arrowLength * 0.4;
-            const dy = Math.sin(phase) * arrowLength * 0.4;  // Consistent sign convention
+            const dy = Math.sin(phase) * arrowLength * 0.4;
 
             // Arrow color based on position (left=cyan, right=orange)
-            const t = i / (numArrows - 1);
+            const t = ix / (n - 1);
             const r = Math.floor(80 + t * 175);
             const g = Math.floor(200 - t * 50);
             const b = Math.floor(220 - t * 150);
 
-            ctx.strokeStyle = `rgb(${r}, ${g}, ${b})`;
-            ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
-            ctx.lineWidth = 2;
+            ctx.strokeStyle = `rgba(${r}, ${g}, ${b}, 0.85)`;
+            ctx.fillStyle = `rgba(${r}, ${g}, ${b}, 0.85)`;
+            ctx.lineWidth = n > 16 ? 1.2 : 2;
 
             ctx.beginPath();
             ctx.moveTo(arrowCx, arrowCy);
@@ -1792,17 +1961,18 @@ class SpatialEncodingSimulator {
 
             // Arrowhead
             const angle = Math.atan2(dy, dx);
+            const head = n > 16 ? 4 : 6;
             ctx.beginPath();
             ctx.moveTo(arrowCx + dx, arrowCy + dy);
-            ctx.lineTo(arrowCx + dx - 6 * Math.cos(angle - 0.4), arrowCy + dy - 6 * Math.sin(angle - 0.4));
-            ctx.lineTo(arrowCx + dx - 6 * Math.cos(angle + 0.4), arrowCy + dy - 6 * Math.sin(angle + 0.4));
+            ctx.lineTo(arrowCx + dx - head * Math.cos(angle - 0.4), arrowCy + dy - head * Math.sin(angle - 0.4));
+            ctx.lineTo(arrowCx + dx - head * Math.cos(angle + 0.4), arrowCy + dy - head * Math.sin(angle + 0.4));
             ctx.closePath();
             ctx.fill();
-        });
+        }
 
-        // Draw resultant vector (sum) - thick white arrow
+        // Draw resultant vector (sum) - thick white arrow (Im up on screen)
         const sumDx = (realSum / maxSignal) * arrowLength;
-        const sumDy = (imagSum / maxSignal) * arrowLength;  // Consistent sign
+        const sumDy = (-imagSum / maxSignal) * arrowLength;
 
         if (magnitude > 0.1) {
             ctx.strokeStyle = '#fff';
@@ -1913,6 +2083,2006 @@ class SpatialEncodingSimulator {
         ctx.font = '10px Inter';
         ctx.textAlign = 'center';
         ctx.fillText('Object: ' + this.objectType, w / 2, h - 5);
+    }
+
+    // ===================== SHARED HELPERS (MODULES C, D & E) =====================
+
+    // Clear a panel canvas and return its CSS-pixel size
+    beginPanel(ctx) {
+        const dpr = window.devicePixelRatio || 1;
+        const w = ctx.canvas.width / dpr;
+        const h = ctx.canvas.height / dpr;
+        ctx.fillStyle = '#0a0a0a';
+        ctx.fillRect(0, 0, w, h);
+        return { w, h };
+    }
+
+    // Arrow from (x0, y0) to (x1, y1)
+    drawArrow(ctx, x0, y0, x1, y1, color, lineWidth = 2, head = 7) {
+        ctx.strokeStyle = color;
+        ctx.fillStyle = color;
+        ctx.lineWidth = lineWidth;
+        ctx.beginPath();
+        ctx.moveTo(x0, y0);
+        ctx.lineTo(x1, y1);
+        ctx.stroke();
+        const len = Math.hypot(x1 - x0, y1 - y0);
+        if (len < 2) return;
+        const angle = Math.atan2(y1 - y0, x1 - x0);
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x1 - head * Math.cos(angle - 0.4), y1 - head * Math.sin(angle - 0.4));
+        ctx.lineTo(x1 - head * Math.cos(angle + 0.4), y1 - head * Math.sin(angle + 0.4));
+        ctx.closePath();
+        ctx.fill();
+    }
+
+    // Channel layout shared by the Module C/D/E pulse sequence diagrams
+    drawSequenceChannels(ctx, w, h, title, active) {
+        const margin = { left: 45, right: 15, top: 20, bottom: 15 };
+        const plotW = w - margin.left - margin.right;
+        const plotH = h - margin.top - margin.bottom;
+        const names = [['RF', '#f59e0b'], ['Gz', '#10b981'], ['Gy', '#ef4444'], ['Gx', '#a855f7'], ['Signal', '#22d3ee']];
+        const channelHeight = plotH / names.length;
+        const rows = {};
+        names.forEach(([name, color], i) => {
+            const y = margin.top + i * channelHeight + channelHeight * 0.5;
+            rows[name] = { y, color, amp: channelHeight * 0.35 };
+            ctx.font = '9px Inter';
+            ctx.fillStyle = active.includes(name) ? color : '#334155';
+            ctx.textAlign = 'right';
+            ctx.fillText(name, margin.left - 5, y + 3);
+            ctx.strokeStyle = '#334155';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(margin.left, y);
+            ctx.lineTo(margin.left + plotW, y);
+            ctx.stroke();
+        });
+
+        // Time axis
+        ctx.strokeStyle = '#475569';
+        ctx.beginPath();
+        ctx.moveTo(margin.left, h - margin.bottom);
+        ctx.lineTo(margin.left + plotW, h - margin.bottom);
+        ctx.stroke();
+        ctx.font = '8px Inter';
+        ctx.fillStyle = '#64748b';
+        ctx.textAlign = 'center';
+        ctx.fillText('time', margin.left + plotW - 15, h - 3);
+
+        ctx.font = 'bold 8px Inter';
+        ctx.fillStyle = '#94a3b8';
+        ctx.textAlign = 'left';
+        ctx.fillText(title, margin.left, margin.top - 8);
+        return { margin, plotW, rows };
+    }
+
+    // Position colour (left = cyan, right = orange), same direction as the vector-sum arrows
+    xColor(t, alpha = 1) {
+        t = Math.max(0, Math.min(1, t));
+        return `hsla(${190 - t * 160}, 85%, 60%, ${alpha})`;
+    }
+
+    // ===================== MODULE C: READOUT → K-SPACE → IMAGE =====================
+
+    // Small objects on an N×N grid (asymmetric ones show that k-space phase matters)
+    getReconDensity() {
+        const n = this.recon.n;
+        const rho = [];
+        for (let iy = 0; iy < n; iy++) {
+            const row = [];
+            for (let ix = 0; ix < n; ix++) {
+                const u = (ix + 0.5) / n;
+                const v = (iy + 0.5) / n;
+                let value = 0;
+                switch (this.recon.object) {
+                    case 'L':
+                        if ((u > 0.2 && u < 0.38 && v > 0.15 && v < 0.82) ||
+                            (u > 0.2 && u < 0.75 && v > 0.7 && v < 0.82)) value = 1;
+                        break;
+                    case 'dots2':
+                        if (Math.abs(u - 0.3) < 0.12 && Math.abs(v - 0.3) < 0.12) value = 1;
+                        if (Math.abs(u - 0.7) < 0.12 && Math.abs(v - 0.62) < 0.12) value = 0.5;
+                        break;
+                    case 'point':
+                        if (ix === Math.round(0.62 * n) && iy === Math.round(0.3 * n)) value = 1;
+                        break;
+                    case 'circle':
+                        if ((u - 0.5) ** 2 + (v - 0.5) ** 2 < 0.32 ** 2) value = 1;
+                        break;
+                    case 'line-v':
+                        if (Math.abs(u - 0.5) < 0.1 && v > 0.1 && v < 0.9) value = 1;
+                        break;
+                }
+                row.push(value);
+            }
+            rho.push(row);
+        }
+        return rho;
+    }
+
+    resetRecon() {
+        const r = this.recon;
+        const n = r.n;
+        r.stage = 'acquire';
+        r.line = 0;
+        r.sample = -1;
+        r.kspace = Array.from({ length: n }, () => new Array(n).fill(null));
+        r.image = Array.from({ length: n }, () => Array.from({ length: n }, () => ({ re: 0, im: 0 })));
+        r.order = [];
+        r.compIndex = 0;
+        r.flash = null;
+        r.accumulator = 0;
+        r.pauseUntil = 0;
+        r.density = this.getReconDensity();
+        r.total = r.density.reduce((acc, row) => acc + row.reduce((a, v) => a + v, 0), 0);
+    }
+
+    // One coil sample: S(kx, ky) = Σ ρ·e^(-iφ) (same convention as Module B)
+    reconSignal(kx, ky) {
+        const r = this.recon;
+        const n = r.n;
+        let re = 0, im = 0;
+        for (let iy = 0; iy < n; iy++) {
+            for (let ix = 0; ix < n; ix++) {
+                const rho = r.density[iy][ix];
+                if (rho === 0) continue;
+                const phase = this.kPhase(kx, ky, ix, iy, n);
+                re += rho * Math.cos(phase);
+                im -= rho * Math.sin(phase);
+            }
+        }
+        return { re, im };
+    }
+
+    isAcquisitionComplete() {
+        const r = this.recon;
+        return r.line === r.n - 1 && r.sample === r.n - 1;
+    }
+
+    // k-space position of the readout cursor (before the first sample: start of line)
+    getReconCursorK() {
+        const r = this.recon;
+        const half = r.n / 2;
+        return { kx: Math.max(0, r.sample) - half, ky: r.line - half };
+    }
+
+    startDecompose() {
+        const r = this.recon;
+        const n = r.n;
+        const half = n / 2;
+        // Fill any samples not yet acquired ("Skip to decompose")
+        for (let iky = 0; iky < n; iky++) {
+            for (let ikx = 0; ikx < n; ikx++) {
+                if (!r.kspace[iky][ikx]) r.kspace[iky][ikx] = this.reconSignal(ikx - half, iky - half);
+            }
+        }
+        r.line = n - 1;
+        r.sample = n - 1;
+        r.stage = 'decompose';
+        r.compIndex = 0;
+        r.image = Array.from({ length: n }, () => Array.from({ length: n }, () => ({ re: 0, im: 0 })));
+        // Center of k-space first: increasing |k|, then by angle for a tidy sweep
+        const order = [];
+        for (let iky = 0; iky < n; iky++) {
+            for (let ikx = 0; ikx < n; ikx++) {
+                const kx = ikx - half, ky = iky - half;
+                order.push({ ikx, iky, kx, ky, k2: kx * kx + ky * ky, angle: Math.atan2(ky, kx) });
+            }
+        }
+        order.sort((a, b) => a.k2 - b.k2 || a.angle - b.angle);
+        r.order = order;
+        this.updatePanelTitles();
+    }
+
+    // Inverse FT, one term: image += S(k)·e^(+iφ) / N²
+    addReconComponent(c) {
+        const r = this.recon;
+        const n = r.n;
+        const S = r.kspace[c.iky][c.ikx];
+        for (let iy = 0; iy < n; iy++) {
+            for (let ix = 0; ix < n; ix++) {
+                const phase = this.kPhase(c.kx, c.ky, ix, iy, n);
+                const cos = Math.cos(phase), sin = Math.sin(phase);
+                r.image[iy][ix].re += (S.re * cos - S.im * sin) / (n * n);
+                r.image[iy][ix].im += (S.re * sin + S.im * cos) / (n * n);
+            }
+        }
+    }
+
+    // Advance by one event: one readout sample (stage 1) or one component (stage 2)
+    reconStep(now = performance.now()) {
+        const r = this.recon;
+        const n = r.n;
+        if (r.stage === 'acquire') {
+            if (this.isAcquisitionComplete()) {
+                this.startDecompose();
+                r.pauseUntil = now + 700 / r.speed;
+                return;
+            }
+            r.sample++;
+            if (r.sample >= n) {
+                r.line++;
+                r.sample = 0;
+            }
+            const { kx, ky } = this.getReconCursorK();
+            r.kspace[r.line][r.sample] = this.reconSignal(kx, ky);
+            r.flash = { ikx: r.sample, iky: r.line, time: now };
+            if (this.isAcquisitionComplete()) r.pauseUntil = now + 1200 / r.speed;
+        } else if (r.stage === 'decompose') {
+            this.addReconComponent(r.order[r.compIndex]);
+            r.compIndex++;
+            if (r.compIndex >= n * n) r.stage = 'done';
+        }
+    }
+
+    // Events per second at 1× speed: slow at first so each step can be followed, then fast-forward
+    getReconRate() {
+        const r = this.recon;
+        if (r.stage === 'acquire') {
+            if (r.line < 2) return 7;
+            return r.n > 8 ? 70 : 40;
+        }
+        if (r.compIndex < 10) return 4;
+        return r.n > 8 ? 25 : 15;
+    }
+
+    isReconFastForward() {
+        const r = this.recon;
+        return (r.stage === 'acquire' && r.line >= 2 && !this.isAcquisitionComplete()) ||
+               (r.stage === 'decompose' && r.compIndex >= 10);
+    }
+
+    startReconAnimation() {
+        const r = this.recon;
+        if (r.playing) return;
+        if (r.stage === 'done') {
+            this.resetRecon();
+            this.updatePanelTitles();
+        }
+        r.playing = true;
+        r.lastTime = performance.now();
+        r.accumulator = 0;
+        const btn = document.getElementById('recon-play');
+        if (btn) btn.innerHTML = '&#10074;&#10074; Pause';
+        const loop = (now) => {
+            if (!r.playing) return;
+            const dt = Math.min(0.1, (now - r.lastTime) / 1000);
+            r.lastTime = now;
+            if (now >= r.pauseUntil) {
+                r.accumulator += dt * this.getReconRate() * r.speed;
+                let guard = 0;
+                while (r.accumulator >= 1 && r.stage !== 'done' && guard++ < 50) {
+                    r.accumulator -= 1;
+                    this.reconStep(now);
+                    if (r.pauseUntil > now) {
+                        r.accumulator = 0;
+                        break;
+                    }
+                }
+            }
+            if (r.stage === 'done') {
+                this.stopReconAnimation();
+                this.render();
+                return;
+            }
+            this.render();
+            r.animationId = requestAnimationFrame(loop);
+        };
+        r.animationId = requestAnimationFrame(loop);
+    }
+
+    stopReconAnimation() {
+        const r = this.recon;
+        r.playing = false;
+        if (r.animationId) {
+            cancelAnimationFrame(r.animationId);
+            r.animationId = null;
+        }
+        const btn = document.getElementById('recon-play');
+        if (btn) btn.innerHTML = r.stage === 'done' ? '&#8635; Replay' : '&#9654; Play';
+    }
+
+    updateReconStageText() {
+        const el = document.getElementById('recon-stage');
+        if (!el) return;
+        const r = this.recon;
+        const n = r.n;
+        const ff = this.isReconFastForward() && r.playing ? ' <em>&#9193; fast-forward</em>' : '';
+        const { kx, ky } = this.getReconCursorK();
+        if (r.stage === 'acquire') {
+            if (r.sample < 0 && r.line === 0) {
+                el.innerHTML = `Ready: press Play to acquire line k<sub>y</sub> = ${-n / 2}`;
+            } else if (this.isAcquisitionComplete()) {
+                el.innerHTML = `K-space full: ${n * n} samples from ${n} readouts. Next: decompose`;
+            } else {
+                el.innerHTML = `Acquiring line k<sub>y</sub> = ${ky} (${r.line + 1}/${n})<br>` +
+                    `sample k<sub>x</sub> = ${kx} (${r.sample + 1}/${n})${ff}`;
+            }
+        } else if (r.stage === 'decompose') {
+            const c = r.order[Math.max(0, r.compIndex - 1)];
+            el.innerHTML = r.compIndex === 0
+                ? `Decomposing: inverse FT, 0 / ${n * n} components`
+                : `Decomposing: ${r.compIndex} / ${n * n} components<br>adding k = (${c.kx}, ${c.ky})${ff}`;
+        } else {
+            el.innerHTML = `Done: image rebuilt from all ${n * n} k-space components &#10003;`;
+        }
+    }
+
+    renderReconModule() {
+        this.updateReconStageText();
+        const acquiring = this.recon.stage === 'acquire';
+        if (this.spinCtx) acquiring ? this.renderReconVoxels(this.spinCtx) : this.renderReconImage(this.spinCtx);
+        if (this.legendCtx) this.renderReconSequence(this.legendCtx);
+        if (this.kspaceCtx) acquiring ? this.renderReconAcquire(this.kspaceCtx) : this.renderReconDecompose(this.kspaceCtx);
+        if (this.objectCtx) acquiring ? this.renderReconPhasors(this.objectCtx) : this.renderReconWeight(this.objectCtx);
+    }
+
+    // Draw the N×N k-space matrix (log magnitude), ky up; returns layout for overlays
+    drawReconKSpace(ctx, x0, y0, size, options = {}) {
+        const r = this.recon;
+        const n = r.n;
+        const cell = size / n;
+        const sMax = Math.max(1e-9, r.total);
+        const cellX = ikx => x0 + ikx * cell;
+        const cellY = iky => y0 + (n - 1 - iky) * cell;
+        for (let iky = 0; iky < n; iky++) {
+            for (let ikx = 0; ikx < n; ikx++) {
+                const S = r.kspace[iky][ikx];
+                if (S) {
+                    const mag = Math.sqrt(S.re * S.re + S.im * S.im) / sMax;
+                    const b = Math.floor(255 * Math.log10(1 + 100 * mag) / Math.log10(101));
+                    ctx.fillStyle = `rgb(${b}, ${b}, ${b})`;
+                } else {
+                    ctx.fillStyle = '#141b2d';
+                }
+                ctx.fillRect(cellX(ikx), cellY(iky), cell, cell);
+                if (options.dim && options.dim(ikx, iky)) {
+                    ctx.fillStyle = 'rgba(10, 10, 10, 0.72)';
+                    ctx.fillRect(cellX(ikx), cellY(iky), cell, cell);
+                }
+            }
+        }
+        ctx.strokeStyle = 'rgba(71, 85, 105, 0.45)';
+        ctx.lineWidth = 0.5;
+        for (let i = 0; i <= n; i++) {
+            ctx.beginPath();
+            ctx.moveTo(x0 + i * cell, y0);
+            ctx.lineTo(x0 + i * cell, y0 + size);
+            ctx.moveTo(x0, y0 + i * cell);
+            ctx.lineTo(x0 + size, y0 + i * cell);
+            ctx.stroke();
+        }
+        // k = 0 cross-hair
+        ctx.strokeStyle = 'rgba(245, 158, 11, 0.5)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(cellX(n / 2) + cell / 2, y0);
+        ctx.lineTo(cellX(n / 2) + cell / 2, y0 + size);
+        ctx.moveTo(x0, cellY(n / 2) + cell / 2);
+        ctx.lineTo(x0 + size, cellY(n / 2) + cell / 2);
+        ctx.stroke();
+        ctx.font = '9px Inter';
+        ctx.fillStyle = '#a855f7';
+        ctx.textAlign = 'center';
+        ctx.fillText(`kx → (${-n / 2} … ${n / 2 - 1})`, x0 + size / 2, y0 + size + 12);
+        ctx.save();
+        ctx.translate(x0 - 6, y0 + size * 0.2);
+        ctx.rotate(-Math.PI / 2);
+        ctx.fillStyle = '#ef4444';
+        ctx.fillText('ky →', 0, 0);
+        ctx.restore();
+        return { cell, cellX, cellY };
+    }
+
+    renderReconVoxels(ctx) {
+        const { w, h } = this.beginPanel(ctx);
+        const r = this.recon;
+        const n = r.n;
+        const half = n / 2;
+        const { kx: curKx, ky } = this.getReconCursorK();
+        const now = performance.now();
+        const flashAge = r.flash ? now - r.flash.time : Infinity;
+
+        ctx.font = 'bold 11px Inter';
+        ctx.fillStyle = '#f59e0b';
+        ctx.textAlign = 'left';
+        ctx.fillText(w < 640 ? `Each voxel's signal (ky = ${ky})` : `Each voxel's own signal during this readout (Re part), line ky = ${ky}`, 14, 18);
+
+        const gridTop = 30;
+        const gridSize = Math.min(h - gridTop - 26, w * 0.6);
+        const gridLeft = 24;
+        const cell = gridSize / n;
+        const nodeX = gridLeft + gridSize + Math.max(60, (w - gridLeft - gridSize) * 0.38);
+        const nodeY = gridTop + gridSize / 2;
+
+        // Lines from every voxel to the Σ node (brighten briefly when a sample is taken)
+        const pulse = flashAge < 350 ? 1 - flashAge / 350 : 0;
+        for (let iy = 0; iy < n; iy++) {
+            for (let ix = 0; ix < n; ix++) {
+                if (r.density[iy][ix] === 0) continue;
+                ctx.strokeStyle = this.xColor(ix / (n - 1), 0.12 + 0.45 * pulse);
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                ctx.moveTo(gridLeft + (ix + 0.5) * cell, gridTop + (iy + 0.5) * cell);
+                ctx.lineTo(nodeX, nodeY);
+                ctx.stroke();
+            }
+        }
+
+        // Voxels with their mini time series: Re{ρ·e^(-i2π(kx·x + ky·y))} along the readout
+        const pad = Math.max(2, cell * 0.08);
+        const numPts = Math.max(24, 4 * n);
+        for (let iy = 0; iy < n; iy++) {
+            for (let ix = 0; ix < n; ix++) {
+                const rho = r.density[iy][ix];
+                const cx0 = gridLeft + ix * cell;
+                const cy0 = gridTop + iy * cell;
+                ctx.fillStyle = rho > 0 ? `rgba(148, 163, 184, ${0.08 + 0.12 * rho})` : '#0d1117';
+                ctx.fillRect(cx0 + 0.5, cy0 + 0.5, cell - 1, cell - 1);
+                if (rho === 0) continue;
+                const midY = cy0 + cell / 2;
+                const amp = (cell / 2 - pad) * rho;
+                const kxToX = kx => cx0 + pad + (kx + half) / (n - 1) * (cell - 2 * pad);
+                const value = kx => rho * Math.cos(this.kPhase(kx, ky, ix, iy, n));
+                const color = this.xColor(ix / (n - 1));
+                // Full line faint, acquired part bright
+                [[-half, half - 1, 0.3], [-half, Math.max(-half, curKx), 1]].forEach(([k0, k1, alpha]) => {
+                    if (alpha === 1 && r.sample < 0) return;
+                    ctx.beginPath();
+                    const steps = Math.max(2, Math.round(numPts * (k1 - k0) / (n - 1)));
+                    for (let i = 0; i <= steps; i++) {
+                        const kx = k0 + (k1 - k0) * i / steps;
+                        const py = midY - (value(kx) / rho) * amp;
+                        if (i === 0) ctx.moveTo(kxToX(kx), py); else ctx.lineTo(kxToX(kx), py);
+                    }
+                    ctx.strokeStyle = this.xColor(ix / (n - 1), alpha);
+                    ctx.lineWidth = alpha === 1 ? 1.4 : 1;
+                    ctx.stroke();
+                });
+                if (r.sample >= 0) {
+                    ctx.beginPath();
+                    ctx.arc(kxToX(curKx), midY - (value(curKx) / rho) * amp, Math.max(1.5, cell * 0.06), 0, 2 * Math.PI);
+                    ctx.fillStyle = color;
+                    ctx.fill();
+                }
+            }
+        }
+
+        // Σ node (the receiver coil only measures the sum)
+        ctx.beginPath();
+        ctx.arc(nodeX, nodeY, 22, 0, 2 * Math.PI);
+        ctx.fillStyle = `rgba(34, 211, 238, ${0.15 + 0.5 * pulse})`;
+        ctx.fill();
+        ctx.strokeStyle = '#22d3ee';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+        ctx.font = 'bold 20px Inter';
+        ctx.fillStyle = '#ffffff';
+        ctx.textAlign = 'center';
+        ctx.fillText('Σ', nodeX, nodeY + 7);
+        ctx.font = '9px Inter';
+        ctx.fillStyle = '#94a3b8';
+        if (w < 640) {
+            ctx.textAlign = 'center';
+            ctx.fillText('coil = sum only', nodeX, nodeY - 28);
+        } else {
+            ctx.textAlign = 'left';
+            // Backing box so the converging voxel lines don't run through the text
+            ctx.fillStyle = 'rgba(10, 10, 10, 0.9)';
+            ctx.fillRect(nodeX + 23, nodeY - 32, 62, 25);
+            ctx.fillStyle = '#94a3b8';
+            ctx.fillText('coil records', nodeX + 26, nodeY - 22);
+            ctx.fillText('only the sum', nodeX + 26, nodeY - 11);
+        }
+        ctx.textAlign = 'center';
+
+        // Arrow to the k-space sample value
+        this.drawArrow(ctx, nodeX + 24, nodeY, Math.min(w - 14, nodeX + 70), nodeY, '#22d3ee', 2, 6);
+        ctx.font = 'bold 10px Inter';
+        ctx.fillStyle = '#22d3ee';
+        ctx.textAlign = 'center';
+        if (r.sample >= 0) {
+            const S = r.kspace[r.line][r.sample];
+            ctx.fillText(`S(${curKx}, ${ky})`, nodeX, nodeY + 44);
+            ctx.font = '9px Inter';
+            ctx.fillStyle = '#e2e8f0';
+            ctx.fillText(`${S.re.toFixed(2)} ${S.im < 0 ? '−' : '+'} ${Math.abs(S.im).toFixed(2)}i`, nodeX, nodeY + 57);
+            ctx.fillStyle = '#94a3b8';
+            ctx.fillText('→ one k-space sample', nodeX, nodeY + 72);
+        } else {
+            ctx.fillText('press Play', nodeX, nodeY + 44);
+        }
+
+        ctx.font = '9px Inter';
+        ctx.fillStyle = '#64748b';
+        ctx.textAlign = 'left';
+        ctx.fillText('−x … +x: frequency ∝ x · starting phase ∝ ky·y · amplitude ∝ ρ', gridLeft, h - 8);
+    }
+
+    renderReconSequence(ctx) {
+        const { w, h } = this.beginPanel(ctx);
+        const r = this.recon;
+        const n = r.n;
+        const half = n / 2;
+        const acquiring = r.stage === 'acquire';
+        const { margin, plotW, rows } = this.drawSequenceChannels(ctx, w, h, '2D Cartesian Acquisition',
+            acquiring ? ['RF', 'Gz', 'Gy', 'Gx', 'Signal'] : []);
+        if (!acquiring) ctx.globalAlpha = 0.25;
+        const xStart = margin.left;
+        const { kx, ky } = this.getReconCursorK();
+
+        ctx.strokeStyle = rows.RF.color;
+        ctx.lineWidth = 2;
+        this.drawRFPulse(ctx, xStart + plotW * 0.06, rows.RF.y, plotW * 0.08, rows.RF.amp);
+        this.drawTrapezoid(ctx, xStart + plotW * 0.03, rows.Gz.y, plotW * 0.14, rows.Gz.amp * 0.8, rows.Gz.color);
+        this.drawTrapezoid(ctx, xStart + plotW * 0.17, rows.Gz.y, plotW * 0.06, -rows.Gz.amp * 0.4, rows.Gz.color);
+
+        // Phase-encode table: all steps faint, current step bold
+        const gy = rows.Gy;
+        ctx.globalAlpha = acquiring ? 0.15 : 0.08;
+        for (let step = -half; step < half; step += Math.max(1, n / 8)) {
+            this.drawTrapezoid(ctx, xStart + plotW * 0.27, gy.y, plotW * 0.12, gy.amp * step / half, gy.color);
+        }
+        ctx.globalAlpha = acquiring ? 1 : 0.25;
+        ctx.lineWidth = 2;
+        this.drawTrapezoid(ctx, xStart + plotW * 0.27, gy.y, plotW * 0.12, gy.amp * ky / half, gy.color);
+        ctx.font = 'bold 7px Inter';
+        ctx.fillStyle = gy.color;
+        ctx.textAlign = 'center';
+        ctx.fillText(`ky = ${ky}`, xStart + plotW * 0.33, gy.y - gy.amp - 3);
+
+        // Readout with ADC samples and cursor
+        const gx = rows.Gx;
+        const roStart = xStart + plotW * 0.45;
+        const roW = plotW * 0.5;
+        this.drawTrapezoid(ctx, xStart + plotW * 0.27, gx.y, roW * 0.5, -gx.amp * 0.7, gx.color);
+        this.drawTrapezoid(ctx, roStart, gx.y, roW, gx.amp * 0.7, gx.color);
+        const flatStart = roStart + roW * 0.15;
+        const flatW = roW * 0.7;
+        for (let s = 0; s < n; s++) {
+            const px = flatStart + (s + 0.5) / n * flatW;
+            const done = acquiring && s <= r.sample;
+            ctx.strokeStyle = done ? '#22d3ee' : 'rgba(148, 163, 184, 0.5)';
+            ctx.lineWidth = done ? 1.5 : 1;
+            ctx.beginPath();
+            ctx.moveTo(px, rows.Signal.y + rows.Signal.amp + 1);
+            ctx.lineTo(px, rows.Signal.y + rows.Signal.amp + 6);
+            ctx.stroke();
+        }
+        ctx.strokeStyle = rows.Signal.color;
+        ctx.lineWidth = 2;
+        this.drawEcho(ctx, flatStart, rows.Signal.y, flatW, rows.Signal.amp * 0.8);
+        if (acquiring && r.sample >= 0) {
+            const cursorX = flatStart + (kx + half + 0.5) / n * flatW;
+            ctx.strokeStyle = '#22d3ee';
+            ctx.lineWidth = 2;
+            ctx.setLineDash([3, 2]);
+            ctx.beginPath();
+            ctx.moveTo(cursorX, gx.y - gx.amp * 0.7 - 8);
+            ctx.lineTo(cursorX, rows.Signal.y + rows.Signal.amp);
+            ctx.stroke();
+            ctx.setLineDash([]);
+            ctx.font = 'bold 7px Inter';
+            ctx.fillStyle = '#22d3ee';
+            ctx.textAlign = 'center';
+            ctx.fillText(`kx = ${kx}`, cursorX, gx.y - gx.amp * 0.7 - 11);
+        }
+        ctx.globalAlpha = 1;
+        if (!acquiring) {
+            ctx.fillStyle = 'rgba(10, 10, 10, 0.96)';
+            ctx.fillRect(w / 2 - 80, h / 2 - 20, 180, 36);
+            ctx.strokeStyle = 'rgba(16, 185, 129, 0.5)';
+            ctx.strokeRect(w / 2 - 80, h / 2 - 20, 180, 36);
+            ctx.font = 'bold 9px Inter';
+            ctx.fillStyle = '#10b981';
+            ctx.textAlign = 'center';
+            ctx.fillText('Scan done: the computer runs', w / 2 + 10, h / 2 - 5);
+            ctx.fillText('the inverse Fourier transform', w / 2 + 10, h / 2 + 8);
+        }
+    }
+
+    renderReconAcquire(ctx) {
+        const { w, h } = this.beginPanel(ctx);
+        const r = this.recon;
+        const n = r.n;
+        const half = n / 2;
+        const { kx: curKx, ky } = this.getReconCursorK();
+        const sMax = Math.max(1e-9, r.total);
+        const narrow = w < 640;
+
+        // ---- Left: summed signal for the current line ----
+        const left = 40;
+        const ksSize = Math.min(h - 70, w * 0.38);
+        const sigW = w - ksSize - left - 70;
+        const top = 34, bottom = h - 34;
+        const mid = (top + bottom) / 2;
+        const amp = (bottom - top) / 2 * 0.9;
+        const kxToX = kx => left + (kx + half) / (n - 1) * sigW;
+
+        ctx.font = 'bold 11px Inter';
+        ctx.fillStyle = '#f59e0b';
+        ctx.textAlign = 'left';
+        ctx.fillText(narrow ? `Coil signal, line ky = ${ky}` : `Coil signal for line ky = ${ky} = sum of all voxel signals`, left, 18);
+
+        ctx.strokeStyle = '#475569';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(left, mid);
+        ctx.lineTo(left + sigW, mid);
+        ctx.stroke();
+
+        if (r.sample >= 0) {
+            // Continuous signal up to the cursor, then the acquired samples as dots
+            const drawPart = (key, color, width) => {
+                ctx.beginPath();
+                const steps = Math.max(2, Math.round(8 * (curKx + half)));
+                for (let i = 0; i <= steps; i++) {
+                    const kx = -half + (curKx + half) * i / steps;
+                    const v = this.reconSignal(kx, ky)[key];
+                    const py = mid - (v / sMax) * amp;
+                    if (i === 0) ctx.moveTo(kxToX(kx), py); else ctx.lineTo(kxToX(kx), py);
+                }
+                ctx.strokeStyle = color;
+                ctx.lineWidth = width;
+                ctx.stroke();
+            };
+            drawPart('im', 'rgba(245, 158, 11, 0.7)', 1.2);
+            drawPart('re', 'rgba(255, 255, 255, 0.8)', 1.6);
+            for (let s = 0; s <= r.sample; s++) {
+                const S = r.kspace[r.line][s];
+                const px = kxToX(s - half);
+                ctx.fillStyle = '#f59e0b';
+                ctx.beginPath();
+                ctx.arc(px, mid - (S.im / sMax) * amp, 2.2, 0, 2 * Math.PI);
+                ctx.fill();
+                ctx.fillStyle = '#ffffff';
+                ctx.beginPath();
+                ctx.arc(px, mid - (S.re / sMax) * amp, s === r.sample ? 4.5 : 2.8, 0, 2 * Math.PI);
+                ctx.fill();
+            }
+        }
+        ctx.font = '8px Inter';
+        ctx.fillStyle = '#64748b';
+        ctx.textAlign = 'center';
+        for (let s = 0; s < n; s += Math.max(1, n / 8)) ctx.fillText(s - half, kxToX(s - half), bottom + 12);
+        ctx.fillStyle = '#94a3b8';
+        ctx.fillText(narrow ? 'sample kx (time →)' : 'readout sample kx (time →)   ● Re (white)  ● Im (amber)', left + sigW / 2, bottom + 26);
+
+        // ---- Right: k-space matrix filling row by row ----
+        const ksX = w - ksSize - 22;
+        const ksY = 34;
+        ctx.font = 'bold 11px Inter';
+        ctx.fillStyle = '#e2e8f0';
+        ctx.textAlign = 'center';
+        ctx.fillText('K-space (log |S|)', ksX + ksSize / 2, 18);
+        const { cell, cellX, cellY } = this.drawReconKSpace(ctx, ksX, ksY, ksSize);
+
+        // Current line + write flash
+        ctx.strokeStyle = '#ef4444';
+        ctx.lineWidth = 1.5;
+        ctx.strokeRect(ksX, cellY(r.line), ksSize, cell);
+        if (r.sample >= 0) {
+            const age = r.flash ? performance.now() - r.flash.time : Infinity;
+            if (age < 400) {
+                ctx.fillStyle = `rgba(34, 211, 238, ${0.8 * (1 - age / 400)})`;
+                ctx.fillRect(cellX(r.sample), cellY(r.line), cell, cell);
+            }
+            ctx.strokeStyle = '#22d3ee';
+            ctx.lineWidth = 2.5;
+            ctx.strokeRect(cellX(r.sample) - 1, cellY(r.line) - 1, cell + 2, cell + 2);
+        }
+
+        // Arrow from the signal to k-space
+        this.drawArrow(ctx, left + sigW + 12, mid, ksX - 18, mid, '#22d3ee', 1.5, 6);
+        ctx.font = '8px Inter';
+        ctx.fillStyle = '#22d3ee';
+        ctx.textAlign = 'center';
+        ctx.fillText('write', (left + sigW + ksX) / 2 - 3, mid - 6);
+    }
+
+    renderReconPhasors(ctx) {
+        const { w, h } = this.beginPanel(ctx);
+        const r = this.recon;
+        const n = r.n;
+        const { kx, ky } = this.getReconCursorK();
+        const sMax = Math.max(1e-9, r.total);
+
+        ctx.font = 'bold 10px Inter';
+        ctx.textAlign = 'center';
+        ctx.fillStyle = '#f59e0b';
+        ctx.fillText('Σ voxel phasors (head-to-tail)', w / 2, 14);
+
+        const cx = w / 2;
+        const cy = 30 + (h - 110) / 2;
+        const R = Math.min(w / 2 - 16, (h - 110) / 2);
+        ctx.strokeStyle = '#334155';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([3, 3]);
+        ctx.beginPath();
+        ctx.arc(cx, cy, R, 0, 2 * Math.PI);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.beginPath();
+        ctx.moveTo(cx - R - 6, cy);
+        ctx.lineTo(cx + R + 6, cy);
+        ctx.moveTo(cx, cy - R - 6);
+        ctx.lineTo(cx, cy + R + 6);
+        ctx.stroke();
+        ctx.font = '8px Inter';
+        ctx.fillStyle = '#64748b';
+        ctx.textAlign = 'left';
+        ctx.fillText('Re', cx + R + 2, cy - 3);
+        ctx.fillText('Im', cx + 3, cy - R - 2);
+
+        // Each voxel phasor ρ·e^(-iφ) chained (Re right, Im up)
+        let px = cx, py = cy, re = 0, im = 0;
+        for (let iy = 0; iy < n; iy++) {
+            for (let ix = 0; ix < n; ix++) {
+                const rho = r.density[iy][ix];
+                if (rho === 0) continue;
+                const phase = this.kPhase(kx, ky, ix, iy, n);
+                const dre = rho * Math.cos(phase), dim = -rho * Math.sin(phase);
+                const nx = px + (dre / sMax) * R;
+                const ny = py - (dim / sMax) * R;
+                this.drawArrow(ctx, px, py, nx, ny, this.xColor(ix / (n - 1), 0.9), 1.4, n > 8 ? 3 : 5);
+                px = nx;
+                py = ny;
+                re += dre;
+                im += dim;
+            }
+        }
+        this.drawArrow(ctx, cx, cy, cx + (re / sMax) * R, cy - (im / sMax) * R, '#ffffff', 2.2, 8);
+
+        const pct = Math.sqrt(re * re + im * im) / sMax * 100;
+        ctx.font = 'bold 11px Inter';
+        ctx.textAlign = 'center';
+        ctx.fillStyle = pct > 50 ? '#10b981' : (pct > 20 ? '#f59e0b' : '#ef4444');
+        ctx.fillText(`|S(${kx}, ${ky})| = ${pct.toFixed(0)}% of max`, w / 2, h - 58);
+        ctx.font = '9px Inter';
+        ctx.fillStyle = '#94a3b8';
+        ctx.fillText(r.sample >= 0 ? 'white arrow = this k-space value' : 'cursor at the start of the readout', w / 2, h - 42);
+        ctx.fillText('aligned phasors → big |S|', w / 2, h - 28);
+        ctx.fillText('spread phasors → they cancel', w / 2, h - 15);
+    }
+
+    renderReconImage(ctx) {
+        const { w, h } = this.beginPanel(ctx);
+        const r = this.recon;
+        const n = r.n;
+        const narrow = w < 640;
+
+        ctx.font = 'bold 11px Inter';
+        ctx.fillStyle = '#10b981';
+        ctx.textAlign = 'left';
+        ctx.fillText(narrow ? 'Image = Σ weight × pattern' : 'Image = Σ (k-space weight × stripe pattern), added center-first', 14, 18);
+
+        const gridTop = 30;
+        const size = Math.min(h - gridTop - 24, w * 0.55);
+        const gridLeft = 24;
+        const cell = size / n;
+        for (let iy = 0; iy < n; iy++) {
+            for (let ix = 0; ix < n; ix++) {
+                const v = r.image[iy][ix].re;
+                const g = Math.floor(255 * Math.max(0, Math.min(1, v)));
+                ctx.fillStyle = `rgb(${g}, ${g}, ${g})`;
+                ctx.fillRect(gridLeft + ix * cell, gridTop + iy * cell, cell, cell);
+            }
+        }
+        ctx.strokeStyle = 'rgba(71, 85, 105, 0.5)';
+        ctx.lineWidth = 0.5;
+        ctx.strokeRect(gridLeft, gridTop, size, size);
+
+        // Right side: true object and progress
+        const sideX = gridLeft + size + 30;
+        const sideW = w - sideX - 16;
+        const objSize = Math.min(sideW, size * 0.45);
+        ctx.font = '9px Inter';
+        ctx.fillStyle = '#94a3b8';
+        ctx.textAlign = 'left';
+        ctx.fillText('True object', sideX, gridTop + 8);
+        const oc = objSize / n;
+        for (let iy = 0; iy < n; iy++) {
+            for (let ix = 0; ix < n; ix++) {
+                const g = Math.floor(255 * r.density[iy][ix]);
+                ctx.fillStyle = `rgb(${g}, ${g}, ${g})`;
+                ctx.fillRect(sideX + ix * oc, gridTop + 14 + iy * oc, oc, oc);
+            }
+        }
+        ctx.strokeStyle = '#334155';
+        ctx.strokeRect(sideX, gridTop + 14, objSize, objSize);
+
+        let y = gridTop + 14 + objSize + 26;
+        ctx.font = 'bold 18px Inter';
+        ctx.fillStyle = '#22d3ee';
+        ctx.fillText(`${r.compIndex} / ${n * n}`, sideX, y);
+        ctx.font = '9px Inter';
+        ctx.fillStyle = '#94a3b8';
+        ctx.fillText('components added', sideX, y + 14);
+        y += 34;
+        if (r.compIndex > 0 && r.compIndex < n * n) {
+            const c = r.order[r.compIndex - 1];
+            ctx.fillText(`latest k = (${c.kx}, ${c.ky}), |k| = ${Math.sqrt(c.k2).toFixed(1)}`, sideX, y);
+            y += 14;
+            const lowK = Math.sqrt(c.k2) < 0.3 * n;
+            ctx.fillStyle = lowK ? '#f59e0b' : '#10b981';
+            if (narrow) {
+                ctx.fillText(lowK ? 'low k → shape' : 'high k → edges', sideX, y);
+            } else {
+                ctx.fillText(lowK ? 'low k → overall shape & contrast' : 'high k → edges & fine detail', sideX, y);
+            }
+        }
+        if (r.stage === 'done') {
+            let err = 0;
+            for (let iy = 0; iy < n; iy++) {
+                for (let ix = 0; ix < n; ix++) err = Math.max(err, Math.abs(r.image[iy][ix].re - r.density[iy][ix]));
+            }
+            ctx.fillStyle = '#10b981';
+            ctx.font = 'bold 10px Inter';
+            ctx.fillText('Exact match ✓', sideX, y);
+            ctx.font = '9px Inter';
+            ctx.fillStyle = '#94a3b8';
+            ctx.fillText(`max |error| = ${err.toExponential(1)}`, sideX, y + 14);
+        }
+    }
+
+    renderReconDecompose(ctx) {
+        const { w, h } = this.beginPanel(ctx);
+        const r = this.recon;
+        const n = r.n;
+        const narrow = w < 640;
+        const current = r.compIndex > 0 ? r.order[r.compIndex - 1] : null;
+
+        // ---- Left: k-space with used components bright, the rest dimmed ----
+        const ksSize = Math.min(h - 70, w * 0.4);
+        const ksX = 40, ksY = 34;
+        const used = new Set(r.order.slice(0, r.compIndex).map(c => c.iky * n + c.ikx));
+        ctx.font = 'bold 11px Inter';
+        ctx.fillStyle = '#e2e8f0';
+        ctx.textAlign = 'center';
+        ctx.fillText(narrow ? 'K-space (used = bright)' : 'K-space: components used so far (bright)', ksX + ksSize / 2, 18);
+        const { cell, cellX, cellY } = this.drawReconKSpace(ctx, ksX, ksY, ksSize,
+            { dim: (ikx, iky) => !used.has(iky * n + ikx) });
+        if (current) {
+            ctx.strokeStyle = '#22d3ee';
+            ctx.lineWidth = 2.5;
+            ctx.strokeRect(cellX(current.ikx) - 1, cellY(current.iky) - 1, cell + 2, cell + 2);
+        }
+
+        // ---- Right: the basis pattern of the latest component ----
+        const patX = ksX + ksSize + 70;
+        const patSize = Math.min(ksSize, w - patX - 20);
+        ctx.font = 'bold 11px Inter';
+        ctx.fillStyle = '#f59e0b';
+        ctx.textAlign = 'center';
+        ctx.fillText(current ? `Pattern for k = (${current.kx}, ${current.ky})` : 'Pattern', patX + patSize / 2, 18);
+        this.drawArrow(ctx, ksX + ksSize + 14, ksY + ksSize / 2, patX - 14, ksY + ksSize / 2, '#22d3ee', 1.5, 6);
+        if (!current) {
+            ctx.font = '10px Inter';
+            ctx.fillStyle = '#94a3b8';
+            ctx.fillText('press Play or Step', patX + patSize / 2, ksY + patSize / 2);
+            return;
+        }
+        // Re{S·e^(+iφ)} = |S|·cos(φ + ∠S): a 2D cosine grating; ∠S shifts it, |S| scales it (shown normalized)
+        const S = r.kspace[current.iky][current.ikx];
+        const magS = Math.sqrt(S.re * S.re + S.im * S.im);
+        const absent = magS < 1e-6 * Math.max(1e-9, r.total);
+        const angle = absent ? 0 : Math.atan2(S.im, S.re);
+        const pc = patSize / n;
+        for (let iy = 0; iy < n; iy++) {
+            for (let ix = 0; ix < n; ix++) {
+                const v = Math.cos(this.kPhase(current.kx, current.ky, ix, iy, n) + angle);
+                const g = Math.floor(128 + (absent ? 50 : 127) * v);
+                ctx.fillStyle = `rgb(${g}, ${g}, ${g})`;
+                ctx.fillRect(patX + ix * pc, ksY + iy * pc, pc, pc);
+            }
+        }
+        ctx.strokeStyle = '#334155';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(patX, ksY, patSize, patSize);
+        ctx.font = '9px Inter';
+        ctx.fillStyle = absent ? '#ef4444' : '#94a3b8';
+        const phaseText = `${(angle * 180 / Math.PI).toFixed(0)}°`;
+        ctx.fillText(absent ? (narrow ? 'weight ≈ 0 (absent)' : 'weight ≈ 0: this pattern is not in the object')
+                            : (narrow ? `|S|/N² ${(magS / (n * n)).toFixed(3)}, ∠${phaseText}`
+                                      : `weight |S|/N² = ${(magS / (n * n)).toFixed(3)} · phase ${phaseText}`),
+                     patX + patSize / 2, ksY + patSize + 13);
+        ctx.fillStyle = '#94a3b8';
+        ctx.fillText('image += weight × pattern', patX + patSize / 2, ksY + patSize + 26);
+    }
+
+    renderReconWeight(ctx) {
+        const { w, h } = this.beginPanel(ctx);
+        const r = this.recon;
+        const n = r.n;
+        const current = r.compIndex > 0 ? r.order[r.compIndex - 1] : null;
+        const sMax = Math.max(1e-9, r.total);
+
+        ctx.font = 'bold 10px Inter';
+        ctx.textAlign = 'center';
+        ctx.fillStyle = '#f59e0b';
+        ctx.fillText('Weight of the latest pattern', w / 2, 14);
+
+        const cx = w / 2;
+        const cy = 30 + (h - 110) / 2;
+        const R = Math.min(w / 2 - 16, (h - 110) / 2);
+        ctx.strokeStyle = '#334155';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([3, 3]);
+        ctx.beginPath();
+        ctx.arc(cx, cy, R, 0, 2 * Math.PI);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.beginPath();
+        ctx.moveTo(cx - R - 6, cy);
+        ctx.lineTo(cx + R + 6, cy);
+        ctx.moveTo(cx, cy - R - 6);
+        ctx.lineTo(cx, cy + R + 6);
+        ctx.stroke();
+        ctx.font = '8px Inter';
+        ctx.fillStyle = '#64748b';
+        ctx.textAlign = 'left';
+        ctx.fillText('Re', cx + R + 2, cy - 3);
+        ctx.fillText('Im', cx + 3, cy - R - 2);
+
+        if (current) {
+            const S = r.kspace[current.iky][current.ikx];
+            this.drawArrow(ctx, cx, cy, cx + (S.re / sMax) * R, cy - (S.im / sMax) * R, '#22d3ee', 2.5, 8);
+            const magS = Math.sqrt(S.re * S.re + S.im * S.im);
+            ctx.font = 'bold 11px Inter';
+            ctx.textAlign = 'center';
+            ctx.fillStyle = '#22d3ee';
+            ctx.fillText(`S(${current.kx}, ${current.ky}) = ${(magS / sMax * 100).toFixed(0)}% of DC`, w / 2, h - 58);
+        }
+        ctx.font = '9px Inter';
+        ctx.fillStyle = '#94a3b8';
+        ctx.textAlign = 'center';
+        ctx.fillText('magnitude → contrast of the stripes', w / 2, h - 42);
+        ctx.fillText('phase → where the stripes sit', w / 2, h - 28);
+        ctx.fillText(r.stage === 'done' ? `all ${n * n} patterns added` : 'center of k-space = biggest weights', w / 2, h - 15);
+    }
+
+    // ===================== MODULE E: SLICE SELECTION =====================
+
+    /**
+     * Slice geometry from the controls (real units).
+     * f(z) = γ̄·Gz·z ; BW = TBW / T ; Δz = BW / (γ̄·Gz) ; z_c = Δf_c / (γ̄·Gz)
+     */
+    getSliceParams() {
+        const s = this.slice;
+        const gammaGz = GAMMA_BAR_HZ_PER_MT_M_MM * s.gz;   // Hz per mm
+        const bwHz = s.tbw / (s.duration / 1000);
+        const fcHz = s.fcKHz * 1000;
+        return { gammaGz, bwHz, fcHz, dz: bwHz / gammaGz, zc: fcHz / gammaGz };
+    }
+
+    // Hann-windowed sinc RF envelope, t in seconds within [-T/2, T/2]
+    rfEnvelope(t, T, tbw) {
+        const x = tbw * t / T;
+        const sinc = Math.abs(x) < 1e-9 ? 1 : Math.sin(Math.PI * x) / (Math.PI * x);
+        const hann = 0.5 * (1 + Math.cos(2 * Math.PI * t / T));
+        return sinc * hann;
+    }
+
+    /**
+     * Excitation profile vs frequency offset from the RF center (Hz).
+     * Small-tip approximation: profile(f) = |FT{B1(t)}(f)| / |FT{B1(t)}(0)|
+     */
+    sliceProfile(freqs) {
+        const T = this.slice.duration / 1000;
+        const numT = 200;
+        const ts = [];
+        const b1 = [];
+        let area = 0;
+        for (let i = 0; i < numT; i++) {
+            const t = ((i + 0.5) / numT - 0.5) * T;
+            ts.push(t);
+            const b = this.rfEnvelope(t, T, this.slice.tbw);
+            b1.push(b);
+            area += b;
+        }
+        // Beyond a few bandwidths the true profile is ~0; skipping it also avoids the
+        // spectral replicas (every numT/T Hz) of the sampled pulse
+        const fLimit = 4 * this.slice.tbw / T;
+        return freqs.map(f => {
+            if (Math.abs(f) > fLimit) return 0;
+            let re = 0, im = 0;
+            for (let i = 0; i < numT; i++) {
+                const a = 2 * Math.PI * f * ts[i];
+                re += b1[i] * Math.cos(a);
+                im -= b1[i] * Math.sin(a);
+            }
+            return Math.sqrt(re * re + im * im) / area;
+        });
+    }
+
+    renderSliceModule() {
+        const p = this.getSliceParams();
+        document.getElementById('slice-bw-out').textContent = `${(p.bwHz / 1000).toFixed(1)} kHz`;
+        document.getElementById('slice-dz-out').textContent = p.dz >= 100 ? `${p.dz.toFixed(0)} mm` : `${p.dz.toFixed(1)} mm`;
+        document.getElementById('slice-zc-out').textContent = `${p.zc.toFixed(1)} mm`;
+
+        if (this.spinCtx) this.renderSliceResonance(this.spinCtx, p);
+        if (this.legendCtx) this.renderSliceSequence(this.legendCtx);
+        if (this.kspaceCtx) this.renderSliceFourier(this.kspaceCtx, p);
+        if (this.objectCtx) this.renderSliceSummary(this.objectCtx, p);
+    }
+
+    renderSliceResonance(ctx, p) {
+        const { w, h } = this.beginPanel(ctx);
+        const zMax = 100;  // mm
+        const margin = { left: 58, right: 22, top: 30 };
+        const plotW = w - margin.left - margin.right;
+        const plotTop = margin.top;
+        const plotBottom = h - 112;
+        const plotH = plotBottom - plotTop;
+        const fMax = p.gammaGz * zMax;  // Hz at the edge of the view
+
+        const zToX = z => margin.left + (z + zMax) / (2 * zMax) * plotW;
+        const fToY = f => plotTop + (1 - (f + fMax) / (2 * fMax)) * plotH;
+
+        // Profile along z (pixel resolution) for the shaded slab and the spins
+        const numZ = Math.max(200, Math.floor(plotW));
+        const zs = [];
+        for (let i = 0; i < numZ; i++) zs.push(-zMax + (i + 0.5) / numZ * 2 * zMax);
+        const profile = this.sliceProfile(zs.map(z => p.gammaGz * z - p.fcHz));
+
+        // Excited slab: column shading ∝ actual profile
+        const colW = plotW / numZ;
+        zs.forEach((z, i) => {
+            if (profile[i] < 0.01) return;
+            ctx.fillStyle = `rgba(16, 185, 129, ${0.4 * Math.min(1, profile[i])})`;
+            ctx.fillRect(zToX(z) - colW / 2, plotTop, colW + 0.5, plotH);
+        });
+
+        // Axes
+        ctx.strokeStyle = '#475569';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(margin.left, plotTop, plotW, plotH);
+        ctx.beginPath();
+        ctx.moveTo(margin.left, fToY(0));
+        ctx.lineTo(margin.left + plotW, fToY(0));
+        ctx.moveTo(zToX(0), plotTop);
+        ctx.lineTo(zToX(0), plotBottom);
+        ctx.strokeStyle = 'rgba(71, 85, 105, 0.6)';
+        ctx.stroke();
+
+        // f-axis ticks (kHz)
+        ctx.font = '9px Inter';
+        ctx.fillStyle = '#64748b';
+        ctx.textAlign = 'right';
+        [-1, -0.5, 0, 0.5, 1].forEach(frac => {
+            const f = frac * fMax;
+            ctx.fillText((f / 1000).toFixed(f === 0 ? 0 : 1), margin.left - 5, fToY(f) + 3);
+        });
+        ctx.save();
+        ctx.translate(14, plotTop + plotH / 2);
+        ctx.rotate(-Math.PI / 2);
+        ctx.textAlign = 'center';
+        ctx.fillStyle = '#94a3b8';
+        ctx.fillText('Δf = f − f₀ (kHz)', 0, 0);
+        ctx.restore();
+
+        // z-axis ticks (mm)
+        ctx.textAlign = 'center';
+        ctx.fillStyle = '#64748b';
+        [-100, -50, 0, 50, 100].forEach(z => ctx.fillText(z, zToX(z), plotBottom + 12));
+
+        // RF band (horizontal stripe)
+        const bandTop = fToY(Math.min(fMax, p.fcHz + p.bwHz / 2));
+        const bandBottom = fToY(Math.max(-fMax, p.fcHz - p.bwHz / 2));
+        if (bandBottom > bandTop) {
+            ctx.fillStyle = 'rgba(245, 158, 11, 0.25)';
+            ctx.fillRect(margin.left, bandTop, plotW, Math.max(1.5, bandBottom - bandTop));
+            ctx.strokeStyle = 'rgba(245, 158, 11, 0.8)';
+            ctx.lineWidth = 1;
+            ctx.strokeRect(margin.left, bandTop, plotW, Math.max(1.5, bandBottom - bandTop));
+        }
+        ctx.font = 'bold 9px Inter';
+        ctx.fillStyle = '#f59e0b';
+        ctx.textAlign = 'left';
+        const bandLabelY = Math.min(plotBottom - 6, Math.max(plotTop + 10, bandTop - 4));
+        ctx.fillText(`RF band: Δf_c ± BW/2 (BW = ${(p.bwHz / 1000).toFixed(1)} kHz)`, margin.left + 6, bandLabelY);
+
+        // Resonance line f(z) = γ̄·Gz·z
+        ctx.strokeStyle = '#22d3ee';
+        ctx.lineWidth = 2.5;
+        ctx.beginPath();
+        ctx.moveTo(zToX(-zMax), fToY(-fMax));
+        ctx.lineTo(zToX(zMax), fToY(fMax));
+        ctx.stroke();
+        ctx.font = 'bold 10px Inter';
+        ctx.fillStyle = '#22d3ee';
+        ctx.textAlign = 'left';
+        ctx.fillText(`f(z) = γ̄·Gz·z  (${p.gammaGz.toFixed(0)} Hz/mm)`, margin.left + 6, plotTop + 14);
+
+        // Ideal slab edges: project the band/line intersections down to the z axis
+        const z1 = p.zc - p.dz / 2;
+        const z2 = p.zc + p.dz / 2;
+        ctx.setLineDash([4, 3]);
+        ctx.strokeStyle = 'rgba(16, 185, 129, 0.9)';
+        ctx.lineWidth = 1;
+        [z1, z2].forEach(z => {
+            if (Math.abs(z) > zMax) return;
+            ctx.beginPath();
+            ctx.moveTo(zToX(z), fToY(p.gammaGz * z));
+            ctx.lineTo(zToX(z), plotBottom);
+            ctx.stroke();
+        });
+        ctx.setLineDash([]);
+
+        // Slice label
+        ctx.font = 'bold 10px Inter';
+        ctx.textAlign = 'center';
+        if (Math.abs(p.zc) <= zMax) {
+            ctx.fillStyle = '#10b981';
+            const labelX = Math.min(margin.left + plotW - 60, Math.max(margin.left + 60, zToX(p.zc)));
+            ctx.fillText(`Excited slice: Δz = ${p.dz >= 100 ? p.dz.toFixed(0) : p.dz.toFixed(1)} mm`, labelX, plotBottom - 8);
+        } else {
+            ctx.fillStyle = '#ef4444';
+            ctx.fillText(`Slice center outside view (z_c = ${p.zc.toFixed(0)} mm)`, margin.left + plotW / 2, plotBottom - 8);
+        }
+
+        // Title
+        ctx.font = 'bold 11px Inter';
+        ctx.fillStyle = '#f59e0b';
+        ctx.textAlign = 'left';
+        const narrow = w < 640;
+        ctx.fillText(narrow ? 'Only spins in the RF band are tipped (resonance)'
+                            : 'Only spins whose Larmor frequency matches the RF band are tipped (resonance)', margin.left, 18);
+
+        // ---- Spins along z ----
+        const rowY = plotBottom + 52;
+        const arrowLen = 26;
+        // Faint body outline (patient lying along z)
+        ctx.strokeStyle = 'rgba(148, 163, 184, 0.25)';
+        ctx.fillStyle = 'rgba(148, 163, 184, 0.05)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        const bodyL = zToX(-95), bodyR = zToX(95);
+        const bodyH = arrowLen + 18;
+        ctx.roundRect ? ctx.roundRect(bodyL, rowY - bodyH / 2, bodyR - bodyL, bodyH, bodyH / 2)
+                      : ctx.rect(bodyL, rowY - bodyH / 2, bodyR - bodyL, bodyH);
+        ctx.fill();
+        ctx.stroke();
+
+        const numArrows = Math.min(61, Math.floor(plotW / 11));
+        const binW = 2 * zMax / numArrows;
+        for (let a = 0; a < numArrows; a++) {
+            const zLo = -zMax + a * binW;
+            const zHi = zLo + binW;
+            // Bin-average of the profile = net tip of the spins in that bin
+            let sum = 0, count = 0;
+            zs.forEach((z, i) => { if (z >= zLo && z < zHi) { sum += profile[i]; count++; } });
+            const prof = count ? sum / count : 0;
+            const tip = Math.min(1, prof) * this.slice.flip * Math.PI / 180;
+            const x = zToX((zLo + zHi) / 2);
+            const dx = Math.sin(tip) * arrowLen;
+            const dy = -Math.cos(tip) * arrowLen;
+            const mix = Math.min(1, prof * 1.5);
+            const r = Math.floor(100 + mix * (16 - 100));
+            const g = Math.floor(116 + mix * (185 - 116));
+            const b = Math.floor(139 + mix * (129 - 139));
+            const color = `rgb(${r}, ${g}, ${b})`;
+            const baseY = rowY + arrowLen / 2 - 4;
+            this.drawArrow(ctx, x - dx / 2, baseY, x + dx / 2, baseY + dy, color, 1.6, 5);
+        }
+        ctx.font = '9px Inter';
+        ctx.fillStyle = '#94a3b8';
+        ctx.textAlign = 'center';
+        ctx.fillText(narrow ? 'z (mm) — spins tipped only inside the slice'
+                            : 'z (mm) — spins along the patient: tipped only inside the slice (B₀ ↑)', margin.left + plotW / 2, h - 10);
+        ctx.textAlign = 'right';
+        ctx.fillStyle = '#64748b';
+        ctx.font = '8px Inter';
+        if (!narrow) ctx.fillText('f₀ = γ̄B₀ ≈ 63.87 MHz at 1.5 T — plotted as offsets', margin.left + plotW, plotTop - 4);
+    }
+
+    renderSliceSequence(ctx) {
+        const { w, h } = this.beginPanel(ctx);
+        const { margin, plotW, rows } = this.drawSequenceChannels(ctx, w, h, 'Slice Selection', ['RF', 'Gz']);
+        const s = this.slice;
+        const xStart = margin.left;
+
+        // RF: sinc with TBW zero crossings, width ∝ pulse duration
+        const rfW = plotW * (0.06 + 0.24 * s.duration / 8);
+        const rfX = xStart + plotW * 0.08 + plotW * 0.15 - rfW / 2;
+        const rf = rows.RF;
+        ctx.strokeStyle = rf.color;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        for (let i = 0; i <= 80; i++) {
+            const u = i / 80 - 0.5;
+            const v = this.rfEnvelope(u, 1, s.tbw);
+            const px = rfX + (i / 80) * rfW;
+            const py = rf.y - v * rf.amp;
+            if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+        }
+        ctx.stroke();
+
+        // Gz: slice-select lobe during the RF (amplitude ∝ Gz) + half-area rephaser
+        const gz = rows.Gz;
+        const gzAmp = gz.amp * (0.2 + 0.8 * s.gz / 40);
+        const ramp = rfW * 0.15 / 0.7;
+        const gzW = rfW + 2 * ramp;
+        this.drawTrapezoid(ctx, rfX - ramp, gz.y, gzW, gzAmp, gz.color);
+        this.drawTrapezoid(ctx, rfX - ramp + gzW, gz.y, gzW * 0.5, -gzAmp, gz.color);
+        ctx.font = 'bold 7px Inter';
+        ctx.fillStyle = gz.color;
+        ctx.textAlign = 'center';
+        ctx.fillText(`Gz = ${s.gz} mT/m`, rfX + rfW / 2, gz.y - gzAmp - 4);
+        ctx.fillStyle = rf.color;
+        ctx.fillText(`T = ${s.duration.toFixed(1)} ms`, rfX + rfW / 2, rf.y - rf.amp - 4);
+
+        // Dimmed encoding/readout channels
+        ctx.globalAlpha = 0.2;
+        const afterX = rfX - ramp + gzW * 1.5;
+        const rest = xStart + plotW - afterX;
+        this.drawTrapezoid(ctx, afterX + rest * 0.05, rows.Gy.y, rest * 0.18, rows.Gy.amp * 0.5, rows.Gy.color);
+        this.drawTrapezoid(ctx, afterX + rest * 0.05, rows.Gx.y, rest * 0.12, -rows.Gx.amp * 0.4, rows.Gx.color);
+        this.drawTrapezoid(ctx, afterX + rest * 0.35, rows.Gx.y, rest * 0.55, rows.Gx.amp * 0.6, rows.Gx.color);
+        ctx.strokeStyle = rows.Signal.color;
+        ctx.lineWidth = 1.5;
+        this.drawEcho(ctx, afterX + rest * 0.35, rows.Signal.y, rest * 0.55, rows.Signal.amp * 0.7);
+        ctx.globalAlpha = 1.0;
+    }
+
+    renderSliceFourier(ctx, p) {
+        const { w, h } = this.beginPanel(ctx);
+        const s = this.slice;
+        const top = 40, bottom = h - 46;
+        const plotH = bottom - top;
+        const gap = 46;
+        const halfW = (w - 60 - gap) / 2;
+        const leftX = 40;
+        const rightX = leftX + halfW + gap;
+
+        ctx.font = 'bold 11px Inter';
+        ctx.fillStyle = '#f59e0b';
+        ctx.textAlign = 'left';
+        const narrow = w < 640;
+        ctx.fillText('RF envelope B₁(t)', leftX, 22);
+        ctx.fillText(narrow ? 'Profile = |FT{B₁}|' : 'Excitation profile (|Fourier transform|)', rightX, 22);
+
+        // ---- Left: B1(t) on a fixed ±4 ms axis so pulse length changes are visible ----
+        const tMax = 4;  // ms
+        const tToX = t => leftX + (t + tMax) / (2 * tMax) * halfW;
+        const baseY = top + plotH * 0.72;
+        const ampPx = plotH * 0.65;
+        ctx.strokeStyle = '#475569';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(leftX, baseY);
+        ctx.lineTo(leftX + halfW, baseY);
+        ctx.stroke();
+        const T = s.duration;
+        ctx.beginPath();
+        for (let i = 0; i <= 200; i++) {
+            const t = (i / 200 - 0.5) * T;
+            const v = this.rfEnvelope(t, T, s.tbw);
+            const px = tToX(t), py = baseY - v * ampPx;
+            if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+        }
+        ctx.strokeStyle = '#f59e0b';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+        ctx.lineTo(tToX(T / 2), baseY);
+        ctx.lineTo(tToX(-T / 2), baseY);
+        ctx.closePath();
+        ctx.fillStyle = 'rgba(245, 158, 11, 0.12)';
+        ctx.fill();
+        ctx.font = '9px Inter';
+        ctx.fillStyle = '#64748b';
+        ctx.textAlign = 'center';
+        [-4, -2, 0, 2, 4].forEach(t => ctx.fillText(t, tToX(t), bottom + 12));
+        ctx.fillStyle = '#94a3b8';
+        ctx.fillText('time (ms)', leftX + halfW / 2, bottom + 26);
+        ctx.fillStyle = '#f59e0b';
+        ctx.font = 'bold 9px Inter';
+        ctx.fillText(`T = ${T.toFixed(1)} ms, ${s.tbw} zero crossings`, leftX + halfW / 2, top - 4);
+
+        // FT arrow between the halves
+        ctx.font = 'bold 12px Inter';
+        ctx.fillStyle = '#22d3ee';
+        ctx.textAlign = 'center';
+        ctx.fillText('FT', leftX + halfW + gap / 2, top + plotH / 2 - 8);
+        this.drawArrow(ctx, leftX + halfW + 8, top + plotH / 2, leftX + halfW + gap - 8, top + plotH / 2, '#22d3ee', 2, 6);
+
+        // ---- Right: profile vs (f − f_c), axis widens only when BW is very large ----
+        const fRange = Math.max(10000, p.bwHz);  // Hz, half-width of the axis
+        const fToX = f => rightX + (f + fRange) / (2 * fRange) * halfW;
+        const numF = Math.floor(halfW);
+        const fs = [];
+        for (let i = 0; i <= numF; i++) fs.push(-fRange + (i / numF) * 2 * fRange);
+        const prof = this.sliceProfile(fs);
+        const profBase = top + plotH * 0.85;
+        const profAmp = plotH * 0.75;
+
+        ctx.strokeStyle = '#475569';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(rightX, profBase);
+        ctx.lineTo(rightX + halfW, profBase);
+        ctx.stroke();
+
+        // Ideal rectangle (dashed)
+        ctx.setLineDash([4, 3]);
+        ctx.strokeStyle = '#94a3b8';
+        ctx.beginPath();
+        ctx.moveTo(rightX, profBase);
+        ctx.lineTo(fToX(-p.bwHz / 2), profBase);
+        ctx.lineTo(fToX(-p.bwHz / 2), profBase - profAmp);
+        ctx.lineTo(fToX(p.bwHz / 2), profBase - profAmp);
+        ctx.lineTo(fToX(p.bwHz / 2), profBase);
+        ctx.lineTo(rightX + halfW, profBase);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        ctx.beginPath();
+        fs.forEach((f, i) => {
+            const px = fToX(f), py = profBase - Math.min(1.2, prof[i]) * profAmp;
+            if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+        });
+        ctx.strokeStyle = '#10b981';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+        ctx.lineTo(rightX + halfW, profBase);
+        ctx.lineTo(rightX, profBase);
+        ctx.closePath();
+        ctx.fillStyle = 'rgba(16, 185, 129, 0.15)';
+        ctx.fill();
+
+        ctx.font = '9px Inter';
+        ctx.fillStyle = '#64748b';
+        ctx.textAlign = 'center';
+        const tick = fRange / 2;
+        [-fRange, -tick, 0, tick, fRange].forEach(f => ctx.fillText((f / 1000).toFixed(0), fToX(f), bottom + 12));
+        ctx.fillStyle = '#94a3b8';
+        ctx.fillText('f − f_c (kHz)', rightX + halfW / 2, bottom + 26);
+
+        // Mapping to position via Gz
+        ctx.font = 'bold 9px Inter';
+        ctx.fillStyle = '#10b981';
+        const dzText = p.dz >= 100 ? p.dz.toFixed(0) : p.dz.toFixed(1);
+        ctx.fillText(narrow ? `BW ${(p.bwHz / 1000).toFixed(1)} kHz → Δz ${dzText} mm`
+                            : `BW = ${(p.bwHz / 1000).toFixed(1)} kHz  →  Δz = BW/(γ̄Gz) = ${dzText} mm`, rightX + halfW / 2, top - 4);
+        ctx.font = '8px Inter';
+        ctx.fillStyle = '#64748b';
+        ctx.textAlign = 'left';
+        ctx.fillText('- - ideal slab', rightX + 4, top + 10);
+
+        // Bottom note
+        ctx.font = '9px Inter';
+        ctx.fillStyle = '#94a3b8';
+        ctx.textAlign = 'center';
+        ctx.fillText(narrow ? 'Shorter pulse → wider BW → thicker slice'
+                            : 'Shorter pulse → wider bandwidth → thicker slice. More lobes → sharper slice edges.', w / 2, h - 6);
+    }
+
+    renderSliceSummary(ctx, p) {
+        const { w, h } = this.beginPanel(ctx);
+        const lines = [
+            ['γ̄ (¹H)', '42.58 MHz/T', '#94a3b8'],
+            ['γ̄·Gz', `${p.gammaGz.toFixed(0)} Hz/mm`, '#22d3ee'],
+            ['RF BW = TBW/T', `${(p.bwHz / 1000).toFixed(2)} kHz`, '#f59e0b'],
+            ['Δz = BW/(γ̄Gz)', `${p.dz >= 100 ? p.dz.toFixed(0) : p.dz.toFixed(2)} mm`, '#10b981'],
+            ['z_c = Δf_c/(γ̄Gz)', `${p.zc.toFixed(1)} mm`, '#10b981']
+        ];
+        ctx.font = 'bold 10px Inter';
+        ctx.textAlign = 'center';
+        ctx.fillStyle = '#f59e0b';
+        ctx.fillText('Slice Geometry', w / 2, 16);
+
+        let y = 40;
+        lines.forEach(([label, value, color]) => {
+            ctx.font = '10px Inter';
+            ctx.textAlign = 'left';
+            ctx.fillStyle = '#94a3b8';
+            ctx.fillText(label, 14, y);
+            ctx.font = 'bold 11px Inter';
+            ctx.textAlign = 'right';
+            ctx.fillStyle = color;
+            ctx.fillText(value, w - 14, y);
+            y += 22;
+        });
+
+        y += 8;
+        ctx.strokeStyle = '#334155';
+        ctx.beginPath();
+        ctx.moveTo(14, y - 12);
+        ctx.lineTo(w - 14, y - 12);
+        ctx.stroke();
+
+        const tips = [
+            ['Thinner slice:', '#e2e8f0'],
+            ['  ↑ Gz (steeper f(z) line)', '#22d3ee'],
+            ['  ↓ BW (longer RF pulse)', '#f59e0b'],
+            ['Move the slice:', '#e2e8f0'],
+            ['  shift the RF center frequency', '#10b981'],
+            ['Sharper edges:', '#e2e8f0'],
+            ['  more sinc lobes (higher TBW)', '#f59e0b']
+        ];
+        tips.forEach(([text, color]) => {
+            if (y > h - 6) return;
+            ctx.font = text.startsWith('  ') ? '10px Inter' : 'bold 10px Inter';
+            ctx.textAlign = 'left';
+            ctx.fillStyle = color;
+            ctx.fillText(text, 14, y);
+            y += 17;
+        });
+    }
+
+    // ===================== MODULE D: FREQUENCY ENCODING → FOURIER =====================
+
+    // 1D objects as tubes/blocks {x0, x1 (mm), rho}
+    getFreqObject() {
+        switch (this.freq.object) {
+            case 'three':
+                return [{ x0: -58, x1: -42, rho: 1.0 }, { x0: -12, x1: 12, rho: 0.5 }, { x0: 40, x1: 52, rho: 0.8 }];
+            case 'wide':
+                return [{ x0: -30, x1: 30, rho: 1.0 }];
+            case 'wider':
+                return [{ x0: -115, x1: -85, rho: 0.6 }, { x0: -25, x1: -5, rho: 1.0 }, { x0: 90, x1: 110, rho: 0.8 }];
+            case 'two':
+            default:
+                return [{ x0: -50, x1: -30, rho: 1.0 }, { x0: 20, x1: 50, rho: 0.6 }];
+        }
+    }
+
+    /**
+     * Readout geometry (real units): γ̄Gx in Hz/mm, Δt = 1/BW,
+     * FOV = BW/(γ̄Gx), Δx = FOV/N, Δk = 1/FOV (cycles/mm)
+     */
+    getFreqParams() {
+        const f = this.freq;
+        const gammaGx = GAMMA_BAR_HZ_PER_MT_M_MM * f.gx;
+        const bwHz = f.bwKHz * 1000;
+        const dt = 1 / bwHz;
+        const N = f.numSamples;
+        const fov = bwHz / gammaGx;
+        return { gammaGx, bwHz, dt, N, fov, dx: fov / N, dk: 1 / fov, tacq: N * dt, tNow: f.t * N * dt };
+    }
+
+    /**
+     * Signal of one tube at spatial frequency k (cycles/mm), exact for a uniform block:
+     * ∫ ρ·e^(-i2πkx) dx over [x0, x1]
+     */
+    segmentPhasor(seg, k) {
+        const a = 2 * Math.PI * k;
+        if (Math.abs(a) < 1e-12) return { re: seg.rho * (seg.x1 - seg.x0), im: 0 };
+        return {
+            re: seg.rho * (Math.sin(a * seg.x1) - Math.sin(a * seg.x0)) / a,
+            im: seg.rho * (Math.cos(a * seg.x1) - Math.cos(a * seg.x0)) / a
+        };
+    }
+
+    // Total received signal at time t (s, 0 = echo): S(t) = Σ ρ(x)·e^(-i2π γ̄Gx x t)
+    freqSignal(segs, k) {
+        let re = 0, im = 0;
+        segs.forEach(seg => {
+            const s = this.segmentPhasor(seg, k);
+            re += s.re;
+            im += s.im;
+        });
+        return { re, im };
+    }
+
+    /**
+     * Reconstruction: N samples S_n at k_n = (n - N/2)·Δk, N-point inverse DFT
+     * ρ̂(x_m) = Δk · Σ S_n e^(+i2π k_n x_m),  x_m = (m - N/2)·Δx  (wraps outside the FOV)
+     */
+    reconstructFreq(segs, p) {
+        const samples = [];
+        for (let n = 0; n < p.N; n++) {
+            const k = (n - p.N / 2) * p.dk;
+            samples.push({ k, ...this.freqSignal(segs, k) });
+        }
+        const recon = [];
+        for (let m = 0; m < p.N; m++) {
+            const x = (m - p.N / 2) * p.dx;
+            let re = 0, im = 0;
+            samples.forEach(s => {
+                const a = 2 * Math.PI * s.k * x;
+                re += s.re * Math.cos(a) - s.im * Math.sin(a);
+                im += s.re * Math.sin(a) + s.im * Math.cos(a);
+            });
+            recon.push({ x, mag: Math.sqrt(re * re + im * im) * p.dk });
+        }
+        return { samples, recon };
+    }
+
+    startFreqAnimation() {
+        if (this.freq.playing) return;
+        this.freq.playing = true;
+        const btn = document.getElementById('freq-play-btn');
+        if (btn) btn.innerHTML = '&#10074;&#10074; Pause Readout';
+        const step = () => {
+            if (!this.freq.playing) return;
+            this.freq.t += 1 / (60 * 5);  // ~5 s per readout sweep
+            if (this.freq.t > 0.5) this.freq.t = -0.5;
+            const slider = document.getElementById('freq-time');
+            if (slider) slider.value = Math.round(this.freq.t * 1000);
+            this.render();
+            this.freq.animationId = requestAnimationFrame(step);
+        };
+        this.freq.animationId = requestAnimationFrame(step);
+    }
+
+    stopFreqAnimation() {
+        this.freq.playing = false;
+        if (this.freq.animationId) {
+            cancelAnimationFrame(this.freq.animationId);
+            this.freq.animationId = null;
+        }
+        const btn = document.getElementById('freq-play-btn');
+        if (btn) btn.innerHTML = '&#9654; Play Readout';
+    }
+
+    renderFreqModule() {
+        const p = this.getFreqParams();
+        const segs = this.getFreqObject();
+        const { samples, recon } = this.reconstructFreq(segs, p);
+        const kNow = p.gammaGx * p.tNow;  // cycles/mm at the cursor time
+
+        document.getElementById('freq-fov-out').textContent = `${p.fov.toFixed(0)} mm`;
+        document.getElementById('freq-dx-out').textContent = `${p.dx.toFixed(p.dx < 10 ? 1 : 0)} mm`;
+        document.getElementById('freq-tacq-out').textContent = `${(p.tacq * 1000).toFixed(2)} ms`;
+        const tLabel = document.getElementById('freq-time-val');
+        if (tLabel) {
+            const tms = p.tNow * 1000;
+            tLabel.textContent = Math.abs(this.freq.t) < 0.004 ? 't = 0 (echo)' : `t = ${tms >= 0 ? '+' : ''}${tms.toFixed(2)} ms`;
+        }
+
+        if (this.spinCtx) this.renderFreqObject(this.spinCtx, p, segs, kNow);
+        if (this.legendCtx) this.renderFreqSequence(this.legendCtx, p);
+        if (this.kspaceCtx) this.renderFreqSignal(this.kspaceCtx, p, segs, samples, recon);
+        if (this.objectCtx) this.renderFreqPhasors(this.objectCtx, p, segs, kNow);
+    }
+
+    renderFreqObject(ctx, p, segs, kNow) {
+        const { w, h } = this.beginPanel(ctx);
+        const xView = 150;  // mm, half-width of the displayed x range
+        const margin = { left: 40, right: 24 };
+        const plotW = w - margin.left - margin.right;
+        const xToPx = x => margin.left + (x + xView) / (2 * xView) * plotW;
+
+        // Title
+        ctx.font = 'bold 11px Inter';
+        ctx.fillStyle = '#f59e0b';
+        ctx.textAlign = 'left';
+        const narrow = w < 640;
+        ctx.fillText(narrow ? 'Each position has its own pitch' : 'Each position precesses at its own frequency ("pitch")', margin.left, 18);
+        ctx.font = 'bold 10px Inter';
+        ctx.fillStyle = '#22d3ee';
+        ctx.textAlign = 'right';
+        const tms = p.tNow * 1000;
+        ctx.fillText(Math.abs(this.freq.t) < 0.004 ? 't = 0 (echo: all in phase)' : `t = ${tms >= 0 ? '+' : ''}${tms.toFixed(2)} ms`, w - margin.right, 18);
+
+        // ---- Object profile ----
+        const objTop = 44, objBottom = h * 0.42;
+        const objH = objBottom - objTop;
+
+        // Outside-FOV shading
+        const fovL = Math.max(margin.left, xToPx(-p.fov / 2));
+        const fovR = Math.min(margin.left + plotW, xToPx(p.fov / 2));
+        ctx.fillStyle = 'rgba(100, 116, 139, 0.12)';
+        if (fovL > margin.left) ctx.fillRect(margin.left, objTop - 6, fovL - margin.left, objH + 6);
+        if (fovR < margin.left + plotW) ctx.fillRect(fovR, objTop - 6, margin.left + plotW - fovR, objH + 6);
+
+        // Tubes
+        segs.forEach(seg => {
+            const xc = (seg.x0 + seg.x1) / 2;
+            const col = this.xColor((xc + xView) / (2 * xView));
+            const x0 = xToPx(Math.max(-xView, seg.x0));
+            const x1 = xToPx(Math.min(xView, seg.x1));
+            const top = objBottom - seg.rho * objH;
+            ctx.fillStyle = this.xColor((xc + xView) / (2 * xView), 0.35);
+            ctx.fillRect(x0, top, x1 - x0, objBottom - top);
+            ctx.strokeStyle = col;
+            ctx.lineWidth = 1.5;
+            ctx.strokeRect(x0, top, x1 - x0, objBottom - top);
+        });
+
+        // Baseline and FOV markers
+        ctx.strokeStyle = '#475569';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(margin.left, objBottom);
+        ctx.lineTo(margin.left + plotW, objBottom);
+        ctx.stroke();
+        ctx.setLineDash([4, 3]);
+        ctx.strokeStyle = '#f59e0b';
+        ctx.font = '9px Inter';
+        ctx.fillStyle = '#f59e0b';
+        ctx.textAlign = 'center';
+        [-p.fov / 2, p.fov / 2].forEach(x => {
+            if (Math.abs(x) > xView) return;
+            ctx.beginPath();
+            ctx.moveTo(xToPx(x), objTop - 8);
+            ctx.lineTo(xToPx(x), objBottom);
+            ctx.stroke();
+        });
+        ctx.setLineDash([]);
+        const fovText = p.fov / 2 > xView ? `FOV = ${p.fov.toFixed(0)} mm (wider than view)` : `FOV = ${p.fov.toFixed(0)} mm`;
+        ctx.fillText(fovText, xToPx(0), objTop - 10);
+        ctx.font = '8px Inter';
+        ctx.fillStyle = '#64748b';
+        ctx.textAlign = 'left';
+        ctx.fillText('ρ(x)', margin.left + 2, objTop + 4);
+
+        // Top frequency axis (kHz): f = γ̄·Gx·x
+        ctx.font = '8px Inter';
+        ctx.fillStyle = '#a855f7';
+        ctx.textAlign = 'center';
+        [-150, -75, 0, 75, 150].forEach(x => {
+            ctx.fillText(`${(p.gammaGx * x / 1000).toFixed(1)} kHz`, xToPx(x), objBottom + 12);
+        });
+
+        // ---- Phase strip: hue = phase φ(x, t) = -2π·k(t)·x ----
+        const stripTop = objBottom + 24, stripH = Math.max(14, h * 0.09);
+        const object = x => segs.some(seg => x >= seg.x0 && x <= seg.x1);
+        for (let px = 0; px < plotW; px++) {
+            const x = -xView + (px + 0.5) / plotW * 2 * xView;
+            const phase = -2 * Math.PI * kNow * x;
+            const hue = ((phase / (2 * Math.PI)) % 1 + 1) % 1 * 360;
+            ctx.fillStyle = `hsl(${hue}, 80%, ${object(x) ? 55 : 14}%)`;
+            ctx.fillRect(margin.left + px, stripTop, 1.5, stripH);
+        }
+        ctx.strokeStyle = '#334155';
+        ctx.strokeRect(margin.left, stripTop, plotW, stripH);
+        ctx.font = '8px Inter';
+        ctx.fillStyle = '#94a3b8';
+        ctx.textAlign = 'left';
+        ctx.fillText('spin phase along x (colour = phase; bright where there is tissue)', margin.left, stripTop + stripH + 11);
+
+        // ---- One clock per tube: its net phasor (hand) spins at f = γ̄Gx·x_center ----
+        const clockY = stripTop + stripH + 26 + (h - (stripTop + stripH + 26) - 30) / 2;
+        const clockR = Math.min(22, (h - clockY - 24));
+        segs.forEach(seg => {
+            const xc = (seg.x0 + seg.x1) / 2;
+            if (Math.abs(xc) > xView) return;
+            const cx = xToPx(xc);
+            const col = this.xColor((xc + xView) / (2 * xView));
+            const ph = this.segmentPhasor(seg, kNow);
+            const full = seg.rho * (seg.x1 - seg.x0);
+            const coherence = Math.sqrt(ph.re * ph.re + ph.im * ph.im) / full;
+            const angle = Math.atan2(ph.im, ph.re);
+            const centerPhase = -2 * Math.PI * kNow * xc;
+
+            ctx.beginPath();
+            ctx.arc(cx, clockY, clockR, 0, 2 * Math.PI);
+            ctx.fillStyle = '#111827';
+            ctx.fill();
+            ctx.strokeStyle = col;
+            ctx.lineWidth = 2;
+            ctx.stroke();
+            // Thin hand: phase at the tube centre, turning at f = γ̄Gx·x (Re right, Im up)
+            ctx.strokeStyle = 'rgba(226, 232, 240, 0.6)';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(cx, clockY);
+            ctx.lineTo(cx + Math.cos(centerPhase) * clockR * 0.95, clockY - Math.sin(centerPhase) * clockR * 0.95);
+            ctx.stroke();
+            // Arrow: the tube's net signal (shrinks as spins inside the tube dephase)
+            this.drawArrow(ctx, cx, clockY,
+                cx + Math.cos(angle) * clockR * 0.85 * coherence,
+                clockY - Math.sin(angle) * clockR * 0.85 * coherence, col, 2.5, 6);
+            ctx.font = 'bold 9px Inter';
+            ctx.fillStyle = col;
+            ctx.textAlign = 'center';
+            ctx.fillText(`${(p.gammaGx * xc / 1000).toFixed(1)} kHz`, cx, clockY + clockR + 12);
+        });
+
+        // x axis
+        ctx.font = '9px Inter';
+        ctx.fillStyle = '#64748b';
+        ctx.textAlign = 'center';
+        ctx.fillText(narrow ? 'thin hand: phase at tube centre · arrow: tube\'s net signal'
+                            : 'Clocks: thin hand = phase at tube centre (its pitch) · arrow = tube\'s net signal (shrinks as the tube dephases)',
+                     margin.left + plotW / 2, h - 6);
+    }
+
+    renderFreqSequence(ctx, p) {
+        const { w, h } = this.beginPanel(ctx);
+        const { margin, plotW, rows } = this.drawSequenceChannels(ctx, w, h, 'Frequency Encoding (1D)', ['RF', 'Gz', 'Gx', 'Signal']);
+        const xStart = margin.left;
+
+        // Excitation (slice-selective)
+        ctx.strokeStyle = rows.RF.color;
+        ctx.lineWidth = 2;
+        this.drawRFPulse(ctx, xStart + plotW * 0.06, rows.RF.y, plotW * 0.08, rows.RF.amp);
+        this.drawTrapezoid(ctx, xStart + plotW * 0.03, rows.Gz.y, plotW * 0.14, rows.Gz.amp * 0.8, rows.Gz.color);
+        this.drawTrapezoid(ctx, xStart + plotW * 0.17, rows.Gz.y, plotW * 0.06, -rows.Gz.amp * 0.4, rows.Gz.color);
+
+        // No phase encoding in 1D
+        ctx.font = '7px Inter';
+        ctx.fillStyle = '#64748b';
+        ctx.textAlign = 'center';
+        ctx.fillText('off (1D)', xStart + plotW * 0.35, rows.Gy.y - 4);
+
+        // Gx dephaser (−half area) + readout; amplitude ∝ Gx
+        const gx = rows.Gx;
+        const gxAmp = gx.amp * (0.3 + 0.7 * this.freq.gx / 20);
+        const roStart = xStart + plotW * 0.42;
+        const roW = plotW * 0.52;
+        this.drawTrapezoid(ctx, xStart + plotW * 0.25, gx.y, roW * 0.5, -gxAmp, gx.color);
+        this.drawTrapezoid(ctx, roStart, gx.y, roW, gxAmp, gx.color);
+
+        // ADC samples on the flat top (one tick per sample)
+        const flatStart = roStart + roW * 0.15;
+        const flatW = roW * 0.7;
+        ctx.strokeStyle = 'rgba(226, 232, 240, 0.7)';
+        ctx.lineWidth = p.N > 64 ? 0.5 : 1;
+        for (let n = 0; n < p.N; n++) {
+            const px = flatStart + (n + 0.5) / p.N * flatW;
+            ctx.beginPath();
+            ctx.moveTo(px, rows.Signal.y + rows.Signal.amp + 2);
+            ctx.lineTo(px, rows.Signal.y + rows.Signal.amp + 6);
+            ctx.stroke();
+        }
+        ctx.font = '7px Inter';
+        ctx.fillStyle = '#94a3b8';
+        ctx.fillText(`ADC: N = ${p.N}, Δt = ${(p.dt * 1e6).toFixed(0)} µs`, flatStart + flatW / 2, rows.Signal.y + rows.Signal.amp + 14);
+
+        // Echo
+        ctx.strokeStyle = rows.Signal.color;
+        ctx.lineWidth = 2;
+        this.drawEcho(ctx, flatStart, rows.Signal.y, flatW, rows.Signal.amp * 0.8);
+
+        // Time cursor
+        const cursorX = flatStart + (this.freq.t + 0.5) * flatW;
+        ctx.strokeStyle = '#22d3ee';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([3, 2]);
+        ctx.beginPath();
+        ctx.moveTo(cursorX, gx.y - gxAmp - 10);
+        ctx.lineTo(cursorX, rows.Signal.y + rows.Signal.amp);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.beginPath();
+        ctx.arc(cursorX, gx.y - gxAmp - 6, 4, 0, 2 * Math.PI);
+        ctx.fillStyle = '#22d3ee';
+        ctx.fill();
+
+        ctx.font = 'bold 7px Inter';
+        ctx.fillStyle = '#f59e0b';
+        ctx.textAlign = 'center';
+        ctx.fillText('TE', flatStart + flatW / 2 + 10, rows.Signal.y - rows.Signal.amp * 0.8);
+    }
+
+    renderFreqSignal(ctx, p, segs, samples, recon) {
+        const { w, h } = this.beginPanel(ctx);
+        const margin = { left: 40, right: 24 };
+        const plotW = w - margin.left - margin.right;
+        const xView = 150;
+
+        // ---------- Top: signal vs time ----------
+        const sigTop = 30, sigBottom = h * 0.44;
+        const sigMid = (sigTop + sigBottom) / 2;
+        const sigAmp = (sigBottom - sigTop) / 2 * 0.92;
+        const tHalf = p.N / 2 * p.dt;  // s
+        const tToPx = t => margin.left + (t + tHalf) / (2 * tHalf) * plotW;
+        const sMax = Math.max(1e-9, segs.reduce((acc, seg) => acc + seg.rho * (seg.x1 - seg.x0), 0));
+
+        ctx.font = 'bold 11px Inter';
+        ctx.fillStyle = '#f59e0b';
+        ctx.textAlign = 'left';
+        const narrow = w < 640;
+        ctx.fillText(narrow ? 'Received signal ("chord")' : 'Received signal = the "chord" of all positions', margin.left, 18);
+        ctx.font = '8px Inter';
+        ctx.textAlign = 'right';
+        ctx.fillStyle = '#94a3b8';
+        ctx.fillText(narrow ? 'white: Re · amber: Im · dots: samples'
+                            : 'thin: each tube (Re)   white: total Re   amber: total Im   dots: ADC samples', w - margin.right, 18);
+
+        ctx.strokeStyle = '#475569';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(margin.left, sigMid);
+        ctx.lineTo(margin.left + plotW, sigMid);
+        ctx.moveTo(tToPx(0), sigTop);
+        ctx.lineTo(tToPx(0), sigBottom);
+        ctx.stroke();
+
+        const numPts = Math.floor(plotW);
+        const drawTrace = (fn, color, width) => {
+            ctx.beginPath();
+            for (let i = 0; i <= numPts; i++) {
+                const t = -tHalf + (i / numPts) * 2 * tHalf;
+                const v = fn(p.gammaGx * t);
+                const py = sigMid - (v / sMax) * sigAmp;
+                if (i === 0) ctx.moveTo(tToPx(t), py); else ctx.lineTo(tToPx(t), py);
+            }
+            ctx.strokeStyle = color;
+            ctx.lineWidth = width;
+            ctx.stroke();
+        };
+        if (segs.length > 1) {
+            segs.forEach(seg => {
+                const xc = (seg.x0 + seg.x1) / 2;
+                drawTrace(k => this.segmentPhasor(seg, k).re, this.xColor((xc + xView) / (2 * xView), 0.75), 1);
+            });
+        }
+        drawTrace(k => this.freqSignal(segs, k).im, 'rgba(245, 158, 11, 0.8)', 1.2);
+        drawTrace(k => this.freqSignal(segs, k).re, '#ffffff', 2);
+
+        // ADC samples
+        const dotR = p.N > 64 ? 1.4 : 2.2;
+        ctx.fillStyle = '#e2e8f0';
+        samples.forEach((s, n) => {
+            const t = (n - p.N / 2) * p.dt;
+            ctx.beginPath();
+            ctx.arc(tToPx(t), sigMid - (s.re / sMax) * sigAmp, dotR, 0, 2 * Math.PI);
+            ctx.fill();
+        });
+
+        // Cursor
+        const cx = tToPx(p.tNow);
+        ctx.strokeStyle = '#22d3ee';
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([4, 3]);
+        ctx.beginPath();
+        ctx.moveTo(cx, sigTop);
+        ctx.lineTo(cx, sigBottom);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        ctx.font = '8px Inter';
+        ctx.fillStyle = '#64748b';
+        ctx.textAlign = 'left';
+        ctx.fillText(`${(-tHalf * 1000).toFixed(2)} ms`, margin.left, sigBottom + 10);
+        ctx.textAlign = 'right';
+        ctx.fillText(`+${(tHalf * 1000).toFixed(2)} ms`, margin.left + plotW, sigBottom + 10);
+        ctx.textAlign = 'center';
+        ctx.fillText('0 (echo)', tToPx(0), sigBottom + 10);
+
+        // ---------- Bottom: |DFT| = profile vs x ----------
+        const recTop = h * 0.56, recBottom = h - 30;
+        const recH = recBottom - recTop;
+        const xToPx = x => margin.left + (x + xView) / (2 * xView) * plotW;
+        const maxRho = Math.max(...segs.map(seg => seg.rho));
+        const maxRecon = Math.max(...recon.map(r => r.mag));
+        const yScale = Math.max(1.15 * maxRho, maxRecon);
+
+        ctx.font = 'bold 11px Inter';
+        ctx.fillStyle = '#10b981';
+        ctx.textAlign = 'left';
+        ctx.fillText(narrow ? 'FFT → spectrum = profile' : 'FFT of the samples → frequency spectrum = position profile', margin.left, recTop - 12);
+
+        // Outside FOV shading
+        const fovL = Math.max(margin.left, xToPx(-p.fov / 2));
+        const fovR = Math.min(margin.left + plotW, xToPx(p.fov / 2));
+        ctx.fillStyle = 'rgba(100, 116, 139, 0.12)';
+        if (fovL > margin.left) ctx.fillRect(margin.left, recTop, fovL - margin.left, recH);
+        if (fovR < margin.left + plotW) ctx.fillRect(fovR, recTop, margin.left + plotW - fovR, recH);
+
+        // Reconstructed bars (width Δx)
+        recon.forEach(r => {
+            const x0 = r.x - p.dx / 2, x1 = r.x + p.dx / 2;
+            if (x1 < -xView || x0 > xView) return;
+            const px0 = xToPx(Math.max(-xView, x0)), px1 = xToPx(Math.min(xView, x1));
+            const top = recBottom - (r.mag / yScale) * recH;
+            ctx.fillStyle = this.xColor((r.x + xView) / (2 * xView), 0.75);
+            ctx.fillRect(px0 + 0.3, top, Math.max(0.8, px1 - px0 - 0.6), recBottom - top);
+        });
+
+        // True object (dashed)
+        ctx.setLineDash([4, 3]);
+        ctx.strokeStyle = '#e2e8f0';
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        ctx.moveTo(margin.left, recBottom);
+        segs.slice().sort((a, b) => a.x0 - b.x0).forEach(seg => {
+            const y = recBottom - (seg.rho / yScale) * recH;
+            ctx.lineTo(xToPx(seg.x0), recBottom);
+            ctx.lineTo(xToPx(seg.x0), y);
+            ctx.lineTo(xToPx(seg.x1), y);
+            ctx.lineTo(xToPx(seg.x1), recBottom);
+        });
+        ctx.lineTo(margin.left + plotW, recBottom);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // Axes, FOV edges ↔ ±BW/2
+        ctx.strokeStyle = '#475569';
+        ctx.beginPath();
+        ctx.moveTo(margin.left, recBottom);
+        ctx.lineTo(margin.left + plotW, recBottom);
+        ctx.stroke();
+        ctx.font = '8px Inter';
+        ctx.textAlign = 'center';
+        [-p.fov / 2, p.fov / 2].forEach((x, i) => {
+            if (Math.abs(x) > xView) return;
+            ctx.strokeStyle = '#f59e0b';
+            ctx.setLineDash([4, 3]);
+            ctx.beginPath();
+            ctx.moveTo(xToPx(x), recTop);
+            ctx.lineTo(xToPx(x), recBottom);
+            ctx.stroke();
+            ctx.setLineDash([]);
+            ctx.fillStyle = '#f59e0b';
+            ctx.fillText(i === 0 ? '−BW/2 ↔ −FOV/2' : '+BW/2 ↔ +FOV/2', xToPx(x), recTop - 2);
+        });
+        ctx.fillStyle = '#64748b';
+        [-150, -100, -50, 0, 50, 100, 150].forEach(x => ctx.fillText(x, xToPx(x), recBottom + 11));
+        ctx.fillStyle = '#94a3b8';
+        ctx.fillText(narrow ? `x (mm) — dashed: truth, bars: recon` : `x (mm)   — dashed: true object, bars: reconstruction (Δx = ${p.dx.toFixed(1)} mm)`,
+                     margin.left + plotW / 2, h - 6);
+
+        // Aliasing warning
+        const aliased = segs.some(seg => seg.x0 < -p.fov / 2 || seg.x1 > p.fov / 2);
+        if (aliased) {
+            ctx.font = 'bold 10px Inter';
+            ctx.fillStyle = '#ef4444';
+            ctx.textAlign = 'right';
+            ctx.fillText(narrow ? 'Aliasing (wrap)' : 'Aliasing: tissue outside the FOV wraps to the other side', margin.left + plotW, recTop - 12);
+        }
+    }
+
+    renderFreqPhasors(ctx, p, segs, kNow) {
+        const { w, h } = this.beginPanel(ctx);
+        const xView = 150;
+        const total = this.freqSignal(segs, kNow);
+        const sMax = Math.max(1e-9, segs.reduce((acc, seg) => acc + seg.rho * (seg.x1 - seg.x0), 0));
+        const mag = Math.sqrt(total.re * total.re + total.im * total.im);
+
+        ctx.font = 'bold 10px Inter';
+        ctx.textAlign = 'center';
+        ctx.fillStyle = '#f59e0b';
+        ctx.fillText('Signal = Σ tube phasors (head-to-tail)', w / 2, 14);
+
+        const cx = w / 2;
+        const cy = 34 + (h - 120) / 2;
+        const R = Math.min(w / 2 - 16, (h - 120) / 2);
+
+        ctx.strokeStyle = '#334155';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([3, 3]);
+        ctx.beginPath();
+        ctx.arc(cx, cy, R, 0, 2 * Math.PI);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.beginPath();
+        ctx.moveTo(cx - R - 6, cy);
+        ctx.lineTo(cx + R + 6, cy);
+        ctx.moveTo(cx, cy - R - 6);
+        ctx.lineTo(cx, cy + R + 6);
+        ctx.stroke();
+        ctx.font = '8px Inter';
+        ctx.fillStyle = '#64748b';
+        ctx.textAlign = 'left';
+        ctx.fillText('Re', cx + R + 2, cy - 3);
+        ctx.fillText('Im', cx + 3, cy - R - 2);
+
+        // Head-to-tail chain (Re right, Im up)
+        let px = cx, py = cy;
+        segs.forEach(seg => {
+            const xc = (seg.x0 + seg.x1) / 2;
+            const ph = this.segmentPhasor(seg, kNow);
+            const nx = px + (ph.re / sMax) * R;
+            const ny = py - (ph.im / sMax) * R;
+            this.drawArrow(ctx, px, py, nx, ny, this.xColor((xc + xView) / (2 * xView)), 2.5, 6);
+            px = nx;
+            py = ny;
+        });
+        // Resultant
+        this.drawArrow(ctx, cx, cy, cx + (total.re / sMax) * R, cy - (total.im / sMax) * R, '#ffffff', 2, 8);
+
+        const pct = (mag / sMax) * 100;
+        ctx.font = 'bold 12px Inter';
+        ctx.textAlign = 'center';
+        ctx.fillStyle = pct > 50 ? '#10b981' : (pct > 20 ? '#f59e0b' : '#ef4444');
+        ctx.fillText(`|S| = ${pct.toFixed(0)}% of max`, w / 2, h - 70);
+
+        ctx.font = '9px Inter';
+        ctx.fillStyle = '#94a3b8';
+        const lines = [
+            `FOV = BW/(γ̄Gx) = ${p.fov.toFixed(0)} mm`,
+            `Δx = FOV/N = ${p.dx.toFixed(2)} mm`,
+            `T_acq = N/BW = ${(p.tacq * 1000).toFixed(2)} ms`
+        ];
+        lines.forEach((line, i) => ctx.fillText(line, w / 2, h - 46 + i * 14));
     }
 }
 

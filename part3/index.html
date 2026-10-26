@@ -11,7 +11,6 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <!-- MathJax -->
-    <script src="https://polyfill.io/v3/polyfill.min.js?features=es6"></script>
     <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
 </head>
 
@@ -31,6 +30,9 @@
                 <div class="module-tabs">
                     <button class="module-tab active" data-module="A">A: Gradient Encoding</button>
                     <button class="module-tab" data-module="B">B: K-Space & Signal</button>
+                    <button class="module-tab wide" data-module="C">C: Readout &rarr; K-Space &rarr; Image</button>
+                    <button class="module-tab" data-module="D">D: Freq &rarr; Image</button>
+                    <button class="module-tab" data-module="E">E: Slice Selection</button>
                 </div>
 
                 <!-- Module A: Gradient Encoding -->
@@ -119,7 +121,7 @@
 
                     <div class="control-row">
                         <label for="ky-position">k<sub>y</sub> Line (Phase Encode Step)</label>
-                        <input type="range" id="ky-position" min="-8" max="8" value="0">
+                        <input type="range" id="ky-position" min="-8" max="7" value="0">
                         <span id="ky-val">0</span>
                     </div>
 
@@ -131,7 +133,7 @@
 
                     <div class="control-row">
                         <label for="kx-position">k<sub>x</sub> Point (During Readout)</label>
-                        <input type="range" id="kx-position" min="-8" max="8" value="0">
+                        <input type="range" id="kx-position" min="-8" max="7" value="0">
                         <span id="kx-val">0</span>
                     </div>
 
@@ -191,7 +193,209 @@
                     <div class="info-panel secondary">
                         <h4>Connection to Module A</h4>
                         <p>k<sub>x</sub> = Frequency encoding (G<sub>x</sub> × time)<br>
-                        k<sub>y</sub> = Phase encoding (G<sub>y</sub> strength)</p>
+                        k<sub>y</sub> = Phase encoding (G<sub>y</sub> strength)<br>
+                        <em>k is counted in cycles per FOV: step m twists the phase m full turns across the object; k<sub>max</sub> = N/2 makes neighbouring voxels opposite (π).</em></p>
+                    </div>
+                </div>
+
+                <!-- Module C: Readout -> K-Space -> Image -->
+                <div class="control-group module-controls" id="controls-C" style="display: none;">
+                    <h2>Readout &rarr; K-Space &rarr; Image</h2>
+
+                    <div class="stage-indicator" id="recon-stage">Ready: press Play to acquire line k<sub>y</sub> = -4</div>
+
+                    <div class="control-row">
+                        <label for="recon-object">Object</label>
+                        <select id="recon-object">
+                            <option value="L" selected>Letter "L" (asymmetric)</option>
+                            <option value="dots2">Two dots (different &rho;)</option>
+                            <option value="point">Single voxel</option>
+                            <option value="circle">Circle</option>
+                            <option value="line-v">Vertical line</option>
+                        </select>
+                    </div>
+
+                    <div class="control-row">
+                        <label for="recon-n">Grid Size</label>
+                        <select id="recon-n">
+                            <option value="8" selected>8 &times; 8</option>
+                            <option value="16">16 &times; 16</option>
+                        </select>
+                    </div>
+
+                    <div class="btn-row">
+                        <button id="recon-play" class="small-btn">&#9654; Play</button>
+                        <button id="recon-step" class="small-btn secondary">Step</button>
+                        <button id="recon-reset" class="small-btn secondary">Reset</button>
+                    </div>
+                    <button id="recon-skip" class="small-btn secondary" style="width: 100%; padding: 7px; margin-top: 6px;">Skip to decompose &#9193;</button>
+
+                    <div class="control-row" style="margin-top: 10px;">
+                        <label for="recon-speed">Speed</label>
+                        <input type="range" id="recon-speed" min="0.25" max="3" step="0.25" value="1">
+                        <span id="recon-speed-val">1.00&times;</span>
+                    </div>
+
+                    <div class="equation-box">
+                        \(S(k_x,k_y) = \sum_{x,y} \rho\, e^{-i2\pi(k_x x + k_y y)}\)<br>
+                        \(\rho(x,y) = \dfrac{1}{N^2}\sum_{k_x,k_y} S\, e^{+i2\pi(k_x x + k_y y)}\)
+                    </div>
+
+                    <div class="info-panel">
+                        <h4>What You're Seeing</h4>
+                        <p><strong>Acquire:</strong> every voxel sends its own signal (frequency set by x, starting phase by k<sub>y</sub>&middot;y).
+                        The coil records only their <strong>sum</strong>: each sum is <strong>one k-space sample</strong>;
+                        one readout fills one k<sub>y</sub> line.<br>
+                        <strong>Decompose:</strong> each k-space value is the weight of one stripe pattern (spatial frequency).
+                        The inverse Fourier transform adds the patterns back, center first: low k gives the blurry shape and contrast,
+                        high k gives the edges.</p>
+                    </div>
+                </div>
+
+                <!-- Module E: Slice Selection -->
+                <div class="control-group module-controls" id="controls-E" style="display: none;">
+                    <h2>Slice Selection</h2>
+
+                    <div class="control-row">
+                        <label for="slice-gz">Slice Gradient G<sub>z</sub> (mT/m)</label>
+                        <input type="range" id="slice-gz" min="1" max="40" step="1" value="10">
+                        <span id="slice-gz-val">10 mT/m</span>
+                    </div>
+
+                    <div class="control-row">
+                        <label for="slice-duration">RF Pulse Duration T (ms)</label>
+                        <input type="range" id="slice-duration" min="0.5" max="8" step="0.5" value="2">
+                        <span id="slice-duration-val">2.0 ms</span>
+                    </div>
+
+                    <div class="control-row">
+                        <label for="slice-tbw">Sinc Lobes (Time-Bandwidth Product)</label>
+                        <input type="range" id="slice-tbw" min="2" max="10" step="1" value="4">
+                        <span id="slice-tbw-val">TBW = 4</span>
+                    </div>
+
+                    <div class="control-row">
+                        <label for="slice-fc">RF Center Frequency Offset &Delta;f<sub>c</sub> (kHz)</label>
+                        <input type="range" id="slice-fc" min="-20" max="20" step="0.5" value="0">
+                        <span id="slice-fc-val">0.0 kHz</span>
+                    </div>
+
+                    <div class="signal-display">
+                        <h4>Resulting Slice</h4>
+                        <div class="signal-values">
+                            <div class="signal-item">
+                                <span class="signal-label">RF BW</span>
+                                <span class="signal-value" id="slice-bw-out">2.0 kHz</span>
+                            </div>
+                            <div class="signal-item">
+                                <span class="signal-label">&Delta;z</span>
+                                <span class="signal-value" id="slice-dz-out">4.7 mm</span>
+                            </div>
+                            <div class="signal-item">
+                                <span class="signal-label">z<sub>c</sub></span>
+                                <span class="signal-value" id="slice-zc-out">0.0 mm</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="equation-box">
+                        \(\Delta z = \dfrac{BW}{\bar{\gamma}\, G_z}, \quad z_c = \dfrac{\Delta f_c}{\bar{\gamma}\, G_z}\)
+                    </div>
+
+                    <div class="info-panel">
+                        <h4>What You're Seeing</h4>
+                        <p>With G<sub>z</sub> on, the Larmor frequency changes linearly with position:
+                        f(z) = &gamma;&#772;&middot;G<sub>z</sub>&middot;z. An RF pulse only tips spins whose frequency falls inside
+                        its bandwidth (resonance), so it excites one slab.
+                        <strong>Thinner slice:</strong> stronger G<sub>z</sub> or narrower BW (longer pulse).
+                        <strong>Move the slice:</strong> shift the RF center frequency.</p>
+                    </div>
+
+                    <div class="info-panel secondary">
+                        <h4>RF Pulse &harr; Slice Profile</h4>
+                        <p>The slice profile is (approximately) the Fourier transform of the RF envelope:
+                        a sinc pulse gives a rectangular slab. Truncating the sinc (fewer lobes) rounds the edges.</p>
+                    </div>
+                </div>
+
+                <!-- Module D: Frequency Encoding -> Fourier -->
+                <div class="control-group module-controls" id="controls-D" style="display: none;">
+                    <h2>Frequency Encoding &rarr; Image</h2>
+
+                    <div class="control-row">
+                        <label for="freq-object">Object (1D)</label>
+                        <select id="freq-object">
+                            <option value="two" selected>Two tubes</option>
+                            <option value="three">Three tubes (different &rho;)</option>
+                            <option value="wide">One wide block</option>
+                            <option value="wider">Object wider than FOV</option>
+                        </select>
+                    </div>
+
+                    <div class="control-row">
+                        <label for="freq-gx">Readout Gradient G<sub>x</sub> (mT/m)</label>
+                        <input type="range" id="freq-gx" min="1" max="20" step="0.5" value="5">
+                        <span id="freq-gx-val">5.0 mT/m</span>
+                    </div>
+
+                    <div class="control-row">
+                        <label for="freq-bw">Receiver Bandwidth BW = 1/&Delta;t (kHz)</label>
+                        <input type="range" id="freq-bw" min="5" max="100" step="1" value="32">
+                        <span id="freq-bw-val">32 kHz</span>
+                    </div>
+
+                    <div class="control-row">
+                        <label for="freq-n">Number of Samples N</label>
+                        <select id="freq-n">
+                            <option value="16">16</option>
+                            <option value="32">32</option>
+                            <option value="64" selected>64</option>
+                            <option value="128">128</option>
+                        </select>
+                    </div>
+
+                    <div class="control-row">
+                        <label for="freq-time">Readout Time (scrub)</label>
+                        <input type="range" id="freq-time" min="-500" max="500" step="1" value="-500">
+                        <span id="freq-time-val">t = start</span>
+                    </div>
+
+                    <button id="freq-play-btn" class="small-btn" style="width: 100%; padding: 8px;">&#9654; Play Readout</button>
+
+                    <div class="signal-display">
+                        <h4>Encoding Geometry</h4>
+                        <div class="signal-values">
+                            <div class="signal-item">
+                                <span class="signal-label">FOV</span>
+                                <span class="signal-value" id="freq-fov-out">150 mm</span>
+                            </div>
+                            <div class="signal-item">
+                                <span class="signal-label">&Delta;x</span>
+                                <span class="signal-value" id="freq-dx-out">2.3 mm</span>
+                            </div>
+                            <div class="signal-item">
+                                <span class="signal-label">T<sub>acq</sub></span>
+                                <span class="signal-value" id="freq-tacq-out">2.0 ms</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="equation-box">
+                        \(FOV = \dfrac{BW}{\bar{\gamma}\, G_x}, \quad \Delta x = \dfrac{FOV}{N}\)
+                    </div>
+
+                    <div class="info-panel">
+                        <h4>What You're Seeing</h4>
+                        <p>During readout every position "sings its own pitch": f(x) = &gamma;&#772;&middot;G<sub>x</sub>&middot;x.
+                        The coil hears only the <strong>chord</strong> (the sum). A Fourier transform splits the chord back
+                        into its notes &mdash; the strength of each frequency is the amount of tissue at that position.</p>
+                    </div>
+
+                    <div class="info-panel secondary">
+                        <h4>Try This</h4>
+                        <p>&bull; Increase N (longer readout) &rarr; finer &Delta;x.<br>
+                        &bull; Lower BW or raise G<sub>x</sub> &rarr; smaller FOV.<br>
+                        &bull; "Object wider than FOV": parts outside the FOV wrap to the other side (aliasing).</p>
                     </div>
                 </div>
 
@@ -210,7 +414,7 @@
                     <!-- 2D Spin Array -->
                     <div class="viz-panel" id="spin-panel">
                         <div class="panel-header">
-                            <h2>2D Spin Array</h2>
+                            <h2 id="spin-title">2D Spin Array</h2>
                             <span class="panel-badge" id="spin-badge">Phase Pattern</span>
                         </div>
                         <div class="panel-content">
@@ -222,7 +426,7 @@
                     <div class="viz-panel small" id="legend-panel">
                         <div class="panel-header">
                             <h2>Pulse Sequence</h2>
-                            <span class="panel-badge">Cartesian</span>
+                            <span class="panel-badge" id="legend-badge">Cartesian</span>
                         </div>
                         <div class="panel-content centered">
                             <canvas id="legend-canvas"></canvas>
