@@ -53,11 +53,13 @@
                         <span class="freq-label">Larmor Frequency:</span>
                         <span class="freq-value" id="b0Freq">63.86 MHz</span>
                     </div>
+                    <p class="b0-note" id="b0Note"></p>
 
                     <div id="inhomogeneity-control" style="display: none;">
-                        <label for="inhomogeneity">Field Inhomogeneity (Hz)</label>
-                        <input type="range" id="inhomogeneity" min="0" max="100" step="5" value="0">
-                        <span id="inhomogeneityValue">0 Hz</span>
+                        <label for="inhomogeneity">Inhomogeneity Dephasing R2′ (s⁻¹, at 1.5 T)</label>
+                        <input type="range" id="inhomogeneity" min="0" max="100" step="1" value="5">
+                        <span id="inhomogeneityValue">5 s⁻¹</span>
+                        <p class="b0-note" id="r2primeReadout"></p>
                     </div>
                 </div>
 
@@ -92,6 +94,7 @@
                             <div class="tissue-info">
                                 <div class="tissue-name">White Matter</div>
                                 <div class="tissue-params">T1:600 T2:80 PD:0.7</div>
+                                <div class="tissue-params tissue-t2star" style="display: none;"></div>
                                 <div class="tissue-signal" id="signal-wm">S: --</div>
                             </div>
                         </div>
@@ -100,6 +103,7 @@
                             <div class="tissue-info">
                                 <div class="tissue-name">Gray Matter</div>
                                 <div class="tissue-params">T1:950 T2:100 PD:0.8</div>
+                                <div class="tissue-params tissue-t2star" style="display: none;"></div>
                                 <div class="tissue-signal" id="signal-gm">S: --</div>
                             </div>
                         </div>
@@ -108,6 +112,7 @@
                             <div class="tissue-info">
                                 <div class="tissue-name">CSF</div>
                                 <div class="tissue-params">T1:4500 T2:2200 PD:1.0</div>
+                                <div class="tissue-params tissue-t2star" style="display: none;"></div>
                                 <div class="tissue-signal" id="signal-csf">S: --</div>
                             </div>
                         </div>
@@ -116,6 +121,7 @@
                             <div class="tissue-info">
                                 <div class="tissue-name">Fat</div>
                                 <div class="tissue-params">T1:250 T2:60 PD:0.9</div>
+                                <div class="tissue-params tissue-t2star" style="display: none;"></div>
                                 <div class="tissue-signal" id="signal-fat">S: --</div>
                             </div>
                         </div>
@@ -239,7 +245,7 @@
                         <li>After 180° inversion, M<sub>z</sub> starts negative and recovers toward positive</li>
                         <li>MRI displays <strong>magnitude</strong> (absolute value), so negative appears as positive</li>
                         <li>This creates a "bounce" where signal crosses zero</li>
-                        <li>Each tissue nulls at TI = T1·ln[2/(1 + e<sup>-TR/T1</sup>)] (≈ 0.69·T1 when TR ≫ T1; e.g., CSF ≈ 2550 ms at TR 9000, Fat ≈ 170 ms)</li>
+                        <li>Each tissue nulls at TI = T1·ln[2/(1 + e<sup>-TR/T1</sup>)] (≈ 0.69·T1 when TR ≫ T1; e.g., at 1.5 T: CSF ≈ 2550 ms at TR 9000, Fat ≈ 170 ms; tissue T1, and so the null TI, lengthens at higher B0, CSF ≈ unchanged)</li>
                     </ul>
                     <p><strong>Tip:</strong> Toggle "Show Signed" to see the true recovery curve without the bounce.</p>
                 </div>

@@ -790,6 +790,14 @@ canvas {
     color: var(--accent-color);
 }
 
+/* B0 effect note / R2' readout (small explanatory text under a control) */
+.b0-note {
+    font-size: 0.72rem;
+    line-height: 1.4;
+    color: var(--text-secondary);
+    margin: 0.4rem 0 0;
+}
+
 /* Phase Info Box */
 .phase-info {
     background: rgba(56, 189, 248, 0.1);

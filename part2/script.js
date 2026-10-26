@@ -5,17 +5,24 @@
 class MRPhysics {
     constructor() {
         // Fixed Tissues for Brain Schematic
+        // t1/t2 are the 1.5 T reference values (ms). T1 lengthens with field, approximately as a
+        // power law T1(B0) = T1(1.5 T)·(B0/1.5)^t1Exp (WM/GM b ≈ 0.38, after Rooney et al., MRM 2007;
+        // fat ≈ 0.2; CSF ≈ 0). T2 is treated as field-independent (simplification).
         this.tissues = [
-            { id: 'fat', name: 'Fat', t1: 250, t2: 60, pd: 0.9, color: '#fbbf24', regionId: 'region-fat' },
-            { id: 'gm', name: 'Gray Matter', t1: 950, t2: 100, pd: 0.8, color: '#94a3b8', regionId: 'region-gm' },
-            { id: 'wm', name: 'White Matter', t1: 600, t2: 80, pd: 0.7, color: '#e2e8f0', regionId: 'region-wm' },
-            { id: 'csf', name: 'CSF', t1: 4500, t2: 2200, pd: 1.0, color: '#38bdf8', regionId: 'region-csf' }
+            { id: 'fat', name: 'Fat', t1: 250, t1Exp: 0.2, t2: 60, pd: 0.9, color: '#fbbf24', regionId: 'region-fat' },
+            { id: 'gm', name: 'Gray Matter', t1: 950, t1Exp: 0.38, t2: 100, pd: 0.8, color: '#94a3b8', regionId: 'region-gm' },
+            { id: 'wm', name: 'White Matter', t1: 600, t1Exp: 0.38, t2: 80, pd: 0.7, color: '#e2e8f0', regionId: 'region-wm' },
+            { id: 'csf', name: 'CSF', t1: 4500, t1Exp: 0, t2: 2200, pd: 1.0, color: '#38bdf8', regionId: 'region-csf' }
         ];
+
+        // Static-field (inhomogeneity) dephasing R2' at 1.5 T. 5 s^-1 gives brain-like T2*
+        // (WM ≈ 57 ms, GM ≈ 67 ms at 1.5 T). R2' scales ∝ B0.
+        this.defaultR2prime = 5;
 
         this.params = {
             sequence: 'SE',
             b0: 1.5,
-            inhomogeneity: 0, // Hz
+            r2prime: this.defaultR2prime, // s^-1, referenced to 1.5 T (R2' = 2π·Δf)
             tr: 500,    // ms
             te: 20,     // ms
             ti: 0,      // ms (for IR)
@@ -145,11 +152,12 @@ class MRPhysics {
         // Initialize frequency display
         this.updateB0Frequency();
 
-        // Inhomogeneity Slider
+        // Inhomogeneity Slider (R2' in s^-1, referenced to 1.5 T)
         const inhoSlider = document.getElementById('inhomogeneity');
+        inhoSlider.value = this.params.r2prime;
         inhoSlider.addEventListener('input', (e) => {
-            this.params.inhomogeneity = parseFloat(e.target.value);
-            document.getElementById('inhomogeneityValue').textContent = `${this.params.inhomogeneity} Hz`;
+            this.params.r2prime = parseFloat(e.target.value);
+            document.getElementById('inhomogeneityValue').textContent = `${this.params.r2prime} s⁻¹`;
             this.updateSimulation();
         });
 
@@ -179,22 +187,24 @@ class MRPhysics {
     }
 
     applyPreset(type) {
+        // R2' is a tissue/field property, so every preset restores the realistic default.
+        // Only GRE is affected by it: the 180° refocusing pulse of SE/IR-SE cancels R2'.
+        this.params.r2prime = this.defaultR2prime;
+
         if (type === 'T1') {
             this.params.sequence = 'SE';
             this.params.tr = 500;
             this.params.te = 20;
-            this.params.inhomogeneity = 0; // SE doesn't use inhomogeneity
         } else if (type === 'T2') {
             this.params.sequence = 'SE';
             this.params.tr = 3000;
             this.params.te = 100;
-            this.params.inhomogeneity = 0; // SE doesn't use inhomogeneity
         } else if (type === 'T2*') {
             this.params.sequence = 'GRE';
             this.params.tr = 500;
             this.params.te = 20;
             this.params.fa = 20; // Low flip angle for GRE T2*
-            this.params.inhomogeneity = 20; // Add some inhomogeneity to show T2* effect
+            // Default R2' = 5 s^-1 → T2* ≈ 57 ms (WM), 67 ms (GM) at 1.5 T: realistic brain values
         } else if (type === 'FLAIR') {
             this.params.sequence = 'IR';
             this.params.tr = 9000;
@@ -203,14 +213,12 @@ class MRPhysics {
             // = 4500·ln[2/(1 + e^-2)] ≈ 2550 ms (T1·ln2 = 3120 ms only holds for TR ≫ T1)
             this.params.ti = 2550;
             this.params.fa = 90; // Standard readout
-            this.params.inhomogeneity = 0; // IR doesn't use inhomogeneity
         } else if (type === 'STIR') {
             this.params.sequence = 'IR';
             this.params.tr = 4000;
             this.params.te = 50;
-            this.params.ti = 170; // Null Fat (T1 ~250ms -> TI ~ 0.69*T1)
+            this.params.ti = 170; // Null Fat at 1.5 T (T1 ~250ms -> TI ~ 0.69*T1)
             this.params.fa = 90; // Standard readout
-            this.params.inhomogeneity = 0; // IR doesn't use inhomogeneity
         }
 
         // Update UI - highlight active preset
@@ -232,8 +240,8 @@ class MRPhysics {
         // Always sync inhomogeneity slider with current params
         const inhoSlider = document.getElementById('inhomogeneity');
         if (inhoSlider) {
-            inhoSlider.value = this.params.inhomogeneity;
-            document.getElementById('inhomogeneityValue').textContent = `${this.params.inhomogeneity} Hz`;
+            inhoSlider.value = this.params.r2prime;
+            document.getElementById('inhomogeneityValue').textContent = `${this.params.r2prime} s⁻¹`;
         }
 
         this.updateSimulation();
@@ -275,24 +283,18 @@ class MRPhysics {
             input.addEventListener('input', (e) => {
                 let newValue = parseFloat(e.target.value);
 
-                // Safeguard: TI must be less than TR
-                if (id === 'ti' && newValue >= this.params.tr) {
-                    newValue = Math.max(10, this.params.tr - 10);
+                // Safeguard (IR): the echo at TI + TE must come before the next inversion → TI ≤ TR − TE
+                if (id === 'ti' && newValue > this.getMaxTI()) {
+                    newValue = this.getMaxTI();
                     e.target.value = newValue;
-                }
-                // Also check when TR changes - adjust TI if needed
-                if (id === 'tr' && this.params.ti && this.params.ti >= newValue) {
-                    this.params.ti = Math.max(10, newValue - 10);
-                    const tiInput = document.querySelector('input[type="range"][step="10"][min="10"][max="2000"]');
-                    if (tiInput) {
-                        tiInput.value = this.params.ti;
-                        const tiSpan = tiInput.parentElement.querySelector('span');
-                        if (tiSpan) tiSpan.textContent = this.params.ti;
-                    }
                 }
 
                 this.params[id] = newValue;
                 div.querySelector('span').textContent = newValue;
+
+                // Also check when TR or TE changes - pull TI back if needed
+                if (id === 'tr' || id === 'te') this.clampTI();
+
                 this.updateSimulation();
             });
             return div;
@@ -303,9 +305,9 @@ class MRPhysics {
         container.appendChild(createInput('te', 'TE (ms)', this.params.te, 1, 300, 1));
 
         if (this.params.sequence === 'IR') {
-            // Extended TI range to 4000ms to support FLAIR (CSF nulling ~3100ms at 3T)
-            container.appendChild(createInput('ti', 'TI (ms)', this.params.ti || 150, 10, 4000, 10));
-            this.params.ti = this.params.ti || 150;
+            // Extended TI range to 4000ms to support FLAIR (CSF nulling ~2550-3100ms depending on TR)
+            this.params.ti = Math.min(this.params.ti || 150, this.getMaxTI());
+            container.appendChild(createInput('ti', 'TI (ms)', this.params.ti, 10, 4000, 10));
         }
 
         // FA only applies to GRE and IR (SE uses fixed 90°/180° pulses)
@@ -313,6 +315,39 @@ class MRPhysics {
             container.appendChild(createInput('fa', 'Flip Angle (°)', this.params.fa || 90, 1, 180, 1));
             this.params.fa = this.params.fa || 90;
         }
+    }
+
+    // Longest valid TI (IR): excitation at TI, echo at TI + TE, all before the next inversion at TR
+    getMaxTI() {
+        return Math.max(10, Math.floor((this.params.tr - this.params.te) / 10) * 10);
+    }
+
+    // Keep TI ≤ TR − TE after TR/TE changes and sync the TI slider + label
+    clampTI() {
+        if (!this.params.ti || this.params.ti <= this.getMaxTI()) return;
+        this.params.ti = this.getMaxTI();
+        const tiInput = document.getElementById('ti');
+        if (tiInput) {
+            tiInput.value = this.params.ti;
+            const tiSpan = document.getElementById('ti-val');
+            if (tiSpan) tiSpan.textContent = this.params.ti;
+        }
+    }
+
+    // ----- Field (B0) dependence of relaxation, 1.5 T reference -----
+    // T1(B0) ≈ T1(1.5 T)·(B0/1.5)^b  (approximate power law; b per tissue, see this.tissues)
+    getFieldT1(tissue) {
+        return tissue.t1 * Math.pow(this.params.b0 / 1.5, tissue.t1Exp);
+    }
+
+    // R2' (static-field dephasing) scales ∝ B0: frequency offsets Δf = γ̄·ΔB0 grow with field
+    getFieldR2prime(r2prime15 = this.params.r2prime) {
+        return r2prime15 * this.params.b0 / 1.5;
+    }
+
+    // T2* = 1/(R2 + R2') in ms
+    getT2star(t2, r2prime15 = this.params.r2prime) {
+        return 1000 / (1000 / t2 + this.getFieldR2prime(r2prime15));
     }
 
     initCharts() {
@@ -391,6 +426,7 @@ class MRPhysics {
         this.updateContrastCharts();
         this.updateVisibility();
         this.updateEquation();
+        this.updateFieldDisplays();
 
         // Update mechanics visualizations
         this.updatePhaseWheel();
@@ -419,6 +455,20 @@ class MRPhysics {
     }
 
     // Physics Equations
+    // b0Factor: relative signal ∝ B0 (M0 ∝ B0; SNR ≈ ∝ B0). It is common to all tissues, so it
+    // cancels in the auto-windowed phantom; the image changes with B0 through T1(B0) and R2'(B0).
+
+    // Signal for one tissue at the current field (field-adjusted T1; R2' scaled inside GRE)
+    getTissueSignal(tissue, p = this.params) {
+        const t1 = this.getFieldT1(tissue);
+        if (p.sequence === 'SE') {
+            return this.getSignalSE(t1, tissue.t2, tissue.pd, p.tr, p.te, p.fa);
+        } else if (p.sequence === 'GRE') {
+            return this.getSignalGRE(t1, tissue.t2, tissue.pd, p.tr, p.te, p.fa, p.r2prime);
+        }
+        return this.getSignalIR(t1, tissue.t2, tissue.pd, p.tr, p.te, p.ti, p.fa);
+    }
+
     getSignalSE(t1, t2, pd, tr, te, faDeg = 90) {
         const b0Factor = this.params.b0 / 1.5;
 
@@ -431,17 +481,14 @@ class MRPhysics {
         return b0Factor * pd * t1Factor * t2Factor;
     }
 
-    getSignalGRE(t1, t2, pd, tr, te, faDeg, inhomogeneity = this.params.inhomogeneity) {
+    getSignalGRE(t1, t2, pd, tr, te, faDeg, r2prime15 = this.params.r2prime) {
         const fa = faDeg * Math.PI / 180;
         const e1 = Math.exp(-tr / t1);
 
         // T2* calculation
-        // R2* = R2 + R2'
-        // R2' = 2 * PI * delta_f
-        const r2 = 1000 / t2; // s^-1
-        const r2prime = 2 * Math.PI * inhomogeneity; // s^-1
-        const r2star = r2 + r2prime;
-        const t2star = 1000 / r2star; // ms
+        // R2* = R2 + R2'   (R2' = 2π·Δf, Δf = Lorentzian half-width of the off-resonance spread)
+        // R2' is given at 1.5 T and scaled ∝ B0
+        const t2star = this.getT2star(t2, r2prime15); // ms
 
         const b0Factor = this.params.b0 / 1.5;
 
@@ -457,8 +504,10 @@ class MRPhysics {
         const b0Factor = this.params.b0 / 1.5;
         const fa = faDeg * Math.PI / 180;
 
-        // General Steady State IR with readout alpha
+        // General Steady State IR with readout alpha (IR spin echo: 180 -> TI -> alpha -> 180 -> echo)
         // Sequence: 180 -> TI -> alpha -> (TR-TI)
+        // Closed form: Mz(TI) = (1 - 2e^(-TI/T1) + e^(-TR/T1)) / (1 + e^(-TR/T1)·cos(alpha))
+        // (refocusing 180's effect on Mz neglected, i.e. TE << TR; valid only for TR >= TI + TE)
         const e_ti = Math.exp(-ti / t1);
         const e_rem = Math.exp(-(tr - ti) / t1);
         const e1 = Math.exp(-tr / t1); // e_ti * e_rem
@@ -493,14 +542,7 @@ class MRPhysics {
         const signalDebug = {};
         for (const [label, tissue] of Object.entries(tissueByLabel)) {
             if (!tissue) continue;
-            let s = 0;
-            if (this.params.sequence === 'SE') {
-                s = this.getSignalSE(tissue.t1, tissue.t2, tissue.pd, this.params.tr, this.params.te, this.params.fa);
-            } else if (this.params.sequence === 'GRE') {
-                s = this.getSignalGRE(tissue.t1, tissue.t2, tissue.pd, this.params.tr, this.params.te, this.params.fa, this.params.inhomogeneity);
-            } else if (this.params.sequence === 'IR') {
-                s = this.getSignalIR(tissue.t1, tissue.t2, tissue.pd, this.params.tr, this.params.te, this.params.ti, this.params.fa);
-            }
+            const s = this.getTissueSignal(tissue);
             signalDebug[tissue.id] = { raw: s, abs: Math.abs(s) };
             signals[label] = Math.abs(s);
 
@@ -592,18 +634,11 @@ class MRPhysics {
         const generateData = (paramKey, min, max, step) => {
             return this.tissues.map(tissue => {
                 const data = [];
-                for (let x = min; x <= max; x += step) {
-                    let s = 0;
+                for (let x = min; x <= max + step * 1e-6; x += step) {
                     let p = { ...this.params };
                     p[paramKey] = x; // Override
 
-                    if (p.sequence === 'SE') {
-                        s = this.getSignalSE(tissue.t1, tissue.t2, tissue.pd, p.tr, p.te, p.fa);
-                    } else if (p.sequence === 'GRE') {
-                        s = this.getSignalGRE(tissue.t1, tissue.t2, tissue.pd, p.tr, p.te, p.fa, p.inhomogeneity);
-                    } else if (p.sequence === 'IR') {
-                        s = this.getSignalIR(tissue.t1, tissue.t2, tissue.pd, p.tr, p.te, p.ti, p.fa);
-                    }
+                    let s = this.getTissueSignal(tissue, p);
 
                     // Apply magnitude unless "Show Signed" is enabled (only relevant for IR)
                     if (!this.showSigned) {
@@ -676,27 +711,34 @@ class MRPhysics {
             });
         };
 
+        const isIR = this.params.sequence === 'IR';
+
         // Update TR Chart
+        // IR: the inversion repeats every TR, so the excitation (at TI) and echo (at TI + TE) must fit
+        // inside it. TR < TI + TE is impossible (and gives e^(-(TR-TI)/T1) > 1), so it is not plotted.
         const maxTR = Math.max(5000, this.params.tr * 1.1);
-        this.charts.tr.data.datasets = generateData('tr', 0, maxTR, maxTR / 100);
+        const minTR = isIR ? this.params.ti + this.params.te : 0;
+        this.charts.tr.data.datasets = generateData('tr', minTR, maxTR, (maxTR - minTR) / 100);
         addIndicator(this.charts.tr, this.params.tr);
         // Update scale to match data
+        this.charts.tr.options.scales.x.min = isIR ? Math.min(minTR, this.params.tr) : undefined;
         this.charts.tr.options.scales.x.max = maxTR;
+        this.charts.tr.options.scales.x.title.text = isIR ? 'TR (ms) — IR needs TR ≥ TI + TE' : 'TR (ms)';
         this.charts.tr.update();
 
         // Update TE Chart
         this.charts.te.data.datasets = generateData('te', 0, 300, 5);
 
-        // If GRE, add T2 reference curve (dotted) for White Matter (or first tissue)
-        if (this.params.sequence === 'GRE' && this.tissues.length > 0) {
-            const refTissue = this.tissues[0]; // Use first tissue as reference
+        // If GRE, add T2 reference curve (dotted) for White Matter
+        const refTissue = this.tissues.find(t => t.id === 'wm');
+        if (this.params.sequence === 'GRE' && refTissue) {
             const data = [];
             for (let x = 0; x <= 300; x += 5) {
                 // Pure T2 decay: PD * exp(-TE/T2) * (saturation term)
                 // Saturation term depends on TR/T1/FA.
                 // S_GRE_steady = M0 * sin(a)*(1-E1)/(1-E1*cos(a)) * exp(-TE/T2)
                 // We use T2 instead of T2*
-                const s = this.getSignalGRE(refTissue.t1, refTissue.t2, refTissue.pd, this.params.tr, x, this.params.fa, 0); // Inhomogeneity = 0
+                const s = this.getSignalGRE(this.getFieldT1(refTissue), refTissue.t2, refTissue.pd, this.params.tr, x, this.params.fa, 0); // R2' = 0
                 data.push({ x: x, y: s });
             }
             this.charts.te.data.datasets.push({
@@ -713,12 +755,15 @@ class MRPhysics {
         this.charts.te.update();
 
         // Update TI Chart (only if IR)
-        if (this.params.sequence === 'IR') {
-            const maxTI = Math.max(2000, this.params.ti * 1.1);
+        // Same timing rule: TI ≤ TR − TE, so the axis never runs past the longest valid TI
+        if (isIR) {
+            const maxTI = Math.min(Math.max(10, this.params.tr - this.params.te),
+                                   Math.max(2000, this.params.ti * 1.1));
             this.charts.ti.data.datasets = generateData('ti', 0, maxTI, maxTI / 100);
             addIndicator(this.charts.ti, this.params.ti);
             // Update scale to match data
             this.charts.ti.options.scales.x.max = maxTI;
+            this.charts.ti.options.scales.x.title.text = 'TI (ms) — limited to TI ≤ TR − TE';
             this.charts.ti.update();
         }
 
@@ -751,15 +796,75 @@ class MRPhysics {
             approxHtml = `S &approx; PD &middot;
         <span style="color: #3b82f6;">(Inversion Recovery)</span> &middot;
         <span style="color: #ef4444;">(T2 Decay)</span>`;
-            exactHtml = `S = PD &middot;
+            // Same closed form as getSignalIR(); with α = 90° it reduces to the familiar
+            // PD·|1 - 2e^(-TI/T1) + e^(-TR/T1)|·e^(-TE/T2)
+            if (Math.round(this.params.fa) === 90) {
+                exactHtml = `S = PD &middot;
         <span style="color: #3b82f6;">|1 - 2e<sup>-TI/T1</sup> + e<sup>-TR/T1</sup>|</span> &middot;
+        <span style="color: #ef4444;">e<sup>-TE/T2</sup></span>
+        <span style="color: #94a3b8; font-size: 0.85em;">(&alpha; = 90&deg;)</span>`;
+            } else {
+                exactHtml = `S = PD &middot; sin&alpha; &middot;
+        <span style="color: #3b82f6;">|1 - 2e<sup>-TI/T1</sup> + e<sup>-TR/T1</sup>| / (1 + e<sup>-TR/T1</sup>cos&alpha;)</span> &middot;
         <span style="color: #ef4444;">e<sup>-TE/T2</sup></span>`;
+            }
         }
 
         el.innerHTML = `
             <div class="equation-approx">${approxHtml}</div>
             <div class="equation-exact">${exactHtml}</div>
         `;
+    }
+
+    // Field-adjusted tissue parameters (cards), B0 note and R2' readout
+    updateFieldDisplays() {
+        const b0 = this.params.b0;
+        const isGRE = this.params.sequence === 'GRE';
+
+        // Tissue cards: show T1 at the current field (T2 field-independent in this model)
+        this.tissues.forEach(tissue => {
+            const card = document.querySelector(`.tissue-card[data-tissue="${tissue.id}"]`);
+            if (!card) return;
+            const paramsEl = card.querySelector('.tissue-params');
+            if (paramsEl) {
+                paramsEl.textContent = `T1:${Math.round(this.getFieldT1(tissue))} T2:${tissue.t2} PD:${tissue.pd.toFixed(1)}`;
+                paramsEl.title = `T1 at ${b0} T ≈ ${tissue.t1} ms (1.5 T) × (B0/1.5)^${tissue.t1Exp}; T2 held field-independent`;
+            }
+            // T2* = 1/(R2 + R2') only matters for GRE (SE/IR-SE refocus R2')
+            const t2starEl = card.querySelector('.tissue-t2star');
+            if (t2starEl) {
+                t2starEl.style.display = isGRE ? 'block' : 'none';
+                t2starEl.textContent = `T2*:${this.getT2star(tissue.t2).toFixed(0)} ms`;
+            }
+        });
+
+        // One-line note on what B0 does to the image
+        const note = document.getElementById('b0Note');
+        if (note) {
+            const k = (exp) => Math.pow(b0 / 1.5, exp).toFixed(2);
+            if (b0 === 1.5) {
+                note.textContent = '1.5 T = reference values. Higher B0 → longer T1 (WM/GM ≈ ∝ B0^0.38) and larger R2′ (shorter T2*).';
+            } else {
+                const effect = b0 > 1.5
+                    ? 'at the same TR, less T1 recovery; STIR fat-null TI lengthens'
+                    : 'at the same TR, more T1 recovery; STIR fat-null TI shortens';
+                note.textContent = `${b0} T: T1 ×${k(0.38)} (WM/GM), ×${k(0.2)} (fat), CSF ≈ same → ${effect}. `
+                    + `R2′ ×${(b0 / 1.5).toFixed(2)} → ${b0 > 1.5 ? 'shorter' : 'longer'} T2*. S ∝ B0.`;
+            }
+            note.title = 'Approximate model: T1(B0) ≈ T1(1.5 T)·(B0/1.5)^b, b ≈ 0.38 WM/GM (after Rooney et al., MRM 2007), ≈ 0.2 fat, ≈ 0 CSF. '
+                + 'R2′ ∝ B0. T2 treated as field-independent (simplification). Signal scaled ∝ B0 (≈ SNR), which cancels in the auto-windowed image.';
+        }
+
+        // R2' readout: units/convention, value at the current field and resulting T2*
+        const r2pEl = document.getElementById('r2primeReadout');
+        if (r2pEl) {
+            const wm = this.tissues.find(t => t.id === 'wm');
+            const gm = this.tissues.find(t => t.id === 'gm');
+            const r2pField = this.getFieldR2prime();
+            const deltaF = this.params.r2prime / (2 * Math.PI);
+            r2pEl.innerHTML = `R2′ = 2π·Δf (Δf ≈ ${deltaF.toFixed(1)} Hz at 1.5 T), ∝ B0 → ${r2pField.toFixed(1)} s⁻¹ at ${b0} T<br>`
+                + `T2* = 1/(R2 + R2′): WM ${this.getT2star(wm.t2).toFixed(0)} ms, GM ${this.getT2star(gm.t2).toFixed(0)} ms`;
+        }
     }
 
     // ========================================
@@ -1304,7 +1409,7 @@ class MRPhysics {
                 { label: 'T1 Recovery', description: 'Near TI - time for readout' },
                 { label: 'T1 Recovery', description: 'Mz value determines signal magnitude' },
                 { label: 'At TI', description: `TI=${this.params.ti}ms reached - readout pulse applied` },
-                { label: '90° Readout', description: 'Readout pulse converts Mz to Mxy signal' },
+                { label: `${Math.round(this.params.fa)}° Excitation`, description: 'Excitation converts Mz to Mxy; a 180° refocusing pulse follows (IR spin echo)' },
                 { label: 'Signal Decay', description: 'Transverse magnetization begins T2 decay' },
                 { label: 'Signal Decay', description: 'T2-weighted decay of the IR signal' },
                 { label: 'Signal Decay', description: 'Signal decreasing with T2 relaxation' },
@@ -1318,11 +1423,9 @@ class MRPhysics {
 
     updateR2Chart() {
         // Calculate T2 and T2* decay curves
-        const t2 = 80; // White matter T2 (ms)
-        const r2 = 1000 / t2; // s^-1
-        const r2prime = 2 * Math.PI * this.params.inhomogeneity; // s^-1
-        const r2star = r2 + r2prime;
-        const t2star = 1000 / r2star; // ms
+        const t2 = this.tissues.find(t => t.id === 'wm').t2; // White matter T2 (ms)
+        const r2prime = this.getFieldR2prime(); // s^-1 at the current B0
+        const t2star = this.getT2star(t2); // ms, 1/(R2 + R2')
 
         // Generate decay curve data
         const t2Data = [];
@@ -1375,7 +1478,7 @@ class MRPhysics {
         // Update parameter badge with T2 values
         const r2Badge = document.getElementById('r2-params');
         if (r2Badge) {
-            r2Badge.textContent = `T2=${t2}ms → T2*=${t2star.toFixed(0)}ms (ΔB₀=${this.params.inhomogeneity}Hz)`;
+            r2Badge.textContent = `WM: T2=${t2}ms → T2*=${t2star.toFixed(0)}ms (R2′=${r2prime.toFixed(1)} s⁻¹ at ${this.params.b0} T)`;
         }
     }
 
@@ -1461,8 +1564,33 @@ class MRPhysics {
         const endX = 760;
         const totalWidth = endX - startX;
 
-        // Calculate current time position based on frame
-        const currentTimeX = startX + (frame / (this.totalFrames - 1)) * totalWidth;
+        // Schematic event positions (x = centre of each pulse/echo). Time 0 = centre of the first RF pulse.
+        // Every echo sits at the centre of its readout lobe; the readout prephaser has half the readout area.
+        const t0 = startX + 15; // RF pulses are drawn 30 px wide starting at x
+        const layout = {
+            // SE: 90° — TE/2 — 180° — TE/2 — echo
+            SE: { c180: t0 + 200, echo: t0 + 400 },
+            // GRE (spoiled): α — prephaser (−) — readout (+), echo where the two areas cancel
+            GRE: { readStart: t0 + 125, echo: t0 + 185 },
+            // IR-SE (FLAIR/STIR): 180° inversion — TI — 90° — TE/2 — 180° — TE/2 — echo
+            IR: { exc: t0 + 300, c180: t0 + 430, echo: t0 + 560 }
+        }[seq];
+
+        // Map phase-wheel frames to the matching event on the timeline (piecewise linear)
+        const keyframes = {
+            SE: [[0, startX], [1, t0], [8, layout.c180], [15, layout.echo]],
+            GRE: [[0, startX], [1, t0], [7, layout.readStart], [15, layout.echo]],
+            IR: [[0, startX], [1, t0], [9, layout.exc - 8], [10, layout.exc + 8], [12, layout.c180], [15, layout.echo]]
+        }[seq];
+        let currentTimeX = keyframes[keyframes.length - 1][1];
+        for (let i = 1; i < keyframes.length; i++) {
+            const [f0, x0] = keyframes[i - 1];
+            const [f1, x1] = keyframes[i];
+            if (frame <= f1) {
+                currentTimeX = x0 + (x1 - x0) * (frame - f0) / (f1 - f0);
+                break;
+            }
+        }
 
         // Draw current time indicator (vertical line synced with phase wheel)
         const timeIndicator = document.createElementNS(ns, 'line');
@@ -1485,97 +1613,107 @@ class MRPhysics {
         timeDot.setAttribute('filter', 'url(#timelineGlow)');
         svg.appendChild(timeDot);
 
+        // Helpers: place RF pulses / gradient lobes by their centre
+        const rf = (c, h, label, color) => this.addRFPulseDark(svg, c - 15, rfY, h, label, color);
+        const lobe = (c, y, w, h, color, dir) => this.addGradientLobeDark(svg, c - w / 2, y, w, h, color, dir);
+
         if (seq === 'SE') {
             // Spin Echo timing
-            const te180Frac = 0.3;  // 180° at ~30% of TR
-            const teFrac = 0.6;     // Echo at ~60% of TR
-            const te180X = startX + te180Frac * totalWidth;
-            const teX = startX + teFrac * totalWidth;
+            const { c180, echo } = layout;
 
             // RF: 90° excitation
-            this.addRFPulseDark(svg, startX, rfY, 20, '90°', '#f59e0b');
-            // RF: 180° refocusing
-            this.addRFPulseDark(svg, te180X, rfY, 28, '180°', '#a855f7');
+            rf(t0, 20, '90°', '#f59e0b');
+            // RF: 180° refocusing at TE/2
+            rf(c180, 28, '180°', '#a855f7');
 
             // Gz: Slice select during RF pulses
-            this.addGradientLobeDark(svg, startX - 5, gzY, 40, 18, '#22c55e', 'up');
-            this.addGradientLobeDark(svg, startX + 35, gzY, 20, 10, '#22c55e', 'down'); // Rephaser
-            this.addGradientLobeDark(svg, te180X - 5, gzY, 40, 18, '#22c55e', 'up');
+            lobe(t0, gzY, 40, 18, '#22c55e', 'up');
+            lobe(t0 + 30, gzY, 20, 10, '#22c55e', 'down'); // Rephaser
+            lobe(c180, gzY, 40, 18, '#22c55e', 'up');
 
             // Gy: Phase encoding (short blip)
-            this.addGradientLobeDark(svg, startX + 60, gyY, 30, 15, '#eab308', 'up');
+            lobe(t0 + 100, gyY, 30, 15, '#eab308', 'up');
 
-            // Gx: Frequency encode (dephase + readout)
-            this.addGradientLobeDark(svg, startX + 60, gxY, 40, 18, '#60a5fa', 'down');
-            this.addGradientLobeDark(svg, te180X + 40, gxY, 80, 18, '#60a5fa', 'up'); // Readout
+            // Gx: Frequency encode (prephase + readout)
+            // The prephaser comes BEFORE the 180°, which inverts its phase → same polarity as the readout
+            lobe(t0 + 100, gxY, 60, 18, '#60a5fa', 'up');   // Prephaser (half the readout area)
+            lobe(echo, gxY, 120, 18, '#60a5fa', 'up');      // Readout, centred on the echo
 
             // Signal echo
-            this.addSignalEchoDark(svg, teX, signalY, seqColor);
+            this.addSignalEchoDark(svg, echo, signalY, seqColor);
 
-            // TE/2 and TE markers
-            this.addTimeMarkerDark(svg, te180X + 17, 12, axisY, 'TE/2');
-            this.addTimeMarkerDark(svg, teX, 12, axisY, 'TE', seqColor);
+            // TE/2 and TE markers (180° exactly midway between 90° and echo)
+            this.addTimeMarkerDark(svg, c180, 12, axisY, '');
+            this.addTimeMarkerDark(svg, echo, 12, axisY, 'TE', seqColor);
+            this.addTimeSpanDark(svg, t0, c180, 176, 'TE/2');
+            this.addTimeSpanDark(svg, c180, echo, 176, 'TE/2');
 
         } else if (seq === 'GRE') {
             // Gradient Echo timing
-            const teFrac = 0.4;
-            const teX = startX + teFrac * totalWidth;
+            const { readStart, echo } = layout;
+            const readWidth = 2 * (echo - readStart);
 
             // RF: α excitation
             const pulseHeight = 12 + (this.params.fa / 180) * 16;
-            this.addRFPulseDark(svg, startX, rfY, pulseHeight, `${Math.round(this.params.fa)}°`, '#f59e0b');
+            rf(t0, pulseHeight, `${Math.round(this.params.fa)}°`, '#f59e0b');
 
             // Gz: Slice select
-            this.addGradientLobeDark(svg, startX - 5, gzY, 40, 16, '#22c55e', 'up');
-            this.addGradientLobeDark(svg, startX + 35, gzY, 20, 8, '#22c55e', 'down');
+            lobe(t0, gzY, 40, 16, '#22c55e', 'up');
+            lobe(t0 + 30, gzY, 20, 8, '#22c55e', 'down');
 
             // Gy: Phase encoding
-            this.addGradientLobeDark(svg, startX + 50, gyY, 25, 12, '#eab308', 'up');
+            lobe(readStart - 30, gyY, 40, 12, '#eab308', 'up');
 
-            // Gx: Bipolar (dephase then rephase)
-            this.addGradientLobeDark(svg, startX + 50, gxY, 35, 16, '#60a5fa', 'down');
-            this.addGradientLobeDark(svg, startX + 90, gxY, 60, 16, '#60a5fa', 'up'); // Readout
+            // Gx: Bipolar (dephase then rephase) - no 180°, so the prephaser is negative
+            lobe(readStart - 30, gxY, readWidth / 2, 16, '#60a5fa', 'down'); // Prephaser (half area)
+            lobe(echo, gxY, readWidth, 16, '#60a5fa', 'up');                  // Readout, centred on the echo
+
+            // Gz: Spoiler after the readout (spoiled GRE / FLASH, as in the signal model)
+            lobe(echo + readWidth / 2 + 40, gzY, 40, 16, '#22c55e', 'up');
+            this.addTimelineText(svg, echo + readWidth / 2 + 40, gzY + 12, 'spoiler', 'middle', '8px', '#22c55e');
 
             // Signal echo (smaller due to T2*)
-            this.addSignalEchoDark(svg, teX, signalY, seqColor, 0.7);
+            this.addSignalEchoDark(svg, echo, signalY, seqColor, 0.7);
 
             // TE marker
-            this.addTimeMarkerDark(svg, teX, 12, axisY, 'TE', seqColor);
+            this.addTimeMarkerDark(svg, echo, 12, axisY, 'TE', seqColor);
+            this.addTimeSpanDark(svg, t0, echo, 176, 'TE', seqColor);
 
         } else { // IR
-            // Inversion Recovery timing
-            const tiFrac = 0.5;
-            const readoutFrac = 0.55;
-            const teFrac = 0.75;
-            const tiX = startX + tiFrac * totalWidth;
-            const readoutX = startX + readoutFrac * totalWidth;
-            const teX = startX + teFrac * totalWidth;
+            // Inversion Recovery timing: IR spin echo (how FLAIR/STIR are acquired), consistent
+            // with the signal model's e^(-TE/T2) (the 180° refocuses static dephasing)
+            const { exc, c180, echo } = layout;
 
             // RF: 180° inversion
-            this.addRFPulseDark(svg, startX, rfY, 28, '180°', '#ef4444');
-            this.addTimelineText(svg, startX + 17, rfY - 22, 'Inv', 'middle', '8px', '#ef4444');
+            rf(t0, 28, '180° inv', '#ef4444');
 
-            // RF: Readout pulse at TI
-            this.addRFPulseDark(svg, readoutX, rfY, 20, `${Math.round(this.params.fa)}°`, '#f59e0b');
+            // RF: excitation at TI, then 180° refocusing at TI + TE/2
+            rf(exc, 20, `${Math.round(this.params.fa)}°`, '#f59e0b');
+            rf(c180, 28, '180°', '#a855f7');
 
-            // Gz: Slice select during inversion and readout
-            this.addGradientLobeDark(svg, startX - 5, gzY, 40, 16, '#22c55e', 'up');
-            this.addGradientLobeDark(svg, readoutX - 5, gzY, 35, 14, '#22c55e', 'up');
-            this.addGradientLobeDark(svg, readoutX + 30, gzY, 18, 7, '#22c55e', 'down');
+            // Gz: Slice select during inversion, excitation and refocusing
+            lobe(t0, gzY, 40, 16, '#22c55e', 'up');
+            lobe(exc, gzY, 40, 14, '#22c55e', 'up');
+            lobe(exc + 29, gzY, 18, 7, '#22c55e', 'down'); // Rephaser
+            lobe(c180, gzY, 40, 14, '#22c55e', 'up');
 
-            // Gy: Phase encoding after readout
-            this.addGradientLobeDark(svg, readoutX + 45, gyY, 25, 12, '#eab308', 'up');
+            // Gy: Phase encoding after excitation
+            lobe(exc + 65, gyY, 40, 12, '#eab308', 'up');
 
-            // Gx: Frequency encode
-            this.addGradientLobeDark(svg, readoutX + 45, gxY, 30, 14, '#60a5fa', 'down');
-            this.addGradientLobeDark(svg, readoutX + 80, gxY, 55, 14, '#60a5fa', 'up');
+            // Gx: Prephaser before the 180° (same polarity as readout) + readout centred on the echo
+            lobe(exc + 65, gxY, 50, 14, '#60a5fa', 'up');
+            lobe(echo, gxY, 100, 14, '#60a5fa', 'up');
 
             // Signal echo
-            this.addSignalEchoDark(svg, teX, signalY, seqColor);
+            this.addSignalEchoDark(svg, echo, signalY, seqColor);
 
-            // TI and TE markers
-            this.addTimeMarkerDark(svg, tiX, 12, axisY, 'TI', '#a855f7');
-            this.addTimeMarkerDark(svg, teX, 12, axisY, 'TE', seqColor);
+            // TI and TE markers (TI from inversion to excitation, TE from excitation to echo)
+            this.addTimeMarkerDark(svg, exc, 12, axisY, '', '#a855f7');
+            this.addTimeMarkerDark(svg, c180, 12, axisY, '');
+            this.addTimeMarkerDark(svg, echo, 12, axisY, 'TI + TE', seqColor);
+            this.addTimeSpanDark(svg, t0, exc, 176, 'TI', '#a855f7');
+            this.addTimeSpanDark(svg, exc, c180, 176, 'TE/2');
+            this.addTimeSpanDark(svg, c180, echo, 176, 'TE/2');
         }
 
         // Time axis
@@ -1595,7 +1733,7 @@ class MRPhysics {
         svg.appendChild(arrow);
 
         // Time labels
-        this.addTimelineText(svg, startX, axisY + 12, '0', 'middle', '9px', '#64748b');
+        this.addTimelineText(svg, startX + 15, axisY + 12, '0', 'middle', '9px', '#64748b');
         this.addTimelineText(svg, endX - 20, axisY + 12, 'TR', 'middle', '9px', '#64748b');
 
         // Update parameter badge
@@ -1685,12 +1823,36 @@ class MRPhysics {
         line.setAttribute('opacity', '0.6');
         svg.appendChild(line);
 
-        // Label
+        // Label (optional)
+        if (!label) return;
         const text = document.createElementNS(ns, 'text');
         text.setAttribute('x', x);
         text.setAttribute('y', y1 - 3);
         text.setAttribute('font-size', '8');
         text.setAttribute('font-weight', '500');
+        text.setAttribute('fill', color);
+        text.setAttribute('text-anchor', 'middle');
+        text.setAttribute('font-family', 'Inter, sans-serif');
+        text.textContent = label;
+        svg.appendChild(text);
+    }
+
+    // Horizontal interval bar |←label→| showing where a timing parameter is measured from/to
+    addTimeSpanDark(svg, x1, x2, y, label, color = '#94a3b8') {
+        const ns = 'http://www.w3.org/2000/svg';
+        const path = document.createElementNS(ns, 'path');
+        path.setAttribute('d', `M ${x1} ${y - 3} V ${y + 3} M ${x1} ${y} H ${x2} M ${x2} ${y - 3} V ${y + 3}`);
+        path.setAttribute('stroke', color);
+        path.setAttribute('stroke-width', '1');
+        path.setAttribute('fill', 'none');
+        path.setAttribute('opacity', '0.8');
+        svg.appendChild(path);
+
+        const text = document.createElementNS(ns, 'text');
+        text.setAttribute('x', (x1 + x2) / 2);
+        text.setAttribute('y', y - 3);
+        text.setAttribute('font-size', '8');
+        text.setAttribute('font-weight', '600');
         text.setAttribute('fill', color);
         text.setAttribute('text-anchor', 'middle');
         text.setAttribute('font-family', 'Inter, sans-serif');

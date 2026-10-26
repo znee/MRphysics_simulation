@@ -50,14 +50,16 @@ Demonstrates how MRI sequences produce different tissue contrasts based on T1, T
 ### Features
 - **Three MRI Sequences**: Spin Echo (SE), Gradient Echo (GRE), Inversion Recovery (IR)
 - **Real-time Visualization**: Brain phantom with dynamic signal calculations
-- **Signal vs Parameter Charts**: Explore how TR, TE, TI affect tissue contrast
-- **Sequence Mechanics Tab**: Phase wheel, T2/T2* decay curves, RF timeline
+- **Signal vs Parameter Charts**: Explore how TR, TE, TI affect tissue contrast (IR charts plot only valid timings, TR ≥ TI + TE)
+- **Field Strength**: B₀ changes tissue T1 and R2′; tissue cards show the field-adjusted T1 (and T2* in GRE)
+- **Sequence Mechanics Tab**: Phase wheel, T2/T2* decay curves, pulse diagrams for SE, spoiled GRE and IR-SE (echo centered in the readout, TE/TI interval bars)
 - **Clinical Presets**: T1W, T2W, T2*W, FLAIR, STIR
 
 ### Physics Model
 - **SE**: S = PD · (1 - e^(-TR/T1)) · e^(-TE/T2)
-- **GRE**: Ernst angle steady-state with T2* effects
-- **IR**: Steady-state inversion recovery
+- **GRE**: spoiled steady state (Ernst), T2* = 1/(R2 + R2′); R2′ in s⁻¹ set at 1.5 T (default 5 → WM T2* ≈ 57 ms) and ∝ B₀
+- **IR** (inversion-recovery spin echo, as in FLAIR/STIR): S = PD·sinα·|1 − 2e^(−TI/T1) + e^(−TR/T1)| / (1 + e^(−TR/T1)cosα) · e^(−TE/T2); null point TI = T1·ln[2/(1 + e^(−TR/T1))]
+- **B₀ dependence**: T1(B₀) ≈ T1(1.5 T)·(B₀/1.5)^b (b ≈ 0.38 WM/GM, approx. after Rooney et al., MRM 2007; ≈ 0.2 fat; ≈ 0 CSF); R2′ ∝ B₀; T2 field-independent (simplification); signal ∝ B₀
 
 ---
 
