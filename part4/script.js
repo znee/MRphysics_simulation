@@ -194,13 +194,19 @@ function computeFullKSpace() {
         )
     );
 
-    // 2. Perform 2D FFT
-    fft2D(temp);
+    // 2. IFFT Shift (move the image centre to the FFT origin)
+    // Without this, an object centred at N/2 picks up a (-1)^(kx+ky) phase:
+    // a 0/π checkerboard in the phase panel, and neighbouring ky lines with
+    // opposite sign (which breaks line interpolation for parallel imaging)
+    const centered = ifftShift(temp);
 
-    // 3. FFT Shift (center low frequencies)
-    kSpaceData = fftShift(temp);
+    // 3. Perform 2D FFT
+    fft2D(centered);
 
-    // 4. Calculate Global Max Magnitude (for spike scaling)
+    // 4. FFT Shift (center low frequencies)
+    kSpaceData = fftShift(centered);
+
+    // 5. Calculate Global Max Magnitude (for spike scaling)
     globalMaxMag = 0;
     for (let y = 0; y < N; y++) {
         for (let x = 0; x < N; x++) {
@@ -362,82 +368,75 @@ function applyParallelImagingRecon(kspace, size) {
     // aliasing effect by partially filling skipped lines from interpolation
     // BUT we add g-factor noise to show the SNR penalty
 
-    if (numCoils <= 1) return kspace;
+    // Parallel imaging only acts when lines are actually skipped and the
+    // coil array supports that acceleration (see isParallelImagingActive)
+    if (!isParallelImagingActive()) return kspace;
 
-    // The acceleration factor from parallel imaging
-    const R = parallelAcceleration;
+    // The acceleration actually used is the line skip factor
+    const R = skipY;
 
-    // If undersampling (skipY) is used, parallel imaging can help recover
-    // For demo purposes, we interpolate missing lines when R >= skipY
-    if (skipY > 1 && R >= skipY) {
-        const result = new Array(size).fill(0).map((_, y) =>
-            new Array(size).fill(0).map((_, x) =>
-                new Complex(kspace[y][x].re, kspace[y][x].im)
-            )
-        );
+    const result = new Array(size).fill(0).map((_, y) =>
+        new Array(size).fill(0).map((_, x) =>
+            new Complex(kspace[y][x].re, kspace[y][x].im)
+        )
+    );
 
-        // Fill skipped lines using weighted average of neighbors
-        // This simulates how SENSE can recover missing k-space lines
-        const centerY = size / 2;
-        const halfRes = matrixSize / 2;
+    const centerY = size / 2;
+    const halfRes = matrixSize / 2;
 
-        // g-factor: geometry factor that increases with R
-        // Typical values: R=2 -> g~1.1, R=4 -> g~1.3
-        const gFactor = 1.0 + 0.1 * (R - 1);
+    // g-factor SNR penalty: SNR_PI = SNR_full / (g * sqrt(R))
+    //
+    // The sqrt(R) part needs no extra noise: only 1/R of the lines were
+    // acquired (each sample carrying the page's per-sample sigma), and the
+    // skipped lines are interpolated from those same samples, so the
+    // reconstruction already has SNR_full / sqrt(R).
+    //
+    // The g-factor is the extra noise amplification of the unfolding.
+    // Raising the noise of every acquired sample from sigma to g * sigma
+    // (variances add: sigma_extra = sigma * sqrt(g^2 - 1)) before the
+    // interpolation scales the image noise by exactly g. Using the same
+    // per-sample sigma as acquireLine() keeps the penalty relative to the
+    // baseline noise of the rest of the page.
+    const gFactor = getGFactor();
+    const extraSigma = getNoiseSigma() * Math.sqrt(gFactor * gFactor - 1);
 
-        // Calculate noise to add (simulates g-factor SNR penalty)
-        // Find max magnitude for noise scaling
-        let maxMag = 0;
-        for (let y = 0; y < size; y++) {
+    if (extraSigma > 0) {
+        // Acquired lines are the multiples of R (see acquireLine)
+        for (let y = 0; y < size; y += R) {
             for (let x = 0; x < size; x++) {
-                const mag = Math.sqrt(kspace[y][x].re * kspace[y][x].re + kspace[y][x].im * kspace[y][x].im);
-                if (mag > maxMag) maxMag = mag;
+                // Only samples that were actually acquired (inside the
+                // matrix, and already filled during the animation)
+                const v = result[y][x];
+                if (v.re === 0 && v.im === 0) continue;
+                result[y][x] = new Complex(
+                    v.re + gaussianRandom() * extraSigma,
+                    v.im + gaussianRandom() * extraSigma
+                );
             }
         }
-        // Noise level proportional to g-factor and sqrt(R)
-        const noiseSigma = maxMag * 0.02 * gFactor * Math.sqrt(R);
-
-        for (let y = 0; y < size; y++) {
-            // Check if this line was skipped
-            if (y % skipY !== 0) {
-                const kyFromCenter = Math.abs(y - centerY);
-                if (kyFromCenter < halfRes) {
-                    // Find nearest acquired lines
-                    const prevLine = Math.floor(y / skipY) * skipY;
-                    const nextLine = Math.min(prevLine + skipY, size - 1);
-
-                    // Interpolate
-                    const t = (y - prevLine) / skipY;
-                    for (let x = 0; x < size; x++) {
-                        const re = (1 - t) * kspace[prevLine][x].re + t * kspace[nextLine][x].re;
-                        const im = (1 - t) * kspace[prevLine][x].im + t * kspace[nextLine][x].im;
-
-                        // Add g-factor noise to recovered lines
-                        const noiseRe = gaussianRandom() * noiseSigma;
-                        const noiseIm = gaussianRandom() * noiseSigma;
-
-                        result[y][x] = new Complex(re + noiseRe, im + noiseIm);
-                    }
-                }
-            } else {
-                // Acquired lines also get some g-factor noise penalty
-                const kyFromCenter = Math.abs(y - centerY);
-                if (kyFromCenter < halfRes) {
-                    for (let x = 0; x < size; x++) {
-                        const noiseRe = gaussianRandom() * noiseSigma * 0.5; // Less noise on acquired lines
-                        const noiseIm = gaussianRandom() * noiseSigma * 0.5;
-                        result[y][x] = new Complex(
-                            kspace[y][x].re + noiseRe,
-                            kspace[y][x].im + noiseIm
-                        );
-                    }
-                }
-            }
-        }
-        return result;
     }
 
-    return kspace;
+    // Fill skipped lines using weighted average of neighbors
+    // This simulates how SENSE can recover missing k-space lines
+    // (the filled lines inherit the noise of the acquired neighbors)
+    for (let y = 0; y < size; y++) {
+        // Check if this line was skipped
+        const kyFromCenter = y - centerY;
+        if (y % R !== 0 && kyFromCenter >= -halfRes && kyFromCenter < halfRes) {
+            // Find nearest acquired lines
+            const prevLine = Math.floor(y / R) * R;
+            const nextLine = Math.min(prevLine + R, size - 1);
+
+            // Interpolate
+            const t = (y - prevLine) / R;
+            for (let x = 0; x < size; x++) {
+                const re = (1 - t) * result[prevLine][x].re + t * result[nextLine][x].re;
+                const im = (1 - t) * result[prevLine][x].im + t * result[nextLine][x].im;
+                result[y][x] = new Complex(re, im);
+            }
+        }
+    }
+    return result;
 }
 
 // Simple Gaussian random number generator (Box-Muller, single value)
@@ -483,7 +482,8 @@ function reconstructImage() {
         // 3. IFFT
         ifft2D(unshifted);
 
-        reconstructedImage = unshifted;
+        // 4. FFT Shift (move the image centre back to N/2, see computeFullKSpace)
+        reconstructedImage = fftShift(unshifted);
     } else {
         // Zero-padding reconstruction for higher resolution (interpolation)
         // FFT requires power-of-2 sizes, so round up to next power of 2
@@ -520,19 +520,22 @@ function reconstructImage() {
         // IFFT on padded data
         ifft2DVariable(unshifted, fftSize);
 
+        // FFT Shift (move the image centre back to the middle of the grid)
+        const image = ifftShiftVariable(unshifted, fftSize);
+
         // Compensate for zero-padding scaling
         // IFFT divides by fftSize^2, but we want signal level consistent with N^2
         // Scale factor = (fftSize/N)^2
         const scaleFactor = (fftSize / N) * (fftSize / N);
         for (let y = 0; y < fftSize; y++) {
             for (let x = 0; x < fftSize; x++) {
-                unshifted[y][x].re *= scaleFactor;
-                unshifted[y][x].im *= scaleFactor;
+                image[y][x].re *= scaleFactor;
+                image[y][x].im *= scaleFactor;
             }
         }
 
         // Store the full padded result
-        reconstructedImagePadded = unshifted;
+        reconstructedImagePadded = image;
         reconstructedImagePaddedSize = fftSize;
 
         // Downsample to N×N for display using bilinear interpolation
@@ -553,10 +556,10 @@ function reconstructImage() {
                 const fx = srcX - x0;
 
                 // Interpolate real and imaginary parts separately
-                const v00 = unshifted[y0][x0];
-                const v01 = unshifted[y0][x1];
-                const v10 = unshifted[y1][x0];
-                const v11 = unshifted[y1][x1];
+                const v00 = image[y0][x0];
+                const v01 = image[y0][x1];
+                const v10 = image[y1][x0];
+                const v11 = image[y1][x1];
 
                 const re = (1 - fy) * ((1 - fx) * v00.re + fx * v01.re) +
                            fy * ((1 - fx) * v10.re + fx * v11.re);
@@ -738,15 +741,20 @@ function gaussianNoise(sigma) {
     return new Complex(z0 * sigma, z1 * sigma);
 }
 
-function acquireLine(lineIndex) {
-    // 1. Noise Sigma (Object-Independent)
+// Per-sample k-space noise sigma (Object-Independent)
+function getNoiseSigma() {
     // Reference signal is N*N (theoretical max for all-ones image).
     // We scale noise relative to this fixed reference.
     const referenceSignal = N * N;
     // Use effective noise level (considers SNR simulation)
     const effectiveNoise = getEffectiveNoiseLevel();
     // Calibrated: Reduced factor from 0.002 to 0.0005 based on user feedback
-    const sigma = (effectiveNoise / 100) * (referenceSignal * 0.0005);
+    return (effectiveNoise / 100) * (referenceSignal * 0.0005);
+}
+
+function acquireLine(lineIndex) {
+    // 1. Noise Sigma (same for every sample, independent of matrix size)
+    const sigma = getNoiseSigma();
 
     // 2. Motion Parameters (Deterministic/Periodic)
     // Simulate respiration: Sine wave displacement in Y
@@ -772,8 +780,9 @@ function acquireLine(lineIndex) {
     const centerX = N / 2;
 
     // Check if this line is within the resolution boundary
-    const kyFromCenter = Math.abs(lineIndex - centerY);
-    const lineInResolution = kyFromCenter < halfRes;
+    // (ky = -halfRes ... halfRes - 1, i.e. exactly matrixSize lines)
+    const kyFromCenter = lineIndex - centerY;
+    const lineInResolution = kyFromCenter >= -halfRes && kyFromCenter < halfRes;
 
     // Partial Fourier: only acquire fraction of ky (asymmetric about center)
     // Acquire from center to +ky edge, plus small margin into -ky for phase estimation
@@ -793,8 +802,8 @@ function acquireLine(lineIndex) {
         let val = new Complex(0, 0);
 
         // Check if this x position is within resolution boundary
-        const kxFromCenter = Math.abs(x - centerX);
-        const pointInResolution = lineInResolution && (kxFromCenter < halfRes);
+        const kxFromCenter = x - centerX;
+        const pointInResolution = lineInResolution && kxFromCenter >= -halfRes && kxFromCenter < halfRes;
 
         // Combined check: undersampling + resolution + partial Fourier
         const shouldAcquire = isAcquired && pointInResolution && lineInPartialFourier;
@@ -811,7 +820,7 @@ function acquireLine(lineIndex) {
         }
 
         // Add Gaussian Noise only to actually acquired samples
-        if (effectiveNoise > 0 && shouldAcquire) {
+        if (sigma > 0 && shouldAcquire) {
             val = val.add(gaussianNoise(sigma));
         }
 
@@ -821,9 +830,10 @@ function acquireLine(lineIndex) {
     // Spike Noise: Inject a single bad point (only if within resolution)
     if (hasSpike) {
         if (lineIndex === spikeY) {
-            const kxFromCenter = Math.abs(spikeX - centerX);
-            const kyFromCenter = Math.abs(spikeY - centerY);
-            if (kxFromCenter < halfRes && kyFromCenter < halfRes) {
+            const kxFromCenter = spikeX - centerX;
+            const kyFromCenter = spikeY - centerY;
+            if (kxFromCenter >= -halfRes && kxFromCenter < halfRes &&
+                kyFromCenter >= -halfRes && kyFromCenter < halfRes) {
                 // Scale spike relative to TRUE global max
                 // Calibrated: Reduced from 2 to 0.5 to prevent image corruption
                 const spikeAmp = globalMaxMag * 0.5;
@@ -834,8 +844,22 @@ function acquireLine(lineIndex) {
     }
 }
 
-// Calculate and update resolution info display
-function updateResolutionInfo() {
+// Parallel imaging is only "on" when lines are actually skipped and the
+// coil array can support that acceleration (R = skipY <= number of coils)
+function isParallelImagingActive() {
+    return numCoils > 1 && skipY > 1 && parallelAcceleration >= skipY;
+}
+
+// g-factor: geometry factor that increases with the acceleration used
+// Typical values: R=2 -> g~1.1, R=4 -> g~1.3
+// No acceleration (or no parallel imaging recon) -> no unfolding -> g = 1
+function getGFactor() {
+    if (!isParallelImagingActive()) return 1.0;
+    return 1.0 + 0.1 * (skipY - 1);
+}
+
+// Relative SNR vs the 256×256 baseline (the one SNR number shown on the page)
+function computeRelativeSNR() {
     // SNR baseline is 256×256 for educational clarity
     const SNR_BASELINE = 256;
 
@@ -847,10 +871,6 @@ function updateResolutionInfo() {
     const R_undersampling = skipY;
     const R_partial_fourier = 1 / partialFourierFraction;
     const R_total = R_undersampling * R_partial_fourier;
-
-    // K-space coverage: percentage of k-space AREA relative to full N×N
-    // Must account for undersampling factor (skipY) and partial Fourier
-    const kspaceCoverageArea = (matrixSize / N) * (matrixSize / N) * partialFourierFraction * (1 / skipY) * 100;
 
     // SNR relationship for 2D imaging at constant FOV and constant
     // receiver bandwidth (fixed dwell time, single average):
@@ -881,14 +901,25 @@ function updateResolutionInfo() {
     //   PI reduces aliasing but doesn't recover the lost SNR from fewer samples
     //   In fact, g-factor adds additional penalty (g ≥ 1)
     //
-    // g-factor: geometry factor that increases with R
-    // Typical values: R=2 -> g~1.1, R=4 -> g~1.3
-    const gFactor = numCoils > 1 ? (1.0 + 0.1 * (numCoils - 1)) : 1.0;
+    // g-factor applies only while parallel imaging is unfolding skipped lines
+    const gFactor = getGFactor();
 
     // Total acceleration penalty (always present regardless of PI)
     // PI helps with aliasing artifacts but SNR penalty remains
     const accelerationPenalty = 1 / (gFactor * Math.sqrt(R_total));
-    const relativeSNR = resolutionSNR * accelerationPenalty;
+    return resolutionSNR * accelerationPenalty;
+}
+
+// Calculate and update resolution info display
+function updateResolutionInfo() {
+    // Pixel size ratio relative to baseline (256×256)
+    const pixelSizeRatio = 256 / matrixSize;
+
+    // K-space coverage: percentage of k-space AREA relative to full N×N
+    // Must account for undersampling factor (skipY) and partial Fourier
+    const kspaceCoverageArea = (matrixSize / N) * (matrixSize / N) * partialFourierFraction * (1 / skipY) * 100;
+
+    const relativeSNR = computeRelativeSNR();
 
     document.getElementById('matrixSizeVal').innerText = matrixSize;
     document.getElementById('matrixSizeVal2').innerText = matrixSize;
@@ -922,26 +953,26 @@ function updateResolutionInfo() {
 function getEffectiveNoiseLevel() {
     if (!simulateSNR) return noiseLevel;
 
-    // SNR baseline is 256×256
-    const SNR_BASELINE = 256;
-
-    // When simulating SNR, noise scales inversely with SNR
-    // At fixed FOV and receiver bandwidth: SNR ∝ baseline/matrixSize
-    // (voxel area shrinks as 1/N², but total samples grow as N², and
-    //  noise averages down as 1/√samples → net SNR ∝ 1/N)
-    // Noise ∝ 1/SNR = matrixSize/baseline
-    const snrFactor = matrixSize / SNR_BASELINE;
-
-    // At 256x256 (baseline), snrFactor = 1, noise = base
-    // At 128x128, snrFactor = 0.5 (less noise, 2x SNR)
-    // At 512x512, snrFactor = 2 (more noise, 0.5x SNR)
+    // When simulating SNR, every acquired k-space sample gets the same
+    // baseline thermal noise. At fixed FOV and receiver bandwidth the noise
+    // per sample does not depend on the matrix size, so it must NOT be
+    // scaled with matrixSize here.
     //
-    // Higher resolution = smaller voxels = less signal = more visible noise
+    // The matrix-size SNR penalty then comes out of the reconstruction:
+    // the image is always reconstructed on the same N×N grid, so the signal
+    // per pixel stays the same, while the IFFT sums matrixSize² noisy
+    // samples → image noise ∝ √(matrixSize²) = matrixSize
+    //   → SNR ∝ 1/matrixSize (= 256/matrixSize, as shown in the sidebar)
+    //
+    // At 128x128: half the noise (2x SNR)
+    // At 512x512: double the noise (0.5x SNR)
+    // (Scaling the noise with matrixSize as well would give SNR ∝ 1/matrixSize²)
     const baseSimulatedNoise = 25;
-    const simulatedNoise = baseSimulatedNoise * snrFactor;
 
     // Combine with user-set noise level
-    return Math.max(noiseLevel, simulatedNoise);
+    // Independent noise sources add in quadrature (variances add), so the
+    // Noise Level slider always adds on top of the simulated baseline
+    return Math.sqrt(noiseLevel * noiseLevel + baseSimulatedNoise * baseSimulatedNoise);
 }
 
 function acquireAllLines() {
@@ -1047,12 +1078,13 @@ function renderKSpace() {
             const idx = (y * N + x) * 4;
 
             // Check if this point is within the acquired region
-            const inAcquiredRegion = Math.abs(x - centerX) < halfRes && Math.abs(y - centerY) < halfRes;
+            const inAcquiredRegion = x - centerX >= -halfRes && x - centerX < halfRes &&
+                y - centerY >= -halfRes && y - centerY < halfRes;
 
             // Check if this line was actually acquired (for undersampling visualization)
             const lineAcquired = (y % skipY === 0);
             // When PI is on and can recover, show interpolated lines differently
-            const lineRecovered = (numCoils > 1 && skipY > 1 && numCoils >= skipY);
+            const lineRecovered = isParallelImagingActive();
 
             if (inAcquiredRegion && maxMag > 0) {
                 // Magnitude (Log scaled)
@@ -1123,12 +1155,12 @@ function renderKSpace() {
     // Visual Marker for Resolution Boundary (k-space coverage)
     // SNR baseline is 256×256; show color-coded boundary
     // (centerX, centerY, halfRes already defined above)
-    const SNR_BASELINE = 256;
-    const snr = (SNR_BASELINE / matrixSize) * (SNR_BASELINE / matrixSize);
+    // Same relative SNR as the sidebar (SNR ∝ 1/matrixSize, incl. acceleration)
+    const snr = computeRelativeSNR();
 
     // Color based on SNR relative to baseline (256×256 = 1.0)
     let strokeColor, fillColor;
-    if (snr >= 4) {
+    if (snr >= 2) {
         // High SNR (low resolution, e.g., 128×128 or smaller)
         strokeColor = 'rgba(74, 222, 128, 0.8)';
         fillColor = 'rgba(74, 222, 128, 0.9)';
@@ -1136,7 +1168,7 @@ function renderKSpace() {
         // Baseline or slightly above (e.g., 256×256)
         strokeColor = 'rgba(56, 189, 248, 0.8)';
         fillColor = 'rgba(56, 189, 248, 0.9)';
-    } else if (snr >= 0.5) {
+    } else if (snr > 0.5) {
         // Below baseline (e.g., 384×384)
         strokeColor = 'rgba(251, 191, 36, 0.8)';
         fillColor = 'rgba(251, 191, 36, 0.9)';
@@ -1315,6 +1347,7 @@ function bindEvents() {
     document.getElementById('skipYRange').addEventListener('input', (e) => {
         skipY = parseInt(e.target.value);
         document.getElementById('skipYVal').innerText = skipY;
+        updateResolutionInfo();
         if (!isAnimating && currentLine > 0) {
             acquireAllLines();
             renderAll();

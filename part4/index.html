@@ -227,7 +227,7 @@
                             <strong>K-Space Colors:</strong> <span style="color: #fff;">White</span> = acquired, <span style="color: #4dd;">Cyan</span> = PI-recovered, <span style="color: #666;">Dark</span> = missing.
                         </p>
                         <p class="explanation-text" style="margin-top: 8px; font-size: 0.65rem; opacity: 0.8; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 8px;">
-                            <strong>Note:</strong> This PI demo uses k-space interpolation to fill skipped lines, which shows the SNR penalty (g-factor noise) but not true wrap-around aliasing artifacts. Real SENSE/GRAPPA reconstructs aliased images first, then unfolds using coil sensitivity maps.
+                            <strong>Note:</strong> This PI demo uses k-space interpolation to fill skipped lines. It shows the SNR penalty (g-factor noise) but cannot truly unfold aliasing: wrapped copies only fade toward the FOV edge, so large objects keep some fold-over. Real SENSE/GRAPPA reconstructs aliased images first, then unfolds using coil sensitivity maps.
                         </p>
                     </div>
 

@@ -109,12 +109,12 @@ Visualizes the relationship between spatial frequency domain (k-space) and image
 - Parallel Imaging SNR: SNR_PI = SNR_full / (g · √R) where g is geometry factor
 
 ### Simplifications (Parallel Imaging)
-The parallel imaging demo uses k-space interpolation to fill skipped phase-encoding lines, demonstrating the SNR penalty (g-factor noise) but not true wrap-around aliasing artifacts. In real SENSE/GRAPPA:
+The parallel imaging demo uses k-space interpolation to fill skipped phase-encoding lines. The g-factor penalty is modelled by amplifying the noise of the acquired samples by g before interpolation, so the reconstructed image follows SNR_PI = SNR_full / (g · √R) relative to the fully sampled scan. In real SENSE/GRAPPA:
 1. Undersampled k-space is reconstructed directly, producing aliased (wrapped) images
 2. Multiple coil sensitivity maps identify which pixels are superimposed
 3. Linear algebra unfolding separates the overlapped signals
 
-This simplified demo shows the **concept** that parallel imaging can recover missing k-space data at the cost of SNR, but omits the coil sensitivity encoding that enables true alias unfolding. Without actual coil sensitivity maps, the demo cannot produce or unwrap the characteristic N/R-fold image wrap-around.
+This simplified demo shows the **concept** that parallel imaging can recover missing k-space data at the cost of SNR, but omits the coil sensitivity encoding that enables true alias unfolding. Linear interpolation between acquired lines only weights the aliased image (full weight at the FOV centre, fading to zero at the FOV edge), so the N/R-fold wrapped copies are faded rather than unfolded: objects that fill the FOV, such as the brain phantom, still show residual fold-over and some intensity shading.
 
 ---
 
