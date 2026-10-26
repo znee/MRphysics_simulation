@@ -179,6 +179,8 @@ const FFT = {
 
 // --- QSM Physics ---
 
+const TKD_MIN_THRESHOLD = 0.01;
+
 const QSM = {
     // NOTE: A 2D in-plane dipole kernel cannot represent the intrinsically
     // 3D dipole field (the through-plane kz structure is lost), so the
@@ -255,7 +257,9 @@ const QSM = {
             let invD = 0;
 
             if (method === 'tkd') {
-                const threshold = lambda || 0.05;
+                // The slider value is the truncation threshold (typically 0.1-0.2);
+                // a small floor keeps 1/D finite
+                const threshold = Math.max(lambda, TKD_MIN_THRESHOLD);
                 if (Math.abs(d) < threshold) {
                     const sign = d >= 0 ? 1 : -1;
                     d = sign * threshold;
@@ -807,6 +811,13 @@ function setupEventListeners() {
     // Recon Method - only needs inverse recalc (reuse existing noisy field)
     reconMethodSelect.addEventListener('change', (e) => {
         CONFIG.reconMethod = e.target.value;
+        // Same slider, different meaning: Tikhonov λ vs TKD truncation threshold
+        const lambdaTitle = document.getElementById('reg-lambda-label');
+        if (lambdaTitle) {
+            lambdaTitle.textContent = CONFIG.reconMethod === 'tkd'
+                ? 'TKD threshold (|D| < threshold is clamped; typical 0.1-0.2)'
+                : 'Regularization λ';
+        }
         // Only inverse recalc needed - keeps same noise for fair comparison
         needsInverseRecalc = true;
         runSimulation();
@@ -820,7 +831,7 @@ function setupEventListeners() {
             const absAngle = Math.abs(angle);
             let label = `${angle}°`;
             if (angle === 0) label += " (Standard: B₀ ∥ Z)";
-            else if (absAngle >= 53 && absAngle <= 57) label += " (Magic angle!)";
+            else if (absAngle >= 53 && absAngle <= 57) label += " (Z-oriented structures at the magic angle)";
             else if (absAngle === 90) label += " (B₀ ⊥ Z)";
             b0AngleLabel.innerText = label;
             // Update B0 arrow in real-time
@@ -1535,7 +1546,7 @@ function runSimulation(forceForwardRecalc = false) {
 
     // Render all maps (with colorbar IDs for dynamic labels)
     if (ctxChi) drawMap(ctxChi, chiMap, false, 'chi', fixedAbsMax);
-    if (ctxField) drawMap(ctxField, fieldMap, true);
+    if (ctxField) drawMap(ctxField, fieldMap, true, 'field');
     if (ctxRecon) drawMap(ctxRecon, reconMap, false, 'recon', fixedAbsMax);
 
     // Update the 3D texture with selected map
@@ -1600,12 +1611,13 @@ function drawMap(ctx, dataMap, isField, colorbarId = null, forcedAbsMax = null) 
         if (absMax === 0) absMax = 1;
     }
 
-    // Update colorbar labels if provided (for chi maps, not field)
-    if (colorbarId && !isField) {
+    // Update colorbar labels if provided (field shift is auto-scaled, so it needs finer digits)
+    if (colorbarId) {
+        const digits = isField ? 2 : 1;
         const minLabel = document.getElementById(colorbarId + '-min-label');
         const maxLabel = document.getElementById(colorbarId + '-max-label');
-        if (minLabel) minLabel.innerText = (-absMax).toFixed(1);
-        if (maxLabel) maxLabel.innerText = '+' + absMax.toFixed(1);
+        if (minLabel) minLabel.innerText = (-absMax).toFixed(digits);
+        if (maxLabel) maxLabel.innerText = '+' + absMax.toFixed(digits);
     }
 
     for (let row = 0; row < size; row++) {
@@ -1792,7 +1804,7 @@ function animate() {
     // Correct logic - use fixed range 1.5 ppm for both chi and recon
     const fixedAbsMax = 1.5;
     if (ctxChi) drawMap(ctxChi, chiMap, false, 'chi', fixedAbsMax);
-    if (ctxField) drawMap(ctxField, fieldMap, true);
+    if (ctxField) drawMap(ctxField, fieldMap, true, 'field');
     if (ctxRecon && window.reconResult) drawMap(ctxRecon, window.reconResult, false, 'recon', fixedAbsMax);
 
     updateB0Visual();

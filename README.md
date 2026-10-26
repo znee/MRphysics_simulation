@@ -151,9 +151,9 @@ Explores Quantitative Susceptibility Mapping (QSM) physics, including dipole fie
 
 ### Physics Model
 - **3D Dipole Kernel**: D(k) = 1/3 - k_B₀²/|k|² where k_B₀ is the k-component along B₀
-- **Forward Model**: φ = F⁻¹{D(k) · F{χ}} using 3D FFT
-- **Tikhonov**: χ = F⁻¹{D/(D² + λ) · F{φ}}
-- **TKD**: Threshold small D values to avoid division instability
+- **Forward Model**: field shift Δb = F⁻¹{D(k) · F{χ}} using 3D FFT (ppm); measured phase φ = γ·B₀·TE·Δb
+- **Tikhonov**: χ = F⁻¹{D/(D² + λ) · F{Δb}}
+- **TKD**: |D| below the threshold (slider value, typically 0.1–0.2) is clamped to the threshold before division
 - **Cone of Silence**: Magic angle at θ ≈ 54.7° where D(k) = 0
 
 ### Volume Dimensions & Computational Notes
