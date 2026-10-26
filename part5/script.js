@@ -191,7 +191,10 @@ const QSM = {
     // D(k) = 1/3 - kb0²/|k|² where kb0 is the k-component along B0 direction
     // b0AngleDeg: tilt angle from Z-axis in degrees (0 = standard supine, 90 = transverse)
     // B0 rotates in the YZ plane (tilts toward anterior when angle > 0)
-    generateDipoleKernel3D: function (nx, ny, nz, b0AngleDeg = 0) {
+    // voxelAspectZ: Δz/Δxy. k must be in physical units (cycles/mm), so with
+    // 2 mm slices kz = (iz - cz)/(nz·2) - otherwise the kernel sees every
+    // object squashed 2× along z (wrong field pattern and cone angle).
+    generateDipoleKernel3D: function (nx, ny, nz, b0AngleDeg = 0, voxelAspectZ = 1) {
         const totalSize = nx * ny * nz;
         const kernel = new ComplexArray(totalSize);
         const centerX = nx / 2;
@@ -209,7 +212,7 @@ const QSM = {
                 for (let ix = 0; ix < nx; ix++) {
                     const kx = (ix - centerX) / nx;
                     const ky = (iy - centerY) / ny;
-                    const kz = (iz - centerZ) / nz;
+                    const kz = (iz - centerZ) / (nz * voxelAspectZ);
 
                     const kMag2 = kx * kx + ky * ky + kz * kz;
                     const idx = iz * ny * nx + iy * nx + ix;
@@ -1410,7 +1413,7 @@ function run3DForwardModel() {
     FFT.fftShift3D(chiComplex, nx, ny, nz);
 
     // 3. Generate 3D dipole kernel with current B0 angle
-    cachedKKernel = QSM.generateDipoleKernel3D(nx, ny, nz, CONFIG.b0Angle);
+    cachedKKernel = QSM.generateDipoleKernel3D(nx, ny, nz, CONFIG.b0Angle, voxelAspectZ());
 
     // 4. Multiply in k-space (forward model)
     const kField = QSM.multiplyKSpace3D(chiComplex, cachedKKernel);
@@ -1452,6 +1455,11 @@ function run3DForwardModel() {
 }
 
 // Run 3D inverse model: field → recon (reuses existing noisy field)
+// Physical FOV is gridSize mm in every direction, so Δz/Δxy = gridSize/gridSizeZ (2 mm / 1 mm)
+function voxelAspectZ() {
+    return CONFIG.gridSize / CONFIG.gridSizeZ;
+}
+
 function run3DInverseModel() {
     const nx = CONFIG.gridSize;
     const ny = CONFIG.gridSize;
@@ -1460,7 +1468,7 @@ function run3DInverseModel() {
 
     // Ensure we have the dipole kernel (regenerate if B0 angle changed)
     if (!cachedKKernel) {
-        cachedKKernel = QSM.generateDipoleKernel3D(nx, ny, nz, CONFIG.b0Angle);
+        cachedKKernel = QSM.generateDipoleKernel3D(nx, ny, nz, CONFIG.b0Angle, voxelAspectZ());
     }
 
     // 7. Reconstruction - FFT of noisy field
