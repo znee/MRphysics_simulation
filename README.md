@@ -73,7 +73,10 @@ Understand how gradients encode spatial position into signal phase - the foundat
 - **Module A - Gradient Encoding**: Visualize frequency (Gx) and phase (Gy) encoding
 - **Module B - K-Space & Signal**: See how k-space samples are formed (k in cycles/FOV, N×N Cartesian grid)
 - **Module C - Readout → K-Space → Image**: Watch every voxel's own signal during each readout, the coil summing them into one k-space sample at a time, k-space filling line by line — then the inverse Fourier transform rebuilding the image one spatial-frequency pattern at a time (center of k-space first)
+  - Receiver noise (σ per k-space sample, averages/NEX): noise enters at the coil, so after the inverse FT it spreads evenly over all voxels and the background is no longer black; SNR = mean(object)/SD(background) is compared with the expected N·√NEX/σ
 - **Module D - Frequency Encoding → Image**: Each position "sings its own pitch" (f = γ̄·Gx·x); the received signal is the chord; its Fourier transform is the 1D profile. FOV = BW/(γ̄Gx), Δx = FOV/N, and objects wider than the FOV alias (wrap)
+  - Receiver noise per sample ∝ √BW: narrowing the bandwidth (longer readout) raises SNR (relative SNR ∝ Δx·√T_acq); optional "Lock FOV" rescales Gx as a scanner does
+- **Explanations**: Modules C–E each have a panel guide, "Try this" experiments, key points and a common misconception
 - **Module E - Slice Selection**: Gz makes the Larmor frequency vary with z; the RF bandwidth selects a slab of thickness Δz = BW/(γ̄Gz); sinc pulse ↔ slice profile Fourier pair
 - **Moon-Phase Spheres**: Each spin's phase is displayed as a moon-like illumination pattern
   - Phase 0 = Full moon (all white) → Phase π = New moon (all dark)
