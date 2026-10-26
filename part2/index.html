@@ -217,7 +217,7 @@
     <!-- Help Modal -->
     <div id="helpModal" class="modal">
         <div class="modal-content">
-            <span class="close-modal">&times;</span>
+            <span class="close-modal" id="closeModal">&times;</span>
             <h2>Understanding the Charts</h2>
             <div class="modal-body">
                 <div class="modal-text">
@@ -239,7 +239,7 @@
                         <li>After 180° inversion, M<sub>z</sub> starts negative and recovers toward positive</li>
                         <li>MRI displays <strong>magnitude</strong> (absolute value), so negative appears as positive</li>
                         <li>This creates a "bounce" where signal crosses zero</li>
-                        <li>Each tissue nulls at different TI based on its T1 (e.g., CSF ~2200ms, Fat ~170ms)</li>
+                        <li>Each tissue nulls at TI = T1·ln[2/(1 + e<sup>-TR/T1</sup>)] (≈ 0.69·T1 when TR ≫ T1; e.g., CSF ≈ 2550 ms at TR 9000, Fat ≈ 170 ms)</li>
                     </ul>
                     <p><strong>Tip:</strong> Toggle "Show Signed" to see the true recovery curve without the bounce.</p>
                 </div>

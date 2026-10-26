@@ -199,8 +199,9 @@ class MRPhysics {
             this.params.sequence = 'IR';
             this.params.tr = 9000;
             this.params.te = 100;
-            // CSF nulling: TI = T1_CSF * ln(2) = 4500 * 0.693 ≈ 3120ms
-            this.params.ti = 3120;
+            // CSF nulling with finite TR: TI = T1·ln[2/(1 + e^(-TR/T1))]
+            // = 4500·ln[2/(1 + e^-2)] ≈ 2550 ms (T1·ln2 = 3120 ms only holds for TR ≫ T1)
+            this.params.ti = 2550;
             this.params.fa = 90; // Standard readout
             this.params.inhomogeneity = 0; // IR doesn't use inhomogeneity
         } else if (type === 'STIR') {
