@@ -13,21 +13,31 @@ Interactive web-based educational tools for understanding MRI physics fundamenta
 Watch how spinning protons create the MR signal. Visualize magnetization dynamics, FID formation, and echo mechanisms through real-time animations.
 
 ### Features
-- **Module A - Spin Alignment**: Watch random spins align with B₀ through T1 relaxation
-- **Module B - FID Formation**: See RF excitation tip magnetization and progressive dephasing create the FID
-- **Module C - Echo Formation**: Compare Spin Echo (180° refocusing) vs Gradient Echo (gradient reversal)
+- **Module A - Spin Alignment**: Switch B₀ on and watch spins precess about B₀ (lab frame, slowed) while T1 relaxation builds net M along +z
+  - Two pictures: *Simplified* (every spin aligns) or *Boltzmann* (spins stay spread; only a slight excess points up)
+  - Real thermal polarization shown for the chosen B₀ (≈ 4.9 ppm at 1.5 T, ∝ B₀)
+- **Module B - FID Formation**: See RF excitation tip magnetization and progressive dephasing create the FID (played in slow motion)
+- **Module C - Echo Formation**: Compare Spin Echo (180° refocusing) vs Gradient Echo (gradient reversal) for the same tissue
 - **Module D - GRE Variants**: Multi-TR steady-state visualization of Spoiled GRE vs SSFP
-- **3D Visualization**: Individual spins + net magnetization vector + Mxy/Mz component arrows
-- **Real-time Charts**: Mxy decay, Mz recovery, and complex signal (Re, Im, magnitude)
+- **Module E - RF & Precession**: Laboratory vs rotating frame — M precesses at ω₀, B₁ spirals it down in the lab frame but simply tips it in the rotating frame; the coil voltage oscillates at ω₀ while the demodulated signal is the envelope; an RF frequency mismatch shows the resonance condition
+- **3D Visualization**: Individual spins + net magnetization vector + Mxy/Mz component arrows, B₀ pointing up
+  - Spins colored by precession speed (blue slow → red fast) — the "runners on a track" picture of dephasing and spin echoes
+  - View presets: 3D, Top (look down B₀ onto the xy plane), Side
+- **Real-time Charts**: Mxy decay, Mz recovery, and complex signal (Re, Im, magnitude) on a fixed time axis per run
+  - Dashed theory curves: M₀(1−e^(−t/T1)), sin α·e^(−t/T2), sin α·e^(−t/T2*), expected echo amplitudes, steady-state levels; T1/T2/T2* markers
 - **Signal Detection**: Panel glow proportional to |Mxy| — the envelope of the EMF induced at ω₀ (Faraday's law)
 
 ### Physics Model
 - **Bloch Equations**: Full magnetization evolution with T1/T2 relaxation
-- **Spin Echo**: 180° pulse inverts phases → echo at T2 envelope (refocuses B₀ inhomogeneity)
+- **T1 Alignment**: each spin's Mz relaxes toward its equilibrium value, so the ensemble follows Mz(t) = M₀(1 − e^(−t/T1)); azimuths are balanced, so there is no net Mxy (no signal) without RF
+- **T2\***: B₀ inhomogeneity modeled as a Lorentzian line (half-width Δf), giving exponential decay with 1/T2* = 1/T2 + 2π·Δf
+- **Spin Echo**: 180° pulse inverts phases → echo at T2 envelope (refocuses B₀ inhomogeneity); also inverts Mz
 - **Gradient Echo**: Gradient reversal → echo at T2* envelope (does NOT refocus B₀)
 - **Spoiled GRE**: S = sin(α)(1-E1)/(1-cos(α)E1) with Ernst angle optimization
 - **SSFP (bSSFP)**: S = sin(α)/(1+cos(α)+(1-cos(α))T1/T2) for T2/T1-weighted contrast
-- **Rotating Frame**: Visualization at Larmor frequency ω₀ = γB₀
+- **RF Excitation (Module E)**: rotation about B_eff = (ω₁, 0, ω₀ − ω_RF) in the rotating frame; α = γB₁τ (B₁ ≈ 5.9 µT for a 1 ms 90° pulse)
+- **Rotating Frame**: Modules B–D are shown in the frame rotating at ω₀ = γB₀; Modules A and E show the laboratory frame with precession slowed for display
+- **Playback**: each run is scaled to play in ~10 s (time axis shows real ms); relaxation and precession in Modules A/E are slowed for display
 
 ---
 
@@ -61,20 +71,25 @@ Understand how gradients encode spatial position into signal phase - the foundat
 
 ### Features
 - **Module A - Gradient Encoding**: Visualize frequency (Gx) and phase (Gy) encoding
-- **Module B - K-Space & Signal**: See how k-space samples are formed
+- **Module B - K-Space & Signal**: See how k-space samples are formed (k in cycles/FOV, N×N Cartesian grid)
+- **Module C - Readout → K-Space → Image**: Watch every voxel's own signal during each readout, the coil summing them into one k-space sample at a time, k-space filling line by line — then the inverse Fourier transform rebuilding the image one spatial-frequency pattern at a time (center of k-space first)
+- **Module D - Frequency Encoding → Image**: Each position "sings its own pitch" (f = γ̄·Gx·x); the received signal is the chord; its Fourier transform is the 1D profile. FOV = BW/(γ̄Gx), Δx = FOV/N, and objects wider than the FOV alias (wrap)
+- **Module E - Slice Selection**: Gz makes the Larmor frequency vary with z; the RF bandwidth selects a slab of thickness Δz = BW/(γ̄Gz); sinc pulse ↔ slice profile Fourier pair
 - **Moon-Phase Spheres**: Each spin's phase is displayed as a moon-like illumination pattern
   - Phase 0 = Full moon (all white) → Phase π = New moon (all dark)
   - The illuminated area changes smoothly like lunar phases
-- **Animate Readout**: Toggle to see phase evolution as kx sweeps during signal acquisition
-- **Readout Signal**: Watch the signal graph as spins dephase during frequency encoding
+- **Animate Readout**: Toggle to see phase evolution as kx sweeps from −N/2 to +N/2 during signal acquisition
+- **Readout Signal**: Watch the signal graph form an echo (sinc-shaped peak at kx = 0) as spins rephase and dephase
 - **Vector Sum**: Watch how individual spins combine into net signal
 
 ### Physics Model
 - **Phase Equation**: φ(x,y) = γ · (Gx·x + Gy·y) · t
+- **K-Space Units**: k in cycles per FOV — phase-encode step m puts m cycles of phase twist across the FOV; at k = N/2 neighboring voxels differ by π
 - **Moon-Phase Visualization**: illumination = (1 + cos(φ)) / 2, with terminator ellipse width = |cos(φ)| · radius
-- **K-Space Sampling**: S(kx,ky) = Σ ρ(x,y) · e^(-i2π(kx·x + ky·y))
+- **K-Space Sampling**: S(kx,ky) = Σ ρ(x,y) · e^(-i2π(kx·x + ky·y)); reconstruction ρ = (1/N²) Σ S · e^(+i2π(kx·x + ky·y))
 - **Frequency Encoding**: Applied during readout → continuous phase accumulation → oscillating signal
 - **Phase Encoding**: Applied before readout → fixed phase imprint → constant magnitude shift
+- **Slice Selection**: f(z) = γ̄·Gz·z; BW = TBW/T; Δz = BW/(γ̄Gz); profile ≈ |FT of B₁(t)| (small-tip approximation)
 
 ---
 
@@ -146,7 +161,7 @@ Explores Quantitative Susceptibility Mapping (QSM) physics, including dipole fie
 - **Resolution**: 128×128×64 voxels (fixed for performance)
 - **3D FFT Complexity**: O(N³ log N) - full 3D simulation requires ~1M voxel operations
 - **Why Z=64?**: Browser-based JavaScript has limited computational power. A 128³ volume would require 2M voxels and significantly longer processing time. The 128×128×64 configuration provides a good balance between realistic 3D dipole physics and interactive performance.
-- **Anisotropic Voxels**: With Z=64, each Z voxel represents 2mm (vs 1mm in XY), simulating clinical thick-slice acquisitions
+- **Anisotropic Voxels**: With Z=64, each Z voxel represents 2mm (vs 1mm in XY), simulating clinical thick-slice acquisitions. The dipole kernel uses physical k (cycles/mm), so the 2 mm slices do not distort the field pattern or the 54.7° cone
 
 ### Simplifications
 Phase unwrapping, background field removal, and multi-echo combination are omitted.
