@@ -17,7 +17,6 @@
     <!-- Chart.js Annotation Plugin -->
     <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation"></script>
     <!-- MathJax -->
-    <script src="https://polyfill.io/v3/polyfill.min.js?features=es6"></script>
     <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
 </head>
 
@@ -39,6 +38,7 @@
                     <button class="module-tab" data-module="B">B: FID</button>
                     <button class="module-tab" data-module="C">C: Echo</button>
                     <button class="module-tab" data-module="D">D: GRE</button>
+                    <button class="module-tab wide" data-module="E">E: RF &amp; Precession (Lab vs Rotating)</button>
                 </div>
 
                 <!-- Animation Controls -->
@@ -72,12 +72,23 @@
                     <input type="range" id="T1-val" min="100" max="2000" step="50" value="500">
                     <span id="T1-display">500 ms</span>
 
-                    <label for="B0-val">B0 Field (T) <em style="font-size: 0.7rem; opacity: 0.7;">(display only)</em></label>
+                    <label for="B0-val">B0 Field (T) <em style="font-size: 0.7rem; opacity: 0.7;">(precession speed &amp; polarization)</em></label>
                     <input type="range" id="B0-val" min="0.5" max="7" step="0.5" value="1.5">
                     <span id="B0-display">1.5 T (63.9 MHz)</span>
-                    <em style="font-size: 0.65rem; opacity: 0.6; display: block; margin-top: 2px;">
-                        Rotating frame at ω₀ - physics normalized to M₀=1
+                    <em id="polarization-note" style="font-size: 0.65rem; opacity: 0.75; display: block; margin-top: 2px;">
+                        Real spin excess ≈ 4.9 per million (310 K) - exaggerated here; plots normalized to M₀ = 1
                     </em>
+
+                    <label for="align-model">Alignment Picture</label>
+                    <select id="align-model">
+                        <option value="simple">Simplified: every spin aligns</option>
+                        <option value="boltzmann">Boltzmann: only a slight excess aligns</option>
+                    </select>
+
+                    <label style="margin-top: 10px;">
+                        <input type="checkbox" id="show-precession-A" checked>
+                        Show Larmor precession (lab frame, slowed)
+                    </label>
 
                     <button class="btn primary" id="btn-b0-on" style="width: 100%; margin-top: 15px;">
                         Turn B0 ON
@@ -90,7 +101,8 @@
                         <div class="alignment-bar">
                             <div class="alignment-fill" id="alignment-fill" style="width: 0%;"></div>
                         </div>
-                        <span class="alignment-label">Net Magnetization: <span id="net-mz">0%</span></span>
+                        <span class="alignment-label">Net Magnetization: <span id="net-mz">0%</span> of M₀</span>
+                        <span class="alignment-label" style="display: block; margin-top: 2px;">Spins up / down: <span id="up-down">50% / 50%</span></span>
                     </div>
 
                     <div class="vector-display">
@@ -121,13 +133,16 @@
                     <input type="range" id="num-spins" min="10" max="200" step="10" value="100">
                     <span id="num-spins-val">100 spins</span>
 
-                    <label for="freq-spread">Frequency Spread (Hz) - T2*</label>
-                    <input type="range" id="freq-spread" min="0" max="100" step="5" value="30">
-                    <span id="freq-spread-val">30 Hz</span>
+                    <label for="freq-spread">Frequency Spread Δf (Hz, B₀ inhomogeneity)</label>
+                    <input type="range" id="freq-spread" min="0" max="30" step="1" value="5">
+                    <span id="freq-spread-val">5 Hz</span>
 
                     <label for="T2-ensemble">Intrinsic T2 (ms)</label>
                     <input type="range" id="T2-ensemble" min="50" max="300" step="10" value="100">
                     <span id="T2-ensemble-val">100 ms</span>
+                    <div class="derived-value">
+                        1/T2* = 1/T2 + 2π·Δf → <strong>T2* ≈ <span id="T2star-B-val">24</span> ms</strong>
+                    </div>
 
                     <button class="btn primary" id="btn-excite" style="width: 100%; margin-top: 15px;">
                         Apply RF Pulse
@@ -167,8 +182,11 @@
                     <span id="T2-echo-val">200 ms</span>
 
                     <label for="T2star-echo">T2* (ms)</label>
-                    <input type="range" id="T2star-echo" min="10" max="100" step="5" value="30">
-                    <span id="T2star-echo-val">30 ms</span>
+                    <input type="range" id="T2star-echo" min="10" max="100" step="5" value="50">
+                    <span id="T2star-echo-val">50 ms</span>
+                    <div class="derived-value" id="T2star-echo-note">
+                        Same tissue for both echoes: SE echo follows e<sup>-t/T2</sup>, GRE echo follows e<sup>-t/T2*</sup>
+                    </div>
 
                     <button class="btn primary" id="btn-run-sequence" style="width: 100%; margin-top: 15px;">
                         Run Sequence
@@ -265,6 +283,56 @@
                     </div>
                 </div>
 
+                <!-- Module E: RF Excitation, Precession, Lab vs Rotating Frame -->
+                <div class="control-group module-controls" id="controls-E" style="display: none;">
+                    <h2>RF &amp; Precession</h2>
+
+                    <label for="frame-E">Viewing Frame</label>
+                    <select id="frame-E">
+                        <option value="lab">Laboratory frame (what the coil sees)</option>
+                        <option value="rot">Rotating frame at ω<sub>RF</sub> (simplified view)</option>
+                    </select>
+
+                    <label for="B0-val-E">B0 Field (T)</label>
+                    <input type="range" id="B0-val-E" min="0.5" max="7" step="0.5" value="1.5">
+                    <span id="B0-display-E">1.5 T → f₀ = 63.9 MHz</span>
+
+                    <label for="flip-angle-E">Flip Angle α = γ·B₁·τ</label>
+                    <input type="range" id="flip-angle-E" min="10" max="180" step="5" value="90">
+                    <span id="flip-angle-E-val">90°</span>
+
+                    <label for="rf-offset-E">RF Frequency Mismatch (f<sub>RF</sub> − f₀)</label>
+                    <input type="range" id="rf-offset-E" min="-1000" max="1000" step="50" value="0">
+                    <span id="rf-offset-E-val">0 Hz (on resonance)</span>
+
+                    <button class="btn primary" id="btn-run-rf" style="width: 100%; margin-top: 15px;">
+                        Apply RF Pulse
+                    </button>
+
+                    <div class="derived-value" style="margin-top: 12px;">
+                        For a 1 ms pulse: <strong>B₁ ≈ <span id="b1-val">5.9</span> µT</strong>
+                        (vs B₀ = <span id="b0-val-E-inline">1.5</span> T)
+                    </div>
+                    <div class="derived-value">
+                        Achieved tip angle: <strong><span id="tip-angle-val">--</span></strong>
+                    </div>
+
+                    <div class="legend" style="margin-top: 10px;">
+                        <div class="legend-item">
+                            <span class="legend-color" style="background: #f59e0b;"></span>
+                            <span>B₁ (RF field)</span>
+                        </div>
+                        <div class="legend-item">
+                            <span class="legend-color" style="background: #ffffff;"></span>
+                            <span>M</span>
+                        </div>
+                        <div class="legend-item">
+                            <span class="legend-color" style="background: #f472b6;"></span>
+                            <span>Path of M</span>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- Info Panel -->
                 <div class="info-panel" id="info-panel">
                     <h4>Module A: Bloch Equations</h4>
@@ -288,8 +356,13 @@
                     <div class="spin-view-label">
                         <span id="view-label">Rotating Frame (ω₀)</span>
                     </div>
+                    <div class="view-buttons">
+                        <button class="view-btn active" data-view="3d" title="Oblique 3D view">3D</button>
+                        <button class="view-btn" data-view="top" title="Look down B₀ onto the xy plane (racetrack view)">Top</button>
+                        <button class="view-btn" data-view="side" title="Look along x (shows Mz vs My)">Side</button>
+                    </div>
                     <div class="spin-view-legend">
-                        <div class="legend-row"><span class="color-dot" style="background: #10b981;"></span> Individual spins</div>
+                        <div class="legend-row"><span class="color-dot spin-color-dot"></span> <span id="spin-legend-text">Individual spins</span></div>
                         <div class="legend-row"><span class="color-dot" style="background: #ffffff;"></span> Net M (total)</div>
                         <div class="legend-row"><span class="color-dot" style="background: #22d3ee;"></span> Mxy (transverse)</div>
                         <div class="legend-row"><span class="color-dot" style="background: #3b82f6;"></span> Mz (longitudinal)</div>
@@ -313,7 +386,7 @@
                         </div>
                     </div>
                     <div class="signal-panel">
-                        <h3>Signal / FID <span class="equation">\(S(t) = M_{xy} e^{i\phi}\)</span></h3>
+                        <h3>Signal / FID <span class="equation">\(S(t) = M_{xy} e^{i\phi}\)</span> <span class="frame-badge" id="signal-frame-badge">rotating frame</span></h3>
                         <div class="chart-container">
                             <canvas id="chart-signal"></canvas>
                         </div>

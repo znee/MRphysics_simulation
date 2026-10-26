@@ -241,6 +241,10 @@ body {
     border-color: var(--accent-color);
 }
 
+.module-tab.wide {
+    grid-column: span 2;
+}
+
 /* Visualization Area */
 .visualization-area {
     flex: 1;
@@ -303,6 +307,65 @@ body {
     height: 10px;
     border-radius: 2px;
     flex-shrink: 0;
+}
+
+/* 3D view preset buttons (oblique / top / side) */
+.view-buttons {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    display: flex;
+    gap: 4px;
+}
+
+.view-btn {
+    padding: 4px 10px;
+    background: rgba(0, 0, 0, 0.7);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    color: var(--text-secondary);
+    font-size: 0.7rem;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.view-btn:hover {
+    color: var(--text-primary);
+}
+
+.view-btn.active {
+    border-color: var(--accent-color);
+    color: var(--accent-color);
+}
+
+/* Spin color legend: color = precession speed (blue slow -> red fast) */
+.spin-color-dot {
+    background: linear-gradient(90deg, #3b82f6, #22c55e, #ef4444);
+}
+
+/* Small derived-quantity readout under sliders */
+.derived-value {
+    font-size: 0.72rem;
+    color: var(--text-secondary);
+    margin-top: 6px;
+    padding: 6px 8px;
+    background: rgba(0, 0, 0, 0.25);
+    border-radius: 6px;
+    line-height: 1.5;
+}
+
+.derived-value strong {
+    color: var(--text-primary);
+}
+
+.frame-badge {
+    font-size: 0.65rem;
+    font-weight: 600;
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: rgba(148, 163, 184, 0.15);
+    color: var(--text-secondary);
+    vertical-align: middle;
 }
 
 /* Signal Panels */
@@ -531,6 +594,8 @@ input[type="checkbox"] {
 
     .spin-view-container {
         min-width: unset;
+        /* flex: 1 would override the height in the column layout and collapse the 3D view */
+        flex: none;
         height: 400px;
     }
 
@@ -569,6 +634,7 @@ input[type="checkbox"] {
     }
 
     .spin-view-container {
+        flex: none;
         height: 350px;
     }
 
