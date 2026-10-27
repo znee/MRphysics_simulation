@@ -34,7 +34,7 @@ Watch how spinning protons create the MR signal. Visualize magnetization dynamic
 - **Spin Echo**: 180° pulse inverts phases → echo at T2 envelope (refocuses B₀ inhomogeneity); also inverts Mz
 - **Gradient Echo**: Gradient reversal → echo at T2* envelope (does NOT refocus B₀)
 - **Spoiled GRE**: S = sin(α)(1-E1)/(1-cos(α)E1) with Ernst angle optimization
-- **SSFP (bSSFP)**: S = sin(α)/(1+cos(α)+(1-cos(α))T1/T2) for T2/T1-weighted contrast
+- **SSFP (bSSFP)**: on resonance, right after α: S = sin(α)(1−E1)/(1−(E1−E2)cos(α)−E1·E2), E1,2 = e^(−TR/T1,2); for TR ≪ T1, T2 this tends to sin(α)/(1+cos(α)+(1-cos(α))T1/T2) (T2/T1-weighted contrast)
 - **RF Excitation (Module E)**: rotation about B_eff = (ω₁, 0, ω₀ − ω_RF) in the rotating frame; α = γB₁τ (B₁ ≈ 5.9 µT for a 1 ms 90° pulse)
 - **Rotating Frame**: Modules B–D are shown in the frame rotating at ω₀ = γB₀; Modules A and E show the laboratory frame with precession slowed for display
 - **Playback**: each run is scaled to play in ~10 s (time axis shows real ms); relaxation and precession in Modules A/E are slowed for display

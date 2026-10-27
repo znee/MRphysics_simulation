@@ -603,6 +603,16 @@ input[type="checkbox"] {
         width: 100%;
         flex-direction: row;
     }
+
+    /* Let the three side-by-side charts shrink instead of widening the page */
+    .visualization-area,
+    .signal-panel {
+        min-width: 0;
+    }
+
+    .signal-panel h3 {
+        flex-wrap: wrap;
+    }
 }
 
 /* Tablets */
@@ -782,6 +792,13 @@ input[type="checkbox"] {
 
     .spin-view-container {
         height: 250px;
+    }
+
+    /* Keep the frame label clear of the 3D / Top / Side buttons */
+    .spin-view-label {
+        max-width: calc(100% - 170px);
+        font-size: 0.7rem;
+        padding: 4px 8px;
     }
 
     .signal-panel {

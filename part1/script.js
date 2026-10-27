@@ -1663,8 +1663,8 @@ function stepModuleD(dt) {
             return;
         }
 
-        // Prepare for next TR
-        timeInTR = 0;
+        // Prepare for next TR (carry the overshoot so TRs don't drift longer)
+        timeInTR -= CONFIG.TR;
 
         // Apply RF pulse at start of new TR
         if (CONFIG.greType === 'spoiled') {
@@ -1885,14 +1885,17 @@ function calculateSpoiledGRESignal(flipAngleDeg, TR, T1) {
 }
 
 /**
- * Calculate theoretical steady-state signal for SSFP (bSSFP)
- * S = M0 * sin(α) / (1 + cos(α) + (1 - cos(α)) * T1/T2)
- * This is a simplified on-resonance formula
+ * Calculate theoretical steady-state signal for SSFP (bSSFP), on resonance
+ * with the RF phase alternated each TR, right after each α pulse
+ * (where the simulated |Mxy| peaks and the dashed line is drawn):
+ * S = M0 * sin(α)(1 - E1) / (1 - (E1 - E2)cos(α) - E1·E2)
+ * For TR ≪ T1, T2 this tends to sin(α) / (1 + cos(α) + (1 - cos(α)) * T1/T2)
  */
-function calculateSSFPSignal(flipAngleDeg, T1, T2) {
+function calculateSSFPSignal(flipAngleDeg, TR, T1, T2) {
     const alpha = flipAngleDeg * Math.PI / 180;
-    const ratio = T1 / T2;
-    const signal = Math.sin(alpha) / (1 + Math.cos(alpha) + (1 - Math.cos(alpha)) * ratio);
+    const E1 = Math.exp(-TR / T1);
+    const E2 = Math.exp(-TR / T2);
+    const signal = Math.sin(alpha) * (1 - E1) / (1 - (E1 - E2) * Math.cos(alpha) - E1 * E2);
     return signal;
 }
 
@@ -1912,7 +1915,7 @@ function updateSteadyStateDisplay() {
     if (CONFIG.greType === 'spoiled') {
         signal = calculateSpoiledGRESignal(CONFIG.flipAngleD, CONFIG.TR, CONFIG.T1D);
     } else {
-        signal = calculateSSFPSignal(CONFIG.flipAngleD, CONFIG.T1D, CONFIG.T2D);
+        signal = calculateSSFPSignal(CONFIG.flipAngleD, CONFIG.TR, CONFIG.T1D, CONFIG.T2D);
     }
     document.getElementById('steady-state-val').textContent = (signal * 100).toFixed(1) + '%';
 }
@@ -1923,9 +1926,11 @@ function updateSteadyStateDisplay() {
 function runGRESequence() {
     resetSimulation();
 
-    // Create ensemble with minimal frequency spread (on-resonance for SSFP)
+    // Create ensemble with minimal frequency spread (on-resonance for SSFP:
+    // 1 Hz keeps the off-resonance phase per TR small, so the ensemble matches
+    // the on-resonance steady state; 5 Hz gave ~4% less at the defaults)
     // Use small spread for spoiled GRE to show T2* effects
-    const freqSpread = CONFIG.greType === 'ssfp' ? 5 : 20;
+    const freqSpread = CONFIG.greType === 'ssfp' ? 1 : 20;
     ensemble = new SpinEnsemble(CONFIG.numSpins, CONFIG.T1D, CONFIG.T2D, freqSpread, CONFIG.B0);
     createEnsembleArrows();
 
@@ -1955,7 +1960,7 @@ function runGRESequence() {
         theory.mz = sampleCurve(() => MzSS, CONFIG.maxTime, 2);
         theory.mzLabel = 'Steady-state Mz before α';
     } else {
-        const Sss = calculateSSFPSignal(CONFIG.flipAngleD, CONFIG.T1D, CONFIG.T2D);
+        const Sss = calculateSSFPSignal(CONFIG.flipAngleD, CONFIG.TR, CONFIG.T1D, CONFIG.T2D);
         theory.mxy = sampleCurve(() => Sss, CONFIG.maxTime, 2);
         theory.mxyLabel = `bSSFP steady state, on resonance (${(Sss * 100).toFixed(1)}%)`;
     }
@@ -1972,6 +1977,18 @@ function updateVectorDisplay(spin) {
     document.getElementById('Mx-val').textContent = fmt(spin.Mx);
     document.getElementById('My-val').textContent = fmt(spin.My);
     document.getElementById('Mz-val').textContent = fmt(spin.Mz);
+}
+
+/**
+ * Modules B, C and D share one spin count (CONFIG.numSpins): keep the
+ * Module B and Module C sliders and labels showing the value actually used
+ */
+function setNumSpins(numSpins) {
+    CONFIG.numSpins = numSpins;
+    ['num-spins', 'num-spins-C'].forEach(id => {
+        document.getElementById(id).value = numSpins;
+        document.getElementById(`${id}-val`).textContent = numSpins + ' spins';
+    });
 }
 
 // ============================================================================
@@ -2160,7 +2177,7 @@ function updateInfoPanel(module) {
             infoText.innerHTML = `
                 <strong>Lab frame:</strong> M precesses about B₀ at ω₀ = γB₀ (63.9 MHz at 1.5 T). The RF field B₁ rotates at ω<sub>RF</sub>; on resonance it pushes M down a spiral. The coil voltage oscillates at ω₀.<br>
                 <strong>Rotating frame:</strong> Rotate with B₁ and both the precession and the oscillation disappear: B₁ looks static and simply tips M by α = γB₁τ - the view used in Modules B-D. The demodulated signal is the slow envelope.<br>
-                <strong>Resonance:</strong> Set an RF mismatch: B₁ no longer keeps pace, M tips about a tilted effective field and never reaches the xy plane - only spins at the RF frequency are excited (the basis of slice selection).<br>
+                <strong>Resonance:</strong> Set an RF mismatch comparable to γB₁/2π or larger: B₁ no longer keeps pace, M tips about a tilted effective field and falls short of the xy plane - only spins near the RF frequency are excited (the basis of slice selection).<br>
                 <em style="color: #f59e0b;">Precession and relaxation are slowed for display; B₁ is µT while B₀ is T.</em>
             `;
             break;
@@ -2208,6 +2225,8 @@ function setupEventListeners() {
 
     document.getElementById('num-spins-A').addEventListener('change', () => {
         if (CONFIG.currentModule === 'A') {
+            // New spins: stop the run and clear its curves, as for a new picture
+            resetSimulation();
             initModuleA();
         }
     });
@@ -2218,7 +2237,11 @@ function setupEventListeners() {
         if (alignmentEnsemble) {
             alignmentEnsemble.setT1(CONFIG.T1);
         }
-        if (CONFIG.currentModule === 'A' && b0IsOn) setAlignmentTheory();
+        // A run (and its 5·T1 window and theory) belongs to the old T1: start over
+        if (CONFIG.currentModule === 'A' && b0IsOn) {
+            resetSimulation();
+            initModuleA();
+        }
     });
 
     // B0 sliders (Module A and E share one value)
@@ -2295,8 +2318,7 @@ function setupEventListeners() {
 
     // Module B controls
     document.getElementById('num-spins').addEventListener('input', (e) => {
-        CONFIG.numSpins = parseInt(e.target.value);
-        document.getElementById('num-spins-val').textContent = CONFIG.numSpins + ' spins';
+        setNumSpins(parseInt(e.target.value));
     });
 
     document.getElementById('num-spins').addEventListener('change', () => {
@@ -2331,8 +2353,10 @@ function setupEventListeners() {
 
     document.getElementById('btn-excite').addEventListener('click', () => {
         resetSimulation();
-        ensemble.setT1(CONFIG.T1);
-        ensemble.setT2(CONFIG.T2ensemble);
+        // Modules C and D replace the shared ensemble: rebuild Module B's own
+        // (Lorentzian Δf, T2, spin count) so it matches the T2* readout and theory
+        ensemble = createFIDEnsemble();
+        createEnsembleArrows();
         ensemble.applyRFPulse(CONFIG.flipAngle, 0);
         setFIDTheory();
         updateEnsembleArrows();
@@ -2368,9 +2392,7 @@ function setupEventListeners() {
     document.getElementById('T2-echo').addEventListener('input', updateT2starEchoNote);
 
     document.getElementById('num-spins-C').addEventListener('input', (e) => {
-        const numSpins = parseInt(e.target.value);
-        document.getElementById('num-spins-C-val').textContent = numSpins + ' spins';
-        CONFIG.numSpins = numSpins;
+        setNumSpins(parseInt(e.target.value));
     });
 
     document.getElementById('btn-run-sequence').addEventListener('click', runEchoSequence);
@@ -2614,8 +2636,12 @@ function runEchoSequence() {
     // B0 inhomogeneity causes slow decay that is NOT refocused
     if (CONFIG.echoType === 'gradient') {
         // Strong gradient (300 Hz spread) for rapid, complete dephasing: its
-        // residual ripple (~1/(π·300 Hz·t)) stays well below the T2*-limited echo
-        ensemble.applyGradientFixed(300);
+        // residual ripple (~1/(π·300 Hz·t)) stays well below the T2*-limited echo.
+        // N evenly spaced spins rephase every (N−1)/spread, so for few spins the
+        // spread is capped at (N−1)/TE: that false echo then falls beyond the
+        // TE/2 of dephasing (100 spins always get the full 300 Hz)
+        const gradSpread = Math.min(300, (CONFIG.numSpins - 1) / (CONFIG.TE / 1000));
+        ensemble.applyGradientFixed(gradSpread);
     }
     // Arrows colored by total precession speed (B0 offset + gradient)
     createEnsembleArrows();
