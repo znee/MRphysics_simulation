@@ -3008,7 +3008,18 @@ class SpatialEncodingSimulator {
         ctx.textAlign = 'center';
         for (let s = 0; s < n; s += Math.max(1, n / 8)) ctx.fillText(s - half, kxToX(s - half), bottom + 12);
         ctx.fillStyle = '#94a3b8';
-        ctx.fillText(narrow ? 'sample kx (time →)' : 'readout sample kx (time →)   ● Re (white)  ● Im (amber)', left + sigW / 2, bottom + 26);
+        ctx.fillText(narrow ? 'sample kx (time →)' : 'readout sample kx (time →)', left + sigW / 2, bottom + 26);
+        // Re/Im legend in the left margin, so it stays visible at every panel width
+        ctx.font = 'bold 9px Inter';
+        ctx.textAlign = 'left';
+        [['Re', '#ffffff'], ['Im', '#f59e0b']].forEach(([label, color], i) => {
+            const y = top + 14 + i * 14;
+            ctx.fillStyle = color;
+            ctx.beginPath();
+            ctx.arc(8, y - 3, 3, 0, 2 * Math.PI);
+            ctx.fill();
+            ctx.fillText(label, 14, y);
+        });
         if (this.getReconNoiseSD() > 0 && r.sample >= 0) {
             ctx.font = '8px Inter';
             ctx.fillStyle = '#f472b6';
