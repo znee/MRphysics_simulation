@@ -729,33 +729,117 @@ function init3D() {
     });
 }
 
-function createAxisLabels() {
-    // Create text sprites for axis labels
-    function createLabel(text, position, color = '#ffffff') {
-        const canvas = document.createElement('canvas');
-        canvas.width = 64;
-        canvas.height = 64;
-        const ctx = canvas.getContext('2d');
-        ctx.fillStyle = color;
-        ctx.font = 'bold 40px Inter, sans-serif';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(text, 32, 32);
-
-        const texture = new THREE.CanvasTexture(canvas);
-        // Constant on-screen size, so labels near the camera don't balloon
-        const spriteMat = new THREE.SpriteMaterial({ map: texture, sizeAttenuation: false });
-        const sprite = new THREE.Sprite(spriteMat);
-        sprite.position.copy(position);
-        sprite.scale.set(0.07, 0.07, 1);
-        return sprite;
+/**
+ * Text sprite with a constant on-screen size (labels near the camera don't balloon).
+ * Optional subscript (e.g. M + "xy"); onTop draws it over everything else.
+ */
+function makeLabelSprite(text, color, { sub = '', position = null, onTop = false, height = 0.07 } = {}) {
+    const canvas = document.createElement('canvas');
+    canvas.width = sub ? 128 : 64;
+    canvas.height = 64;
+    const ctx = canvas.getContext('2d');
+    const mainFont = 'bold 40px Inter, sans-serif';
+    const subFont = 'bold 26px Inter, sans-serif';
+    ctx.font = mainFont;
+    const mainW = ctx.measureText(text).width;
+    ctx.font = subFont;
+    const subW = sub ? ctx.measureText(sub).width : 0;
+    const x0 = (canvas.width - mainW - subW) / 2;
+    ctx.textBaseline = 'middle';
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = 6;
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.85)';  // dark outline: readable over the spin arrows
+    ctx.fillStyle = color;
+    ctx.font = mainFont;
+    ctx.strokeText(text, x0, 32);
+    ctx.fillText(text, x0, 32);
+    if (sub) {
+        ctx.font = subFont;
+        ctx.strokeText(sub, x0 + mainW, 44);
+        ctx.fillText(sub, x0 + mainW, 44);
     }
 
-    axisLabels.xRot = createLabel("x'", new THREE.Vector3(1.7, 0, 0), '#ff6666');
-    axisLabels.yRot = createLabel("y'", new THREE.Vector3(0, 1.7, 0), '#66ff66');
-    axisLabels.xLab = createLabel("x", new THREE.Vector3(1.7, 0, 0), '#ff6666');
-    axisLabels.yLab = createLabel("y", new THREE.Vector3(0, 1.7, 0), '#66ff66');
-    axisLabels.b0 = createLabel("B₀", new THREE.Vector3(0, 0, 1.6), '#6666ff');
+    const texture = new THREE.CanvasTexture(canvas);
+    const spriteMat = new THREE.SpriteMaterial({ map: texture, sizeAttenuation: false, depthTest: !onTop });
+    const sprite = new THREE.Sprite(spriteMat);
+    if (position) sprite.position.copy(position);
+    sprite.scale.set(height * canvas.width / canvas.height, height, 1);
+    if (onTop) sprite.renderOrder = 11;
+    return sprite;
+}
+
+// Shared unit geometry for the thick vector arrows (scaled per arrow)
+const VECTOR_SHAFT_GEOM = new THREE.CylinderGeometry(1, 1, 1, 12);
+const VECTOR_HEAD_GEOM = new THREE.ConeGeometry(1, 1, 16);
+
+/**
+ * Thick, labelled arrow for a summed vector (M, Mxy, Mz). Drawn on top of the
+ * thin spin-packet arrows, so the sum never gets lost among them.
+ * Same calls as THREE.ArrowHelper: setDirection(dir), setLength(length), setColor(color).
+ * The label sits beyond the tip, or beside the shaft (labelAlong < 1, labelSide ≠ 0) for
+ * arrows that can coincide with M; it hides while the arrow is short, where labels would pile up.
+ */
+class VectorArrow extends THREE.Group {
+    constructor(dir, length, color, { label = '', sub = '', radius = 0.022, labelSide = 0, labelAlong = 1 } = {}) {
+        super();
+        this.radius = radius;
+        this.labelSide = labelSide;
+        this.labelAlong = labelAlong;
+        this.material = new THREE.MeshBasicMaterial({ color, depthTest: false, transparent: true });
+        this.shaft = new THREE.Mesh(VECTOR_SHAFT_GEOM, this.material);
+        this.head = new THREE.Mesh(VECTOR_HEAD_GEOM, this.material);
+        // Thinner arrows draw last, so a thin M stays visible on a thicker, coinciding Mz
+        this.shaft.renderOrder = this.head.renderOrder = 10 + (0.03 - radius) * 100;
+        this.add(this.shaft, this.head);
+        if (label) {
+            this.label = makeLabelSprite(label, '#' + new THREE.Color(color).getHexString(), { sub, onTop: true, height: 0.045 });
+            this.add(this.label);
+        }
+        this.setDirection(dir);
+        this.setLength(length);
+    }
+
+    setDirection(dir) {
+        this.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.clone().normalize());
+    }
+
+    // ArrowHelper's head-size arguments are ignored: the head scales with the arrow
+    setLength(length) {
+        const head = Math.min(0.14, 0.45 * length);
+        const shaft = Math.max(1e-3, length - head);
+        this.shaft.scale.set(this.radius, shaft, this.radius);
+        this.shaft.position.y = shaft / 2;
+        this.head.scale.set(this.radius * 2.8, head, this.radius * 2.8);
+        this.head.position.y = length - head / 2;
+        if (this.label) {
+            const along = this.labelAlong < 1 ? this.labelAlong * length : length + 0.08;
+            this.label.position.set(this.labelSide, along, 0);
+            this.label.visible = length >= 0.25;
+        }
+    }
+
+    setColor(color) {
+        this.material.color.set(color);
+    }
+}
+
+// Thin spin-packet arrows are drawn slightly transparent, so the thick sums stand out
+function fadeSpinArrow(arrow) {
+    [arrow.line.material, arrow.cone.material].forEach(m => {
+        m.transparent = true;
+        m.opacity = 0.7;
+    });
+}
+
+function createAxisLabels() {
+    axisLabels.xRot = makeLabelSprite("x'", '#ff6666', { position: new THREE.Vector3(1.7, 0, 0) });
+    // y at 1.35 (not 1.7): in the narrow desktop view 1.7 falls outside the canvas
+    axisLabels.yRot = makeLabelSprite("y'", '#66ff66', { position: new THREE.Vector3(0, 1.35, 0) });
+    axisLabels.xLab = makeLabelSprite("x", '#ff6666', { position: new THREE.Vector3(1.7, 0, 0) });
+    axisLabels.yLab = makeLabelSprite("y", '#66ff66', { position: new THREE.Vector3(0, 1.35, 0) });
+    axisLabels.z = makeLabelSprite("z", '#8888ff', { position: new THREE.Vector3(0, 0, 1.6) });
+    // B₀ is labelled on its own (yellow) arrow; the z axis is just its direction
+    axisLabels.b0 = makeLabelSprite("B₀", '#ffff00', { position: new THREE.Vector3(0.3, -1.5, 0.88) });
     Object.values(axisLabels).forEach(label => scene.add(label));
     setAxisFrame('rot');
 }
@@ -785,8 +869,8 @@ function updateCameraFromOrbit() {
         cameraOrbit.r * Math.sin(el)
     );
     camera.lookAt(0, 0, 0);
-    // Looking straight down B0, its label would sit on top of the spins
-    if (axisLabels.b0) axisLabels.b0.visible = cameraOrbit.el < 75;
+    // Looking straight down z, its label would sit on top of the spins
+    if (axisLabels.z) axisLabels.z.visible = cameraOrbit.el < 75;
 }
 
 function setCameraView(view) {
@@ -799,12 +883,13 @@ function setCameraView(view) {
 
 /**
  * Color for a spin by its precession-speed rank (0 = slowest, 1 = fastest):
- * blue → green → red. Makes the "runners on a track" picture visible:
+ * blue → magenta → red. Makes the "runners on a track" picture visible:
  * fast spins lead, slow spins lag, and the 180° pulse swaps their order.
+ * (The map skips cyan, green and yellow, which belong to Mxy, Module A's spins and B₀.)
  */
 function speedRankColor(rank) {
     const color = new THREE.Color();
-    color.setHSL((210 - 210 * rank) / 360, 0.85, 0.55);
+    color.setHSL(((240 + 120 * rank) % 360) / 360, 0.85, 0.6);
     return color;
 }
 
@@ -889,13 +974,14 @@ function createAlignmentArrows(numSpins) {
             0.05
         );
         arrow.name = 'alignmentSpin';
+        fadeSpinArrow(arrow);
         alignmentArrows.push(arrow);
         scene.add(arrow);
     }
 
-    // Net magnetization arrow (white, larger)
+    // Net magnetization arrow (white, thick, labelled M)
     const netDir = new THREE.Vector3(0, 0, 0.01);
-    netMagArrowA = new THREE.ArrowHelper(netDir, new THREE.Vector3(0, 0, 0), 0.01, 0xffffff, 0.12, 0.06);
+    netMagArrowA = new VectorArrow(netDir, 0.01, 0xffffff, { label: 'M' });
     netMagArrowA.name = 'netMagA';
     netMagArrowA.visible = false;
     scene.add(netMagArrowA);
@@ -975,6 +1061,7 @@ function createEnsembleArrows() {
             0.05
         );
         arrow.visible = CONFIG.showIndividual;
+        fadeSpinArrow(arrow);
         spinArrows.push(arrow);
         scene.add(arrow);
     });
@@ -988,7 +1075,8 @@ function createEnsembleArrows() {
     const mxyMag = Math.sqrt(sum.Mx * sum.Mx + sum.My * sum.My);
     const mxyDir = mxyMag > 0.001 ? new THREE.Vector3(sum.Mx, sum.My, 0).normalize() : new THREE.Vector3(1, 0, 0);
     const mxyLen = Math.max(mxyMag, 0.1); // Minimum visible length
-    mxyArrow = new THREE.ArrowHelper(mxyDir, new THREE.Vector3(0, 0, 0), mxyLen, 0x22d3ee, 0.12, 0.06);
+    // Label beside the shaft: right after a 90° pulse M and Mxy coincide
+    mxyArrow = new VectorArrow(mxyDir, mxyLen, 0x22d3ee, { label: 'M', sub: 'xy', radius: 0.03, labelSide: 0.1, labelAlong: 0.55 });
     mxyArrow.visible = mxyMag > 0.02;
     scene.add(mxyArrow);
 
@@ -996,7 +1084,8 @@ function createEnsembleArrows() {
     const mzMag = Math.abs(sum.Mz);
     const mzDir = new THREE.Vector3(0, 0, sum.Mz >= 0 ? 1 : -1);
     const mzLen = Math.max(mzMag, 0.1);
-    mzArrow = new THREE.ArrowHelper(mzDir, new THREE.Vector3(0, 0, 0), mzLen, 0x3b82f6, 0.12, 0.06);
+    // Label beside the shaft, so it doesn't collide with M's label when M lies along z
+    mzArrow = new VectorArrow(mzDir, mzLen, 0x3b82f6, { label: 'M', sub: 'z', radius: 0.03, labelSide: 0.1, labelAlong: 0.55 });
     mzArrow.visible = mzMag > 0.02;
     scene.add(mzArrow);
 
@@ -1004,7 +1093,7 @@ function createEnsembleArrows() {
     const sumMag = Math.sqrt(sum.Mx*sum.Mx + sum.My*sum.My + sum.Mz*sum.Mz);
     const sumDir = sumMag > 0.001 ? new THREE.Vector3(sum.Mx, sum.My, sum.Mz).normalize() : new THREE.Vector3(0, 0, 1);
     const sumLen = Math.max(sumMag, 0.1);
-    sumArrow = new THREE.ArrowHelper(sumDir, new THREE.Vector3(0, 0, 0), sumLen, 0xffffff, 0.12, 0.06);
+    sumArrow = new VectorArrow(sumDir, sumLen, 0xffffff, { label: 'M', radius: 0.018 });
     sumArrow.visible = sumMag > 0.02;
     scene.add(sumArrow);
 
@@ -2067,10 +2156,11 @@ function switchModule(module) {
 function updateFrameDisplay() {
     const module = CONFIG.currentModule;
     const legendText = document.getElementById('spin-legend-text');
+    const legendNote = document.getElementById('spin-legend-note');
     const legendDot = document.querySelector('.spin-color-dot');
     const badge = document.getElementById('signal-frame-badge');
     // Module E shows a single vector, so there is no individual-spin legend row
-    legendText.parentElement.style.display = module === 'E' ? 'none' : '';
+    legendText.closest('.legend-row').style.display = module === 'E' ? 'none' : '';
 
     if (module === 'A') {
         if (CONFIG.showPrecessionA) {
@@ -2078,7 +2168,8 @@ function updateFrameDisplay() {
         } else {
             setAxisFrame('rot');
         }
-        legendText.textContent = 'Individual spins';
+        legendText.textContent = 'Spin packets';
+        legendNote.textContent = 'each = many protons; equal length = direction only';
         legendDot.style.background = '#10b981';
         badge.textContent = 'no RF → no signal';
     } else if (module === 'E') {
@@ -2087,7 +2178,8 @@ function updateFrameDisplay() {
         badge.textContent = CONFIG.frameE === 'lab' ? 'lab frame: coil voltage at ω₀' : 'rotating frame: demodulated';
     } else {
         setAxisFrame('rot');
-        legendText.textContent = 'Individual spins (blue = slow, red = fast)';
+        legendText.textContent = 'Spin packets (blue slow → red fast)';
+        legendNote.textContent = 'speed vs the rotating frame (ω₀); equal length = direction only';
         legendDot.style.background = '';
         badge.textContent = 'rotating frame';
     }
@@ -2139,6 +2231,7 @@ function updateInfoPanel(module) {
         case 'A':
             infoTitle.textContent = 'Module A: B₀ Alignment';
             infoText.innerHTML = `
+                <strong>Arrows:</strong> thin green = spin packets (each the magnetization of many protons, drawn at equal length: direction only); thick white M = their sum, length |M|/M₀.<br>
                 <strong>Without B₀:</strong> Spins point in random directions. Net M = 0.<br>
                 <strong>With B₀:</strong> Every spin precesses about B₀ at ω₀ = γB₀ (faster at higher B₀), and T1 relaxation slowly biases them toward +z. Net M grows along +z: M<sub>z</sub>(t) = M₀(1 - e<sup>-t/T1</sup>), 63% at t = T1.<br>
                 <strong>No signal yet:</strong> the spins' azimuths are random, so there is no net M<sub>xy</sub> - an RF pulse is needed (Module E, B).<br>
@@ -2148,15 +2241,17 @@ function updateInfoPanel(module) {
         case 'B':
             infoTitle.textContent = 'Module B: FID & Signal Detection';
             infoText.innerHTML = `
-                <strong>Dephasing:</strong> Spins precess at ω₀ + Δω (field inhomogeneity). Colors show speed: red spins run ahead, blue lag behind → phases fan out → destructive interference → FID decay.<br>
+                <strong>Arrows:</strong> thin = spin packets (direction only), thick = their sum: M (white) and its parts M<sub>xy</sub> (cyan, in the xy plane) and M<sub>z</sub> (blue, along z).<br>
+                <strong>Dephasing:</strong> Spins precess at ω₀ + Δω (field inhomogeneity). The view rotates at ω₀, so colors show speed relative to it: red spins run ahead, blue lag behind → phases fan out → destructive interference → FID decay.<br>
                 <strong>Signal:</strong> In lab frame, rotating Mxy induces EMF ∝ ω₀|Mxy|. Signal panel glows with signal strength.<br>
-                <strong>T2* decay:</strong> Mxy(t) = M₀ sin α·e<sup>-t/T2*</sup> with 1/T2* = 1/T2 + 1/T2′ (dashed curves). White arrow = net magnetization = signal envelope.<br>
+                <strong>T2* decay:</strong> Mxy(t) = M₀ sin α·e<sup>-t/T2*</sup> with 1/T2* = 1/T2 + 1/T2′ (dashed curves). Length of the cyan M<sub>xy</sub> arrow = signal envelope.<br>
                 <em style="color: #f59e0b;">Tip: use the "Top" view to watch the spins spread around the xy plane like runners on a track.</em>
             `;
             break;
         case 'C':
             infoTitle.textContent = 'Module C: Echo Formation';
             infoText.innerHTML = `
+                <strong>Arrows:</strong> thin = spin packets (blue slower, red faster than ω₀), thick = their sum M, M<sub>xy</sub> (cyan) and M<sub>z</sub> (blue).<br>
                 <strong>Spin Echo:</strong> 180° pulse inverts phases → the fast (red) spins are now behind and catch up → echo at TE. Refocuses B₀ inhomogeneity: echo peak on the T2 envelope.<br>
                 <strong>Gradient Echo:</strong> Gradient reversal → rephasing → echo. Does NOT refocus B₀: echo peak on the T2* envelope.<br>
                 <strong>Signal:</strong> Watch the Signal/FID panel glow brighten at echo! The 180° also inverts M<sub>z</sub> (Mz panel).<br>
@@ -2166,6 +2261,7 @@ function updateInfoPanel(module) {
         case 'D':
             infoTitle.textContent = 'Module D: GRE Variants';
             infoText.innerHTML = `
+                <strong>Arrows:</strong> thin = spin packets, thick = their sum M, M<sub>xy</sub> (cyan, sampled as signal) and M<sub>z</sub> (blue, what the next α tips).<br>
                 <strong>Spoiled GRE (SPGR/FLASH):</strong> Mxy destroyed each TR → only T1 recovery matters → <strong>T1-weighted</strong>.<br>
                 <strong>SSFP (bSSFP/TrueFISP):</strong> Mxy preserved → builds to steady-state → <strong>T2/T1-weighted</strong> (bright fluid).<br>
                 <strong>Ernst Angle:</strong> α<sub>E</sub> = arccos(e<sup>-TR/T1</sup>) gives maximum signal for spoiled GRE.<br>

@@ -362,11 +362,18 @@
                         <button class="view-btn" data-view="side" title="Look along x (shows Mz vs My)">Side</button>
                     </div>
                     <div class="spin-view-legend">
-                        <div class="legend-row"><span class="color-dot spin-color-dot"></span> <span id="spin-legend-text">Individual spins</span></div>
-                        <div class="legend-row"><span class="color-dot" style="background: #ffffff;"></span> Net M (total)</div>
-                        <div class="legend-row"><span class="color-dot" style="background: #22d3ee;"></span> Mxy (transverse)</div>
-                        <div class="legend-row"><span class="color-dot" style="background: #3b82f6;"></span> Mz (longitudinal)</div>
-                        <div class="legend-row"><span class="color-dot" style="background: #ffff00;"></span> B₀ field</div>
+                        <div class="legend-row">
+                            <span class="legend-line spin-color-dot"></span>
+                            <span><span id="spin-legend-text">Spin packets</span>
+                                <small class="legend-note" id="spin-legend-note">each = many protons; equal length = direction only</small></span>
+                        </div>
+                        <div class="legend-row">
+                            <span class="legend-vector" style="--c: #ffffff;"></span>
+                            <span>M = sum of all packets <small class="legend-note">length = |M| / M₀ (1 = fully aligned)</small></span>
+                        </div>
+                        <div class="legend-row"><span class="legend-vector" style="--c: #22d3ee;"></span> M<sub>xy</sub> = xy part of M &rarr; signal</div>
+                        <div class="legend-row"><span class="legend-vector" style="--c: #3b82f6;"></span> M<sub>z</sub> = z part of M (T1)</div>
+                        <div class="legend-row"><span class="legend-line" style="background: #ffff00;"></span> B₀ static field (along z)</div>
                         <div class="legend-row"><span class="color-dot" style="background: #6366f1;"></span> xy plane</div>
                     </div>
                 </div>

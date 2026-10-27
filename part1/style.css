@@ -338,9 +338,41 @@ body {
     color: var(--accent-color);
 }
 
-/* Spin color legend: color = precession speed (blue slow -> red fast) */
+/* Spin color legend: color = precession speed (blue slow -> magenta -> red fast) */
 .spin-color-dot {
-    background: linear-gradient(90deg, #3b82f6, #22c55e, #ef4444);
+    background: linear-gradient(90deg, hsl(240, 85%, 60%), hsl(300, 85%, 60%), hsl(360, 85%, 60%));
+}
+
+/* Legend icons: thin line = spin packet / field, thick arrow = summed vector */
+.spin-view-legend .legend-line {
+    width: 14px;
+    height: 2px;
+    flex-shrink: 0;
+}
+
+.spin-view-legend .legend-vector {
+    position: relative;
+    width: 10px;
+    height: 4px;
+    margin-right: 4px;
+    background: var(--c);
+    flex-shrink: 0;
+}
+
+.spin-view-legend .legend-vector::after {
+    content: '';
+    position: absolute;
+    right: -5px;
+    top: -3px;
+    border-left: 6px solid var(--c);
+    border-top: 5px solid transparent;
+    border-bottom: 5px solid transparent;
+}
+
+.spin-view-legend .legend-note {
+    display: block;
+    font-size: 0.6rem;
+    opacity: 0.75;
 }
 
 /* Small derived-quantity readout under sliders */
@@ -792,6 +824,11 @@ input[type="checkbox"] {
 
     .spin-view-container {
         height: 250px;
+    }
+
+    /* Small view: legend keeps only the names (details are in the info panel) */
+    .spin-view-legend .legend-note {
+        display: none;
     }
 
     /* Keep the frame label clear of the 3D / Top / Side buttons */
