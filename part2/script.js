@@ -2,6 +2,9 @@
  * MR Physics Simulation Logic
  */
 
+// Shortest TI (ms) = TI slider minimum; IR timing needs TR ≥ TI + TE
+const IR_MIN_TI = 10;
+
 class MRPhysics {
     constructor() {
         // Fixed Tissues for Brain Schematic
@@ -217,7 +220,8 @@ class MRPhysics {
             this.params.sequence = 'IR';
             this.params.tr = 4000;
             this.params.te = 50;
-            this.params.ti = 170; // Null Fat at 1.5 T (T1 ~250ms -> TI ~ 0.69*T1)
+            // Null fat at the current B0 (fat T1 lengthens with field): 170 ms at 1.5 T, 200 ms at 3 T
+            this.params.ti = this.getNullTI('fat', this.params.tr);
             this.params.fa = 90; // Standard readout
         }
 
@@ -288,6 +292,16 @@ class MRPhysics {
                     newValue = this.getMaxTI();
                     e.target.value = newValue;
                 }
+                // ...and even the shortest TI must fit: TR ≥ TI_min + TE
+                if (this.params.sequence === 'IR') {
+                    if (id === 'tr' && newValue < this.getMinTR()) {
+                        newValue = this.getMinTR();
+                        e.target.value = newValue;
+                    } else if (id === 'te' && newValue > this.params.tr - IR_MIN_TI) {
+                        newValue = this.params.tr - IR_MIN_TI;
+                        e.target.value = newValue;
+                    }
+                }
 
                 this.params[id] = newValue;
                 div.querySelector('span').textContent = newValue;
@@ -300,6 +314,9 @@ class MRPhysics {
             return div;
         };
 
+        // IR needs room for the shortest TI before the echo (e.g. after switching from SE with TE > TR)
+        if (this.params.sequence === 'IR') this.params.tr = Math.max(this.params.tr, this.getMinTR());
+
         // TR and TE are common
         container.appendChild(createInput('tr', 'TR (ms)', this.params.tr, 10, 12000, 10));
         container.appendChild(createInput('te', 'TE (ms)', this.params.te, 1, 300, 1));
@@ -307,7 +324,7 @@ class MRPhysics {
         if (this.params.sequence === 'IR') {
             // Extended TI range to 4000ms to support FLAIR (CSF nulling ~2550-3100ms depending on TR)
             this.params.ti = Math.min(this.params.ti || 150, this.getMaxTI());
-            container.appendChild(createInput('ti', 'TI (ms)', this.params.ti, 10, 4000, 10));
+            container.appendChild(createInput('ti', 'TI (ms)', this.params.ti, IR_MIN_TI, 4000, 10));
         }
 
         // FA only applies to GRE and IR (SE uses fixed 90°/180° pulses)
@@ -319,7 +336,18 @@ class MRPhysics {
 
     // Longest valid TI (IR): excitation at TI, echo at TI + TE, all before the next inversion at TR
     getMaxTI() {
-        return Math.max(10, Math.floor((this.params.tr - this.params.te) / 10) * 10);
+        return Math.max(IR_MIN_TI, Math.floor((this.params.tr - this.params.te) / 10) * 10);
+    }
+
+    // Shortest valid TR (IR): TR ≥ TI_min + TE, rounded up to the TR slider step (10 ms)
+    getMinTR() {
+        return Math.ceil((IR_MIN_TI + this.params.te) / 10) * 10;
+    }
+
+    // Null TI of a tissue at the current B0 and TR: T1·ln[2/(1 + e^(-TR/T1))], on the 10 ms TI grid
+    getNullTI(tissueId, tr) {
+        const t1 = this.getFieldT1(this.tissues.find(t => t.id === tissueId));
+        return Math.round(t1 * Math.log(2 / (1 + Math.exp(-tr / t1))) / 10) * 10;
     }
 
     // Keep TI ≤ TR − TE after TR/TE changes and sync the TI slider + label
@@ -505,17 +533,18 @@ class MRPhysics {
         const fa = faDeg * Math.PI / 180;
 
         // General Steady State IR with readout alpha (IR spin echo: 180 -> TI -> alpha -> 180 -> echo)
-        // Sequence: 180 -> TI -> alpha -> (TR-TI)
-        // Closed form: Mz(TI) = (1 - 2e^(-TI/T1) + e^(-TR/T1)) / (1 + e^(-TR/T1)·cos(alpha))
-        // (refocusing 180's effect on Mz neglected, i.e. TE << TR; valid only for TR >= TI + TE)
+        // Sequence: 180 -> TI -> alpha -> 180 refocus -> (recovery to TR)
+        // The refocusing 180° inverts the residual Mz·cos(alpha) (relaxation during TE/2 neglected, TE << T1)
+        // Closed form: Mz(TI) = (1 - 2e^(-TI/T1) + e^(-TR/T1)) / (1 - e^(-TR/T1)·cos(alpha))
+        // (valid only for TR >= TI + TE)
         const e_ti = Math.exp(-ti / t1);
         const e_rem = Math.exp(-(tr - ti) / t1);
         const e1 = Math.exp(-tr / t1); // e_ti * e_rem
 
-        // M_ss (just before 180)
-        // M_ss = M0 * [1 - E_rem + (E_rem - E1)*cos(alpha)] / (1 + E1*cos(alpha))
-        const num = 1 - e_rem + (e_rem - e1) * Math.cos(fa);
-        const den = 1 + e1 * Math.cos(fa);
+        // M_ss (just before the inversion 180)
+        // M_ss = M0 * [1 - E_rem - (E_rem - E1)*cos(alpha)] / (1 - E1*cos(alpha))
+        const num = 1 - e_rem - (e_rem - e1) * Math.cos(fa);
+        const den = 1 - e1 * Math.cos(fa);
         const m_ss_start = num / den;
 
         // M(TI) just before readout
@@ -805,7 +834,7 @@ class MRPhysics {
         <span style="color: #94a3b8; font-size: 0.85em;">(&alpha; = 90&deg;)</span>`;
             } else {
                 exactHtml = `S = PD &middot; sin&alpha; &middot;
-        <span style="color: #3b82f6;">|1 - 2e<sup>-TI/T1</sup> + e<sup>-TR/T1</sup>| / (1 + e<sup>-TR/T1</sup>cos&alpha;)</span> &middot;
+        <span style="color: #3b82f6;">|1 - 2e<sup>-TI/T1</sup> + e<sup>-TR/T1</sup>| / (1 - e<sup>-TR/T1</sup>cos&alpha;)</span> &middot;
         <span style="color: #ef4444;">e<sup>-TE/T2</sup></span>`;
             }
         }
@@ -1334,8 +1363,11 @@ class MRPhysics {
             // 0: Equilibrium
             // 1: 180° inversion (Mz = -1)
             // 2-9: T1 recovery (Mz: -1 -> varies based on TI)
-            // 10: 90° readout pulse
-            // 11-15: Signal decay with T2
+            // 10: excitation pulse at TI
+            // 11: Dephasing
+            // 12: 180° refocusing pulse (at TI + TE/2, as in the timeline)
+            // 13-14: Rephasing
+            // 15: Spin echo at TI + TE
             const ti = this.params.ti;
             const t1 = 1000; // Approximate T1 for visualization
             const mzAtTI = 1 - 2 * Math.exp(-ti / t1);
@@ -1351,11 +1383,18 @@ class MRPhysics {
             } else if (frame === 10) {
                 // 90° readout - Mz goes to Mxy
                 return { mz: 0, mxy: Math.abs(mzAtTI), spread: 0, coherence: 1, baseAngle: 0 };
+            } else if (frame === 11) {
+                // Dephasing
+                return { mz: 0, mxy: Math.abs(mzAtTI), spread: 0.5, coherence: 0.45, baseAngle: Math.PI * 0.25 };
+            } else if (frame === 12) {
+                // 180° refocusing pulse - flip phases
+                return { mz: 0, mxy: Math.abs(mzAtTI), spread: 0.5, coherence: 0.45, baseAngle: -Math.PI * 0.25 };
+            } else if (frame <= 14) {
+                const rephaseT = (frame - 12) / 3;
+                return { mz: 0, mxy: Math.abs(mzAtTI), spread: 0.5 * (1 - rephaseT), coherence: 0.45 + rephaseT * 0.5, baseAngle: -Math.PI * 0.25 * (1 - rephaseT) };
             } else {
-                const decayT = (frame - 10) / 5;
-                const spread = decayT * 0.3;
-                const decay = Math.exp(-decayT * 1.2);
-                return { mz: 0, mxy: Math.abs(mzAtTI), spread: spread, coherence: decay, baseAngle: decayT * Math.PI * 0.3 };
+                // Spin echo (static dephasing refocused; only T2 decay remains)
+                return { mz: 0, mxy: Math.abs(mzAtTI), spread: 0.05, coherence: 0.95, baseAngle: 0 };
             }
         }
     }
@@ -1410,11 +1449,11 @@ class MRPhysics {
                 { label: 'T1 Recovery', description: 'Mz value determines signal magnitude' },
                 { label: 'At TI', description: `TI=${this.params.ti}ms reached - readout pulse applied` },
                 { label: `${Math.round(this.params.fa)}° Excitation`, description: 'Excitation converts Mz to Mxy; a 180° refocusing pulse follows (IR spin echo)' },
-                { label: 'Signal Decay', description: 'Transverse magnetization begins T2 decay' },
-                { label: 'Signal Decay', description: 'T2-weighted decay of the IR signal' },
-                { label: 'Signal Decay', description: 'Signal decreasing with T2 relaxation' },
-                { label: 'Signal Decay', description: 'Continued T2 decay' },
-                { label: 'Signal Acquired', description: 'IR signal acquired with T1 and T2 contrast' }
+                { label: 'Dephasing', description: 'Spins dephase (field inhomogeneity + T2)' },
+                { label: '180° Refocus', description: 'Refocusing pulse at TI + TE/2 flips spin phases' },
+                { label: 'Rephasing', description: 'Spins reconverge as fast ones catch up' },
+                { label: 'Near Echo', description: 'Spins nearly fully rephased' },
+                { label: 'Spin Echo', description: 'Echo at TI + TE: IR (T1) contrast with T2 decay, inhomogeneity refocused' }
             ]
         };
         return steps[seq][frame] || { label: 'Unknown', description: '' };

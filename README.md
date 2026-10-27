@@ -58,7 +58,7 @@ Demonstrates how MRI sequences produce different tissue contrasts based on T1, T
 ### Physics Model
 - **SE**: S = PD · (1 - e^(-TR/T1)) · e^(-TE/T2)
 - **GRE**: spoiled steady state (Ernst), T2* = 1/(R2 + R2′); R2′ in s⁻¹ set at 1.5 T (default 5 → WM T2* ≈ 57 ms) and ∝ B₀
-- **IR** (inversion-recovery spin echo, as in FLAIR/STIR): S = PD·sinα·|1 − 2e^(−TI/T1) + e^(−TR/T1)| / (1 + e^(−TR/T1)cosα) · e^(−TE/T2); null point TI = T1·ln[2/(1 + e^(−TR/T1))]
+- **IR** (inversion-recovery spin echo, as in FLAIR/STIR): S = PD·sinα·|1 − 2e^(−TI/T1) + e^(−TR/T1)| / (1 − e^(−TR/T1)cosα) · e^(−TE/T2) (the refocusing 180° inverts the residual Mz·cosα); null point TI = T1·ln[2/(1 + e^(−TR/T1))]
 - **B₀ dependence**: T1(B₀) ≈ T1(1.5 T)·(B₀/1.5)^b (b ≈ 0.38 WM/GM, approx. after Rooney et al., MRM 2007; ≈ 0.2 fat; ≈ 0 CSF); R2′ ∝ B₀; T2 field-independent (simplification); signal ∝ B₀
 
 ---
