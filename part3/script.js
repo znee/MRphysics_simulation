@@ -35,7 +35,9 @@
  * Module C: Readout → K-Space → Image
  *   - Stage 1: every voxel contributes ρ·e^(-iφ); the coil records only the sum,
  *     one k-space sample per readout point, one ky line per phase-encode step
- *   - Stage 2: inverse FT adds the spatial-frequency patterns back, center first
+ *   - Stage 2: inverse FT adds the spatial-frequency patterns back, either
+ *     centre-out (coarse → fine) or in scan order; the sum, and so the final
+ *     image, is the same either way (a scanner does it all at once with an FFT)
  *
  * Module D: Frequency Encoding → Fourier
  *   - Readout gradient: each x precesses at f(x) = γ̄·Gx·x
@@ -83,7 +85,8 @@ class SpatialEncodingSimulator {
             line: 0,            // phase-encode line index (ky = line - N/2)
             sample: -1,         // last acquired sample on the current line (-1 = none yet)
             kspace: [],         // N×N complex samples (null = not acquired)
-            order: [],          // stage-2 component order (increasing |k|)
+            order: [],          // stage-2 component order (see orderMode)
+            orderMode: 'centre', // 'centre': increasing |k| (rings) | 'scan': line by line, as acquired
             compIndex: 0,       // number of components added back
             image: [],          // N×N complex partial reconstruction
             flash: null,        // {ikx, iky, time} for the k-space "write" flash
@@ -476,6 +479,22 @@ class SpatialEncodingSimulator {
             this.recon.n = parseInt(e.target.value);
             resetReconView();
             this.updateReconNoiseLabel();
+        });
+        document.getElementById('recon-order')?.addEventListener('change', (e) => {
+            const r = this.recon;
+            r.orderMode = e.target.value;
+            if (r.stage === 'acquire') {
+                this.render();
+                return;
+            }
+            // K-space is already full: restart the decomposition in the new order
+            const wasPlaying = r.playing;
+            this.stopReconAnimation();
+            this.startDecompose();
+            r.pauseUntil = 0;
+            if (wasPlaying) this.startReconAnimation();
+            else this.stopReconAnimation();  // refresh the Play label
+            this.render();
         });
         document.getElementById('recon-reset')?.addEventListener('click', resetReconView);
         document.getElementById('recon-play')?.addEventListener('click', () => {
@@ -2389,7 +2408,20 @@ class SpatialEncodingSimulator {
         r.stage = 'decompose';
         r.compIndex = 0;
         r.image = Array.from({ length: n }, () => Array.from({ length: n }, () => ({ re: 0, im: 0 })));
-        // Center of k-space first: increasing |k|, then by angle for a tidy sweep
+        r.order = this.buildReconOrder();
+        this.updatePanelTitles();
+    }
+
+    /**
+     * Order in which stage 2 adds the components back. The inverse FT is a plain sum,
+     * so this changes only the intermediate images, never the final one.
+     *   'centre': increasing |k|, then by angle → rings from the centre (coarse → fine)
+     *   'scan':   same order as acquired (ky = -N/2 … N/2-1, kx swept along each line)
+     */
+    buildReconOrder() {
+        const r = this.recon;
+        const n = r.n;
+        const half = n / 2;
         const order = [];
         for (let iky = 0; iky < n; iky++) {
             for (let ikx = 0; ikx < n; ikx++) {
@@ -2397,9 +2429,8 @@ class SpatialEncodingSimulator {
                 order.push({ ikx, iky, kx, ky, k2: kx * kx + ky * ky, angle: Math.atan2(ky, kx) });
             }
         }
-        order.sort((a, b) => a.k2 - b.k2 || a.angle - b.angle);
-        r.order = order;
-        this.updatePanelTitles();
+        if (r.orderMode === 'centre') order.sort((a, b) => a.k2 - b.k2 || a.angle - b.angle);
+        return order;
     }
 
     // Inverse FT, one term: image += S(k)·e^(+iφ) / N² (S = measured sample, noise included)
@@ -2528,9 +2559,10 @@ class SpatialEncodingSimulator {
             }
         } else if (r.stage === 'decompose') {
             const c = r.order[Math.max(0, r.compIndex - 1)];
+            const mode = r.orderMode === 'centre' ? 'centre-out' : 'scan order';
             el.innerHTML = r.compIndex === 0
-                ? `Decomposing: inverse FT, 0 / ${n * n} components`
-                : `Decomposing: ${r.compIndex} / ${n * n} components<br>adding k = (${c.kx}, ${c.ky})${ff}`;
+                ? `Decomposing (${mode}): inverse FT, 0 / ${n * n} components`
+                : `Decomposing (${mode}): ${r.compIndex} / ${n * n} components<br>adding k = (${c.kx}, ${c.ky})${ff}`;
         } else {
             el.innerHTML = `Done: image rebuilt from all ${n * n} k-space components &#10003;`;
         }
@@ -2556,7 +2588,7 @@ class SpatialEncodingSimulator {
     updateReconRowLabels() {
         const r = this.recon;
         const acquiring = r.stage === 'acquire';
-        const state = `${r.stage}|${this.isAcquisitionComplete()}`;
+        const state = `${r.stage}|${this.isAcquisitionComplete()}|${r.orderMode}`;
         if (this.reconLabelState === state) return;
         this.reconLabelState = state;
         const row1 = document.getElementById('recon-row1-label');
@@ -2573,7 +2605,9 @@ class SpatialEncodingSimulator {
         if (cap2) {
             cap2.textContent = acquiring
                 ? 'starts when k-space is full'
-                : 'the k-space filled above is decomposed here, centre first (ring above = component being added)';
+                : r.orderMode === 'centre'
+                    ? 'the k-space filled above is decomposed here, centre first (ring above = component being added)'
+                    : 'the k-space filled above is decomposed here, line by line in scan order (ring above = component being added)';
         }
     }
 
@@ -2585,7 +2619,8 @@ class SpatialEncodingSimulator {
         const acquired = r.line * n + (r.sample + 1);
         const lines = {
             decompose: ['Reconstruction starts when k-space is full', 'each k-space sample will become', 'one stripe pattern (spatial frequency)'],
-            image: ['The image is rebuilt here', 'by adding the stripe patterns', 'centre of k-space first'],
+            image: ['The image is rebuilt here', 'by adding the stripe patterns',
+                    r.orderMode === 'centre' ? 'centre of k-space first' : 'line by line, in scan order'],
             weight: ['Each pattern\'s weight', '= one k-space value', '(magnitude + phase)']
         }[kind];
         ctx.textAlign = 'center';
@@ -3149,7 +3184,8 @@ class SpatialEncodingSimulator {
         ctx.font = 'bold 11px Inter';
         ctx.fillStyle = '#10b981';
         ctx.textAlign = 'left';
-        ctx.fillText(narrow ? 'Image = Σ weight × pattern' : 'Image = Σ (k-space weight × stripe pattern), added center-first', 14, 18);
+        ctx.fillText(narrow ? 'Image = Σ weight × pattern'
+                            : `Image = Σ (k-space weight × stripe pattern), added ${r.orderMode === 'centre' ? 'centre-first' : 'in scan order'}`, 14, 18);
 
         const gridTop = 30;
         const size = Math.min(h - gridTop - 30, w * 0.55);

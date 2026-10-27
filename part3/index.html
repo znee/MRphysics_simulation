@@ -223,6 +223,14 @@
                         </select>
                     </div>
 
+                    <div class="control-row">
+                        <label for="recon-order">Reconstruction Order (row &#9313;)</label>
+                        <select id="recon-order">
+                            <option value="centre" selected>Centre-out (rings, coarse &rarr; fine)</option>
+                            <option value="scan">Scan order (line by line, as acquired)</option>
+                        </select>
+                    </div>
+
                     <div class="btn-row">
                         <button id="recon-play" class="small-btn">&#9654; Play</button>
                         <button id="recon-step" class="small-btn secondary">Step</button>
@@ -276,6 +284,8 @@
                                 <ul>
                                     <li><b>K-space &rarr; patterns</b>: components used so far (bright) and the stripe pattern of the current one.</li>
                                     <li><b>Reconstructed image</b>: the sum of all patterns added so far, with the true object, counter and SNR.</li>
+                                    <li><b>Order</b>: <i>Centre-out</i> adds low k first so the image sharpens from coarse to fine;
+                                    <i>Scan order</i> adds the lines in the order they were acquired in row &#9312;.</li>
                                     <li><b>Component weight</b>: size + phase of the current pattern (= that k-space value).</li>
                                 </ul>
                             </li>
@@ -289,7 +299,10 @@
                             <li>Pick <b>Single voxel</b>: |S| is the same in every k-space cell, only the phase changes &mdash; a point contains all spatial frequencies.</li>
                             <li>Set <b>noise to 0</b> &rarr; the background turns black. Raise it &rarr; speckle appears everywhere, even far from the object.</li>
                             <li><b>NEX 1 &rarr; 4</b>: SNR doubles (&radic;4) but the scan takes 4&times; longer.</li>
-                            <li><b>Skip to decompose</b>: the first ~10 components give a blurry blob; the last ones sharpen the edges (and, with noise, add mostly noise).</li>
+                            <li><b>Skip to decompose</b> (centre-out): the first ~10 components give a blurry blob; the last ones sharpen the edges (and, with noise, add mostly noise).</li>
+                            <li>Switch the order to <b>Scan order</b> (Letter "L"): the outer k<sub>y</sub> lines come first and show only the
+                            horizontal edges (where &rho; changes along y); the vertical bar fills in once the central lines (k<sub>y</sub> &asymp; 0) are added.
+                            The final image is identical.</li>
                         </ul>
                     </details>
 
@@ -298,6 +311,9 @@
                         <ul>
                             <li>The coil measures only the <b>sum</b> of all voxels: one sum = one k-space sample, one readout = one k<sub>y</sub> line.</li>
                             <li>Each k-space value is the weight (amplitude + phase) of one stripe pattern; the inverse FT adds them back.</li>
+                            <li>The order of the additions is only for display: a sum does not depend on order, and a real scanner computes
+                            the whole inverse FT at once with an FFT after the scan. (Centric ordering in a real scan, e.g. contrast-enhanced MRA,
+                            changes the <i>acquisition</i> order instead, to time the k-space centre to peak contrast.)</li>
                             <li>Noise is added to every sample at the receiver, so after the inverse FT it spreads evenly over the whole image.
                             Image SNR = N&middot;&radic;NEX/&sigma; here (more samples &rarr; more averaging).</li>
                         </ul>
@@ -631,7 +647,7 @@
 
                     <div class="recon-row-label" id="recon-row2-label">
                         <span class="recon-step">&#9313; Reconstruct (inverse FT)</span>
-                        <span class="recon-row-caption" id="recon-row2-caption">the k-space filled above is decomposed below, centre first</span>
+                        <span class="recon-row-caption" id="recon-row2-caption">starts when k-space is full</span>
                     </div>
                     <div class="recon-row recon-row-reconstruct">
                         <div class="viz-panel" id="recon-decompose-panel">
