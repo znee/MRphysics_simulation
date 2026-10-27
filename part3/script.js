@@ -278,13 +278,25 @@ class SpatialEncodingSimulator {
             this.resizeCanvas(objectCanvas);
         }
 
+        // Module C has its own two-row layout (① Acquire / ② Reconstruct)
+        this.reconCtx = {};
+        ['voxels', 'acquire', 'seq', 'phasor', 'decompose', 'image', 'weight'].forEach(key => {
+            const canvas = document.getElementById(`recon-${key}-canvas`);
+            if (canvas) this.reconCtx[key] = canvas.getContext('2d');
+        });
+
         window.addEventListener('resize', () => {
-            if (spinCanvas) this.resizeCanvas(spinCanvas);
-            if (legendCanvas) this.resizeCanvas(legendCanvas);
-            if (kspaceCanvas) this.resizeCanvas(kspaceCanvas);
-            if (objectCanvas) this.resizeCanvas(objectCanvas);
+            this.resizeVisibleCanvases();
             this.render();
         });
+    }
+
+    // Size the canvases of whichever layout is visible (the other one has no box while hidden)
+    resizeVisibleCanvases() {
+        const canvases = this.currentModule === 'C'
+            ? Object.values(this.reconCtx).map(ctx => ctx.canvas)
+            : [this.spinCtx, this.legendCtx, this.kspaceCtx, this.objectCtx].filter(Boolean).map(ctx => ctx.canvas);
+        canvases.forEach(canvas => this.resizeCanvas(canvas));
     }
 
     resizeCanvas(canvas) {
@@ -597,6 +609,16 @@ class SpatialEncodingSimulator {
         });
         const controls = document.getElementById('controls-' + module);
         if (controls) controls.style.display = 'block';
+
+        // Module C uses its own two-row layout; the others share the 4-panel grid
+        const reconLayout = document.getElementById('recon-layout');
+        const sharedGrid = document.querySelector('.viz-grid');
+        if (reconLayout && sharedGrid) {
+            reconLayout.style.display = module === 'C' ? 'flex' : 'none';
+            sharedGrid.style.display = module === 'C' ? 'none' : '';
+            sharedGrid.parentElement.classList.toggle('recon-mode', module === 'C');
+        }
+        this.resizeVisibleCanvases();
 
         if (module === 'B') {
             this.computeFullKSpace();
@@ -2516,11 +2538,94 @@ class SpatialEncodingSimulator {
 
     renderReconModule() {
         this.updateReconStageText();
+        this.updateReconRowLabels();
+        const c = this.reconCtx;
+        // Row ①: live while acquiring, frozen in its final state afterwards
+        if (c.voxels) this.renderReconVoxels(c.voxels);
+        if (c.acquire) this.renderReconAcquire(c.acquire);
+        if (c.seq) this.renderReconSequence(c.seq);
+        if (c.phasor) this.renderReconPhasors(c.phasor);
+        // Row ②: calm placeholders until k-space is full, then the inverse FT builds up
         const acquiring = this.recon.stage === 'acquire';
-        if (this.spinCtx) acquiring ? this.renderReconVoxels(this.spinCtx) : this.renderReconImage(this.spinCtx);
-        if (this.legendCtx) this.renderReconSequence(this.legendCtx);
-        if (this.kspaceCtx) acquiring ? this.renderReconAcquire(this.kspaceCtx) : this.renderReconDecompose(this.kspaceCtx);
-        if (this.objectCtx) acquiring ? this.renderReconPhasors(this.objectCtx) : this.renderReconWeight(this.objectCtx);
+        if (c.decompose) acquiring ? this.renderReconPlaceholder(c.decompose, 'decompose') : this.renderReconDecompose(c.decompose);
+        if (c.image) acquiring ? this.renderReconPlaceholder(c.image, 'image') : this.renderReconImage(c.image);
+        if (c.weight) acquiring ? this.renderReconPlaceholder(c.weight, 'weight') : this.renderReconWeight(c.weight);
+    }
+
+    // Highlight the active stage and keep the row captions in step with it
+    updateReconRowLabels() {
+        const r = this.recon;
+        const acquiring = r.stage === 'acquire';
+        const state = `${r.stage}|${this.isAcquisitionComplete()}`;
+        if (this.reconLabelState === state) return;
+        this.reconLabelState = state;
+        const row1 = document.getElementById('recon-row1-label');
+        const row2 = document.getElementById('recon-row2-label');
+        row1?.classList.toggle('active', acquiring);
+        row2?.classList.toggle('active', !acquiring);
+        const cap1 = document.getElementById('recon-row1-caption');
+        const cap2 = document.getElementById('recon-row2-caption');
+        if (cap1) {
+            cap1.textContent = acquiring
+                ? 'every voxel\'s signal is summed by the coil; each sum is one k-space sample'
+                : 'scan finished ✓ (frozen: full k-space, last readout line, last phasor sum)';
+        }
+        if (cap2) {
+            cap2.textContent = acquiring
+                ? 'starts when k-space is full'
+                : 'the k-space filled above is decomposed here, centre first (ring above = component being added)';
+        }
+    }
+
+    // Row ② before the scan is complete: explain what will happen instead of a blank box
+    renderReconPlaceholder(ctx, kind) {
+        const { w, h } = this.beginPanel(ctx);
+        const r = this.recon;
+        const n = r.n;
+        const acquired = r.line * n + (r.sample + 1);
+        const lines = {
+            decompose: ['Reconstruction starts when k-space is full', 'each k-space sample will become', 'one stripe pattern (spatial frequency)'],
+            image: ['The image is rebuilt here', 'by adding the stripe patterns', 'centre of k-space first'],
+            weight: ['Each pattern\'s weight', '= one k-space value', '(magnitude + phase)']
+        }[kind];
+        ctx.textAlign = 'center';
+        ctx.font = 'bold 11px Inter';
+        ctx.fillStyle = '#64748b';
+        ctx.fillText(lines[0], w / 2, h / 2 - 22);
+        ctx.font = '10px Inter';
+        ctx.fillStyle = '#475569';
+        ctx.fillText(lines[1], w / 2, h / 2 - 4);
+        ctx.fillText(lines[2], w / 2, h / 2 + 10);
+
+        // Progress of the scan
+        const barW = Math.min(220, w - 40);
+        const barX = (w - barW) / 2, barY = h / 2 + 28;
+        ctx.fillStyle = '#1e293b';
+        ctx.fillRect(barX, barY, barW, 6);
+        ctx.fillStyle = 'rgba(34, 211, 238, 0.6)';
+        ctx.fillRect(barX, barY, barW * acquired / (n * n), 6);
+        ctx.font = '9px Inter';
+        ctx.fillStyle = '#64748b';
+        ctx.fillText(`k-space: ${acquired} / ${n * n} samples acquired`, w / 2, barY + 20);
+
+        // The target the reconstruction should reach (faint)
+        if (kind === 'image') {
+            const thumb = Math.min(60, h / 4);
+            const tc = thumb / n;
+            const tx = (w - thumb) / 2, ty = h / 2 - 40 - thumb - 12;
+            if (ty > 4) {
+                for (let iy = 0; iy < n; iy++) {
+                    for (let ix = 0; ix < n; ix++) {
+                        const g = Math.floor(40 + 60 * r.density[iy][ix]);
+                        ctx.fillStyle = `rgb(${g}, ${g}, ${g + 6})`;
+                        ctx.fillRect(tx + ix * tc, ty + iy * tc, tc, tc);
+                    }
+                }
+                ctx.font = '8px Inter';
+                ctx.fillStyle = '#475569';
+                ctx.fillText('target (true object)', w / 2, ty - 4);
+            }
+        }
     }
 
     // Draw the N×N k-space matrix (log magnitude), ky up; returns layout for overlays
@@ -2598,7 +2703,9 @@ class SpatialEncodingSimulator {
         const gridSize = Math.min(h - gridTop - 26, w * 0.6);
         const gridLeft = 24;
         const cell = gridSize / n;
-        const nodeX = gridLeft + gridSize + Math.max(60, (w - gridLeft - gridSize) * 0.38);
+        const freeW = w - gridLeft - gridSize;
+        const nodeX = freeW < 240 ? gridLeft + gridSize + freeW / 2 + 6
+                                  : gridLeft + gridSize + Math.max(60, freeW * 0.38);
         const nodeY = gridTop + gridSize / 2;
 
         // Lines from every voxel to the Σ node (brighten briefly when a sample is taken)
@@ -2705,7 +2812,7 @@ class SpatialEncodingSimulator {
             ctx.fillStyle = '#e2e8f0';
             ctx.fillText(`${S.re.toFixed(2)} ${S.im < 0 ? '−' : '+'} ${Math.abs(S.im).toFixed(2)}i`, nodeX, nodeY + 57);
             ctx.fillStyle = '#94a3b8';
-            ctx.fillText(noiseSD > 0 ? '→ one measured k-space sample' : '→ one k-space sample', nodeX, nodeY + 72);
+            ctx.fillText(noiseSD > 0 && w >= 640 ? '→ one measured k-space sample' : '→ one k-space sample', nodeX, nodeY + 72);
         } else {
             ctx.fillText('press Play', nodeX, nodeY + 44);
         }
@@ -2811,8 +2918,8 @@ class SpatialEncodingSimulator {
 
         // ---- Left: summed signal for the current line ----
         const left = 40;
-        const ksSize = Math.min(h - 70, w * 0.38);
-        const sigW = w - ksSize - left - 70;
+        const ksSize = Math.min(h - 64, w * (w < 640 ? 0.46 : 0.38));
+        const sigW = w - ksSize - left - (w < 640 ? 56 : 70);
         const top = 34, bottom = h - 34;
         const mid = (top + bottom) / 2;
         const amp = (bottom - top) / 2 * 0.9;
@@ -2874,14 +2981,33 @@ class SpatialEncodingSimulator {
             ctx.fillText(narrow ? 'line: clean · dots: measured' : 'faint line = noiseless sum · dots = measured samples (sum + noise)', left, 32);
         }
 
-        // ---- Right: k-space matrix filling row by row ----
+        // ---- Right: k-space matrix filling row by row (vertically centred on the signal axis) ----
         const ksX = w - ksSize - 22;
-        const ksY = 34;
+        const ksY = Math.max(30, mid - ksSize / 2);
         ctx.font = 'bold 11px Inter';
         ctx.fillStyle = '#e2e8f0';
         ctx.textAlign = 'center';
-        ctx.fillText('K-space (log |S|)', ksX + ksSize / 2, 18);
+        ctx.fillText('K-space (log |S|)', ksX + ksSize / 2, ksY - 8);
         const { cell, cellX, cellY } = this.drawReconKSpace(ctx, ksX, ksY, ksSize);
+
+        // Frozen after the scan: mirror the component currently being added in row ②
+        if (r.stage !== 'acquire') {
+            ctx.strokeStyle = 'rgba(239, 68, 68, 0.5)';
+            ctx.lineWidth = 1;
+            ctx.strokeRect(ksX, cellY(r.line), ksSize, cell);
+            const c = r.compIndex > 0 ? r.order[r.compIndex - 1] : null;
+            if (c) {
+                ctx.strokeStyle = '#22d3ee';
+                ctx.lineWidth = 2.5;
+                ctx.strokeRect(cellX(c.ikx) - 1, cellY(c.iky) - 1, cell + 2, cell + 2);
+            }
+            ctx.font = 'bold 9px Inter';
+            ctx.fillStyle = '#22d3ee';
+            ctx.textAlign = 'center';
+            ctx.fillText(c ? `↓ decomposed below: k = (${c.kx}, ${c.ky})` : '↓ decomposed below', ksX + ksSize / 2, ksY + ksSize + 26);
+            this.drawArrow(ctx, left + sigW + 12, mid, ksX - 18, mid, 'rgba(34, 211, 238, 0.4)', 1.5, 6);
+            return;
+        }
 
         // Current line + write flash
         ctx.strokeStyle = '#ef4444';
@@ -2918,9 +3044,10 @@ class SpatialEncodingSimulator {
         ctx.fillStyle = '#f59e0b';
         ctx.fillText('Σ voxel phasors (head-to-tail)', w / 2, 14);
 
-        const cx = w / 2;
-        const cy = 30 + (h - 110) / 2;
-        const R = Math.min(w / 2 - 16, (h - 110) / 2);
+        const compact = h < 230;
+        const R = compact ? Math.min((h - 34) / 2, w * 0.27) : Math.min(w / 2 - 16, (h - 110) / 2);
+        const cx = compact ? 14 + R : w / 2;
+        const cy = compact ? 22 + (h - 22) / 2 : 30 + (h - 110) / 2;
         ctx.strokeStyle = '#334155';
         ctx.lineWidth = 1;
         ctx.setLineDash([3, 3]);
@@ -2973,9 +3100,30 @@ class SpatialEncodingSimulator {
         }
 
         const pct = Math.sqrt(measured.re * measured.re + measured.im * measured.im) / sMax * 100;
+        const pctColor = pct > 50 ? '#10b981' : (pct > 20 ? '#f59e0b' : '#ef4444');
+        if (compact) {
+            // Text block to the right of the circle
+            const tx = cx + R + 16;
+            let ty = cy - 30;
+            ctx.textAlign = 'left';
+            ctx.font = 'bold 10px Inter';
+            ctx.fillStyle = pctColor;
+            ctx.fillText(`|S(${kx}, ${ky})|`, tx, ty);
+            ctx.fillText(`= ${pct.toFixed(0)}% of max`, tx, ty + 13);
+            ty += 34;
+            ctx.font = '9px Inter';
+            const legend = noisy
+                ? [['white: Σ voxels', '#94a3b8'], ['magenta: noise', '#f472b6'], ['cyan: measured', '#22d3ee']]
+                : [['white: this k-space', '#94a3b8'], ['value', '#94a3b8'], ['aligned → big |S|', '#94a3b8']];
+            legend.forEach(([text, color], i) => {
+                ctx.fillStyle = color;
+                ctx.fillText(text, tx, ty + i * 13);
+            });
+            return;
+        }
         ctx.font = 'bold 11px Inter';
         ctx.textAlign = 'center';
-        ctx.fillStyle = pct > 50 ? '#10b981' : (pct > 20 ? '#f59e0b' : '#ef4444');
+        ctx.fillStyle = pctColor;
         ctx.fillText(`|S(${kx}, ${ky})| = ${pct.toFixed(0)}% of max`, w / 2, h - 58);
         ctx.font = '9px Inter';
         ctx.fillStyle = '#94a3b8';
@@ -3078,6 +3226,7 @@ class SpatialEncodingSimulator {
             } else {
                 ctx.fillText(lowK ? 'low k → overall shape & contrast' : 'high k → edges & fine detail', sideX, y);
             }
+            y += 18;
         }
         if (r.stage === 'done' && !noisy) {
             let err = 0;
@@ -3102,10 +3251,12 @@ class SpatialEncodingSimulator {
             const rms = Math.sqrt(sq / (n * n)).toFixed(3);
             ctx.fillText(narrow ? `RMS err = ${rms}` : `RMS error vs noiseless = ${rms}`, sideX, y + 39);
         } else if (noisy && r.compIndex > 0) {
+            // Each added component carries independent noise of SD σ/N² into every pixel → σ·√m/N² after m
+            const noiseSoFar = this.getReconNoiseSD() * Math.sqrt(r.compIndex) / (n * n);
             ctx.fillStyle = '#f472b6';
-            ctx.fillText(`background SD so far = ${bgSD.toFixed(3)}`, sideX, y + 4);
+            ctx.fillText(narrow ? `noise SD ≈ ${noiseSoFar.toFixed(3)}` : `noise SD so far ≈ σ√m/N² = ${noiseSoFar.toFixed(3)}`, sideX, y);
             ctx.fillStyle = '#94a3b8';
-            ctx.fillText(narrow ? 'grows as components add' : 'every component adds noise everywhere', sideX, y + 17);
+            ctx.fillText(narrow ? 'grows ∝ √m' : 'every component adds noise everywhere', sideX, y + 13);
         }
     }
 

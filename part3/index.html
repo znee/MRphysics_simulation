@@ -261,14 +261,24 @@
                     <details class="explain" open>
                         <summary>What you're seeing (panel guide)</summary>
                         <ul>
-                            <li><b>Panel 1</b> (top-left): each voxel's own signal during this readout &mdash; wiggle speed &prop; x,
-                            starting phase &prop; k<sub>y</sub>&middot;y, height &prop; &rho;. All of them flow into &Sigma; = the coil.
-                            In stage 2 it shows the image being rebuilt.</li>
-                            <li><b>Panel 2</b>: the G<sub>y</sub> step sets k<sub>y</sub> for this line; the cursor marks the readout sample being taken.</li>
-                            <li><b>Panel 3</b>: line = noiseless sum, dots = measured samples (sum + noise). Each dot is written into one
-                            k-space cell. Stage 2: components used so far and the stripe pattern each one stands for.</li>
-                            <li><b>Panel 4</b>: coloured arrows = voxels, white = their sum, magenta = noise, cyan = what is measured.
-                            Stage 2: weight (size + phase) of the current pattern.</li>
+                            <li><b>Row &#9312; Acquire (top)</b> &mdash; runs during the scan, then stays frozen in its final state:
+                                <ul>
+                                    <li><b>Voxel signals &rarr; &Sigma;</b>: each voxel's own signal during this readout (wiggle speed &prop; x,
+                                    starting phase &prop; k<sub>y</sub>&middot;y, height &prop; &rho;). All of them flow into &Sigma; = the coil, where noise is added.</li>
+                                    <li><b>Summed readout &rarr; k-space</b>: line = noiseless sum, dots = measured samples (sum + noise).
+                                    Each dot is written into one k-space cell; one readout fills one k<sub>y</sub> line.</li>
+                                    <li><b>Pulse sequence</b>: the G<sub>y</sub> step sets k<sub>y</sub>; the cursor marks the sample being taken.</li>
+                                    <li><b>Phasor sum</b>: voxel arrows head-to-tail; white = their sum, magenta = noise, cyan = what is measured.</li>
+                                </ul>
+                            </li>
+                            <li><b>Row &#9313; Reconstruct (bottom)</b> &mdash; starts when k-space is full; the cyan ring in row &#9312; marks
+                            the k-space value being used:
+                                <ul>
+                                    <li><b>K-space &rarr; patterns</b>: components used so far (bright) and the stripe pattern of the current one.</li>
+                                    <li><b>Reconstructed image</b>: the sum of all patterns added so far, with the true object, counter and SNR.</li>
+                                    <li><b>Component weight</b>: size + phase of the current pattern (= that k-space value).</li>
+                                </ul>
+                            </li>
                         </ul>
                     </details>
 
@@ -568,6 +578,88 @@
                         </div>
                         <div class="panel-content centered">
                             <canvas id="object-canvas"></canvas>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Module C has its own two-row layout: ① Acquire above ② Reconstruct -->
+                <div class="recon-layout" id="recon-layout" style="display: none;">
+                    <div class="recon-row-label active" id="recon-row1-label">
+                        <span class="recon-step">&#9312; Acquire (scan)</span>
+                        <span class="recon-row-caption" id="recon-row1-caption">every voxel's signal is summed by the coil; each sum is one k-space sample</span>
+                    </div>
+                    <div class="recon-row recon-row-acquire">
+                        <div class="viz-panel" id="recon-voxels-panel">
+                            <div class="panel-header">
+                                <h2>Voxel Signals &rarr; &Sigma; (Coil)</h2>
+                                <span class="panel-badge">One readout</span>
+                            </div>
+                            <div class="panel-content">
+                                <canvas id="recon-voxels-canvas"></canvas>
+                            </div>
+                        </div>
+                        <div class="viz-panel" id="recon-acquire-panel">
+                            <div class="panel-header">
+                                <h2>Summed Readout &rarr; K-Space</h2>
+                                <span class="panel-badge">One sample per &Sigma;</span>
+                            </div>
+                            <div class="panel-content">
+                                <canvas id="recon-acquire-canvas"></canvas>
+                            </div>
+                        </div>
+                        <div class="recon-side">
+                            <div class="viz-panel" id="recon-seq-panel">
+                                <div class="panel-header">
+                                    <h2>Pulse Sequence</h2>
+                                    <span class="panel-badge">Readout</span>
+                                </div>
+                                <div class="panel-content">
+                                    <canvas id="recon-seq-canvas"></canvas>
+                                </div>
+                            </div>
+                            <div class="viz-panel" id="recon-phasor-panel">
+                                <div class="panel-header">
+                                    <h2>Phasor Sum = S(k<sub>x</sub>, k<sub>y</sub>)</h2>
+                                    <span class="panel-badge"></span>
+                                </div>
+                                <div class="panel-content">
+                                    <canvas id="recon-phasor-canvas"></canvas>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="recon-row-label" id="recon-row2-label">
+                        <span class="recon-step">&#9313; Reconstruct (inverse FT)</span>
+                        <span class="recon-row-caption" id="recon-row2-caption">the k-space filled above is decomposed below, centre first</span>
+                    </div>
+                    <div class="recon-row recon-row-reconstruct">
+                        <div class="viz-panel" id="recon-decompose-panel">
+                            <div class="panel-header">
+                                <h2>K-Space &rarr; Spatial-Frequency Patterns</h2>
+                                <span class="panel-badge">Inverse FT</span>
+                            </div>
+                            <div class="panel-content">
+                                <canvas id="recon-decompose-canvas"></canvas>
+                            </div>
+                        </div>
+                        <div class="viz-panel" id="recon-image-panel">
+                            <div class="panel-header">
+                                <h2>Reconstructed Image</h2>
+                                <span class="panel-badge">Builds up</span>
+                            </div>
+                            <div class="panel-content">
+                                <canvas id="recon-image-canvas"></canvas>
+                            </div>
+                        </div>
+                        <div class="viz-panel" id="recon-weight-panel">
+                            <div class="panel-header">
+                                <h2>Component Weight</h2>
+                                <span class="panel-badge"></span>
+                            </div>
+                            <div class="panel-content">
+                                <canvas id="recon-weight-canvas"></canvas>
+                            </div>
                         </div>
                     </div>
                 </div>

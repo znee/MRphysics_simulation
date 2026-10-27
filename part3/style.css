@@ -254,6 +254,11 @@ body {
     padding-left: 16px;
 }
 
+.explain li ul {
+    margin-top: 3px;
+    padding-left: 12px;
+}
+
 .explain li {
     font-size: 0.75rem;
     color: var(--text-secondary);
@@ -525,11 +530,129 @@ body {
     white-space: nowrap;
 }
 
+/* Module C layout: ① Acquire row above ② Reconstruct row */
+.recon-layout {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+}
+
+.recon-row-label {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    padding: 3px 10px;
+    border-left: 3px solid var(--border-color);
+    background: rgba(255, 255, 255, 0.03);
+    border-radius: 4px;
+    flex-shrink: 0;
+    opacity: 0.6;
+    transition: opacity 0.3s, border-color 0.3s;
+}
+
+.recon-row-label.active {
+    opacity: 1;
+    border-left-color: var(--accent-color);
+}
+
+.recon-step {
+    font-size: 0.8rem;
+    font-weight: 700;
+    color: var(--accent-color);
+    white-space: nowrap;
+}
+
+.recon-row-caption {
+    font-size: 0.72rem;
+    color: var(--text-secondary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.recon-row {
+    display: grid;
+    flex: 1;
+    min-height: 0;
+    gap: 10px;
+}
+
+.recon-row-acquire {
+    grid-template-columns: 1fr 1.25fr 240px;
+}
+
+.recon-row-reconstruct {
+    grid-template-columns: 1.2fr 1.1fr 240px;
+}
+
+.recon-side {
+    display: grid;
+    grid-template-rows: 1fr 1fr;
+    gap: 8px;
+    min-height: 0;
+}
+
+.recon-layout .viz-panel {
+    min-height: 0;
+}
+
+/* Canvas sized from its container only (no feedback from the canvas itself) */
+.recon-layout .panel-content {
+    min-height: 0;
+    overflow: hidden;
+}
+
+.recon-layout .panel-content canvas {
+    position: absolute;
+    left: 0;
+    top: 0;
+}
+
 /* =====================================================
    MOBILE RESPONSIVE STYLES
    ===================================================== */
 
 @media (max-width: 1200px) {
+    .visualization-area.recon-mode {
+        display: block;
+        overflow-y: auto;
+    }
+
+    .recon-layout {
+        height: auto;
+    }
+
+    .recon-row {
+        flex: none;
+    }
+
+    .recon-row-acquire,
+    .recon-row-reconstruct {
+        grid-template-columns: 1fr 1fr;
+    }
+
+    .recon-side {
+        grid-column: 1 / -1;
+        grid-template-rows: none;
+        grid-template-columns: 1fr 1fr;
+    }
+
+    .recon-layout .viz-panel {
+        height: 330px;
+    }
+
+    .recon-side .viz-panel {
+        height: 230px;
+    }
+
+    #recon-weight-panel {
+        grid-column: 1 / -1;
+        height: 240px;
+    }
+
     .main-content {
         flex-direction: column;
     }
@@ -544,6 +667,18 @@ body {
         grid-template-columns: 1fr 1fr;
         grid-template-rows: 1fr 1fr;
         min-height: 400px;
+    }
+}
+
+@media (max-width: 760px) {
+    .recon-row-acquire,
+    .recon-row-reconstruct,
+    .recon-side {
+        grid-template-columns: 1fr;
+    }
+
+    .recon-row-caption {
+        display: none;
     }
 }
 
