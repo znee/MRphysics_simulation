@@ -350,6 +350,8 @@ const CONFIG = {
     simMode: 'forward', // 'forward' | 'inverse'
     lambda: 0.01, // Regularization parameter (match slider default)
     reconMethod: 'tikhonov', // 'tikhonov' | 'tkd'
+    // Remembered slider value per method (Tikhonov λ vs TKD threshold, typical 0.1-0.2)
+    lambdaByMethod: { tikhonov: 0.01, tkd: 0.15 },
     b0Angle: 0, // B0 tilt angle from Z-axis in degrees (0 = standard supine)
     objects: [] // List of susceptibility sources {x, y, z, r, val}
 };
@@ -802,6 +804,7 @@ function setupEventListeners() {
     });
     lambdaSlider.addEventListener('change', (e) => {
         CONFIG.lambda = parseFloat(e.target.value);
+        CONFIG.lambdaByMethod[CONFIG.reconMethod] = CONFIG.lambda;
         lambdaLabel.innerText = CONFIG.lambda.toFixed(3);
         // Only inverse recalc needed - keeps same noise for fair comparison
         needsInverseRecalc = true;
@@ -811,6 +814,10 @@ function setupEventListeners() {
     // Recon Method - only needs inverse recalc (reuse existing noisy field)
     reconMethodSelect.addEventListener('change', (e) => {
         CONFIG.reconMethod = e.target.value;
+        // Restore this method's own slider value (TKD starts at a typical threshold)
+        CONFIG.lambda = CONFIG.lambdaByMethod[CONFIG.reconMethod];
+        lambdaSlider.value = CONFIG.lambda;
+        lambdaLabel.innerText = CONFIG.lambda.toFixed(3);
         // Same slider, different meaning: Tikhonov λ vs TKD truncation threshold
         const lambdaTitle = document.getElementById('reg-lambda-label');
         if (lambdaTitle) {
