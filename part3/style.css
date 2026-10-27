@@ -790,12 +790,30 @@ body {
 
     .viz-grid {
         grid-template-columns: 1fr;
-        grid-template-rows: repeat(4, minmax(140px, 1fr));
+        grid-template-rows: repeat(4, max-content);
         min-height: 600px;
     }
 
     .viz-panel {
         min-height: 140px;
+    }
+
+    /* Fixed canvas heights, sized from the container only (no feedback from the canvas itself):
+       150 px as before, 300 px for Modules D and E, whose panels draw more */
+    .viz-grid .panel-content {
+        flex: none;
+        height: 150px;
+        overflow: hidden;
+    }
+
+    .viz-grid.tall-panels .panel-content {
+        height: 300px;
+    }
+
+    .viz-grid .panel-content canvas {
+        position: absolute;
+        left: 0;
+        top: 0;
     }
 
     .panel-header {

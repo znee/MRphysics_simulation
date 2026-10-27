@@ -174,12 +174,14 @@ class SpatialEncodingSimulator {
     /**
      * Phase of voxel (ix, iy) at k-space position (kx, ky), k in cycles per FOV:
      * φ = 2π(kx·x + ky·y), with x, y the voxel-center positions in FOV units.
+     * Row 0 is drawn at the top of every grid, so it is +y (matching the "+y"
+     * labels and the ky-up k-space plots).
      * Symmetric centering keeps symmetric objects' k-space real, and a uniform
      * object gives exactly zero signal at every integer k ≠ 0.
      */
     kPhase(kx, ky, ix, iy, n) {
         const xc = (ix - (n - 1) / 2) / n;
-        const yc = (iy - (n - 1) / 2) / n;
+        const yc = ((n - 1) / 2 - iy) / n;
         return 2 * Math.PI * (kx * xc + ky * yc);
     }
 
@@ -216,7 +218,8 @@ class SpatialEncodingSimulator {
     /**
      * Module A k-space position (cycles per FOV) implied by the gradient controls.
      * Static view: kx = Gx/10, ky = Gy/10 (strength 10 = one cycle across FOV).
-     * Animated readout: kx sweeps -N/2 → +N/2 (echo at kx = 0).
+     * Animated readout: kx sweeps -kmax → +kmax, kmax = (Gx/10)·N/2 (echo at kx = 0;
+     * Gx = 0 → no sweep, Gx < 0 → reversed sweep).
      */
     getModuleAK() {
         const ky = this.gyEnabled ? this.gyStrength / 10 : 0;
@@ -306,6 +309,8 @@ class SpatialEncodingSimulator {
         const container = canvas.parentElement;
         const rect = container.getBoundingClientRect();
         const dpr = window.devicePixelRatio || 1;
+        // Keep the last size if the container momentarily has no box (avoids negative radii in the drawings)
+        if (rect.width === 0 || rect.height === 0) return;
 
         canvas.width = rect.width * dpr;
         canvas.height = rect.height * dpr;
@@ -636,6 +641,8 @@ class SpatialEncodingSimulator {
             reconLayout.style.display = module === 'C' ? 'flex' : 'none';
             sharedGrid.style.display = module === 'C' ? 'none' : '';
             sharedGrid.parentElement.classList.toggle('recon-mode', module === 'C');
+            // D and E draw more per panel: taller canvases on phones (see style.css)
+            sharedGrid.classList.toggle('tall-panels', module === 'D' || module === 'E');
         }
         this.resizeVisibleCanvases();
 
@@ -761,8 +768,9 @@ class SpatialEncodingSimulator {
     // Get current kx position during animated readout
     getAnimatedKx() {
         // During readout, kx sweeps from -kmax to +kmax (cycles per FOV)
-        // animationTime: 0 → 1 maps to kx: -N/2 → +N/2 (echo at the middle)
-        const kxMax = this.gridSize / 2;
+        // animationTime: 0 → 1 maps to kx: -kmax → +kmax (echo at the middle)
+        // Readout area ∝ Gx: strength 10 → kmax = N/2; negative Gx sweeps the other way
+        const kxMax = (this.gxStrength / 10) * this.gridSize / 2;
         return (this.animationTime * 2 - 1) * kxMax;
     }
 
@@ -1610,11 +1618,10 @@ class SpatialEncodingSimulator {
 
         // Draw animated kx position marker ONLY during animation
         // This shows time progression during readout, NOT gradient strength change
-        if (this.gxEnabled && this.isAnimating) {
-            // kx sweeps from -max to +max as time progresses during readout
-            // animationTime: 0→1 maps to kx: -kxMax → +kxMax
-            const currentKx = this.getAnimatedKx();
-            const markerX = margin.left + this.animationTime * plotW;
+        // Marker at the current kx on the graph's -N/2 … +N/2 axis (hidden when the sweep goes beyond it)
+        const currentKx = this.getAnimatedKx();
+        if (this.gxEnabled && this.isAnimating && Math.abs(currentKx) <= kxMax) {
+            const markerX = margin.left + (currentKx + kxMax) / (2 * kxMax) * plotW;
 
             // Vertical line at current kx (time position)
             ctx.strokeStyle = '#22d3ee';
@@ -1627,18 +1634,15 @@ class SpatialEncodingSimulator {
             ctx.setLineDash([]);
 
             // Marker dot on the signal curve
-            const currentIdx = Math.round(this.animationTime * (numPoints - 1));
-            if (currentIdx >= 0 && currentIdx < signalData.length) {
-                const s = signalData[currentIdx];
-                const dotY = graphY - (s.real / realScale) * (graphH / 2) * 0.85;
-                ctx.beginPath();
-                ctx.arc(markerX, dotY, 6, 0, 2 * Math.PI);
-                ctx.fillStyle = '#22d3ee';
-                ctx.fill();
-                ctx.strokeStyle = '#fff';
-                ctx.lineWidth = 1.5;
-                ctx.stroke();
-            }
+            const s = this.signalAt(currentKx, kyValue, density);
+            const dotY = graphY - (s.real / realScale) * (graphH / 2) * 0.85;
+            ctx.beginPath();
+            ctx.arc(markerX, dotY, 6, 0, 2 * Math.PI);
+            ctx.fillStyle = '#22d3ee';
+            ctx.fill();
+            ctx.strokeStyle = '#fff';
+            ctx.lineWidth = 1.5;
+            ctx.stroke();
 
             // Label showing current kx (time during readout)
             ctx.font = 'bold 9px Inter';
@@ -1675,13 +1679,13 @@ class SpatialEncodingSimulator {
         ctx.textAlign = 'center';
         ctx.fillText('kx (time during readout)', margin.left + plotW / 2, h - 10);
 
-        // K-space extremes with time correspondence
+        // K-space extremes of the axis (the sweep reaches them at Gx = 10)
         ctx.font = '8px Inter';
         ctx.fillStyle = '#64748b';
         ctx.textAlign = 'left';
-        ctx.fillText(`kx = -${kxMax} (start)`, margin.left, graphY + graphH / 2 + 12);
+        ctx.fillText(`kx = -${kxMax}`, margin.left, graphY + graphH / 2 + 12);
         ctx.textAlign = 'right';
-        ctx.fillText(`kx = +${kxMax} (end)`, margin.left + plotW, graphY + graphH / 2 + 12);
+        ctx.fillText(`kx = +${kxMax}`, margin.left + plotW, graphY + graphH / 2 + 12);
         ctx.textAlign = 'center';
         ctx.fillText('0 (echo, t = TE)', margin.left + plotW / 2, graphY + graphH / 2 + 12);
 
@@ -2340,10 +2344,10 @@ class SpatialEncodingSimulator {
         return { re: S.re + sd * z.re, im: S.im + sd * z.im };
     }
 
-    // Expected image SNR for ρ = 1: each pixel's noise SD = σ_eff/N (N² samples averaged)
-    getReconExpectedSNR() {
+    // Expected image SNR: each pixel's noise SD = σ_eff/N (N² samples averaged); signal = ρ (default ρ = 1)
+    getReconExpectedSNR(rho = 1) {
         const sd = this.getReconNoiseSD();
-        return sd > 0 ? this.recon.n / sd : Infinity;
+        return sd > 0 ? rho * this.recon.n / sd : Infinity;
     }
 
     // Rebuild the partial image after the noise changes during stage 2
@@ -2361,7 +2365,7 @@ class SpatialEncodingSimulator {
         const r = this.recon;
         label.innerHTML = r.noiseSigma === 0
             ? 'σ = 0 → noiseless (black background)'
-            : `σ = ${r.noiseSigma.toFixed(2)}${r.nex > 1 ? ` / √${r.nex}` : ''} → expected image SNR ≈ ${this.getReconExpectedSNR().toFixed(0)}`;
+            : `σ = ${r.noiseSigma.toFixed(2)}${r.nex > 1 ? ` / √${r.nex}` : ''} → expected image SNR ≈ ${this.getReconExpectedSNR().toFixed(0)} (ρ = 1)`;
     }
 
     // One coil sample: S(kx, ky) = Σ ρ·e^(-iφ) (same convention as Module B)
@@ -3294,7 +3298,12 @@ class SpatialEncodingSimulator {
             ctx.font = '9px Inter';
             ctx.fillStyle = '#94a3b8';
             ctx.fillText(narrow ? 'mean(object) / SD(bkg)' : 'mean(object) / SD(background)', sideX, y + 13);
-            ctx.fillText(`expected ≈ ${this.getReconExpectedSNR().toFixed(0)} (N·√NEX/σ)`, sideX, y + 26);
+            // Expected signal = mean ρ over the object voxels (e.g. 0.75 for the two dots with ρ = 1 and 0.5)
+            const meanRho = r.total / Math.max(1, objVals.length);
+            const expected = this.getReconExpectedSNR(meanRho).toFixed(0);
+            ctx.fillText(Math.abs(meanRho - 1) < 1e-9 ? `expected ≈ ${expected} (N·√NEX/σ)`
+                : (narrow ? `expected ≈ ${expected} (ρ̄ = ${meanRho.toFixed(2)})`
+                          : `expected ≈ ${expected} (ρ̄·N·√NEX/σ, ρ̄ = ${meanRho.toFixed(2)})`), sideX, y + 26);
             const rms = Math.sqrt(sq / (n * n)).toFixed(3);
             ctx.fillText(narrow ? `RMS err = ${rms}` : `RMS error vs noiseless = ${rms}`, sideX, y + 39);
         } else if (noisy && r.compIndex > 0) {
@@ -3509,7 +3518,8 @@ class SpatialEncodingSimulator {
         const plotTop = margin.top;
         const plotBottom = h - 112;
         const plotH = plotBottom - plotTop;
-        const fMax = p.gammaGz * zMax;  // Hz at the edge of the view
+        // Fixed frequency axis (f(z) at the view edge for Gz = 10 mT/m), so a stronger Gz gives a steeper line
+        const fMax = GAMMA_BAR_HZ_PER_MT_M_MM * 10 * zMax;
 
         const zToX = z => margin.left + (z + zMax) / (2 * zMax) * plotW;
         const fToY = f => plotTop + (1 - (f + fMax) / (2 * fMax)) * plotH;
@@ -3577,17 +3587,17 @@ class SpatialEncodingSimulator {
         const bandLabelY = Math.min(plotBottom - 6, Math.max(plotTop + 10, bandTop - 4));
         ctx.fillText(`RF band: Δf_c ± BW/2 (BW = ${(p.bwHz / 1000).toFixed(1)} kHz)`, margin.left + 6, bandLabelY);
 
-        // Resonance line f(z) = γ̄·Gz·z
+        // Resonance line f(z) = γ̄·Gz·z and the slab edges below, clipped to the plot
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(margin.left, plotTop, plotW, plotH);
+        ctx.clip();
         ctx.strokeStyle = '#22d3ee';
         ctx.lineWidth = 2.5;
         ctx.beginPath();
-        ctx.moveTo(zToX(-zMax), fToY(-fMax));
-        ctx.lineTo(zToX(zMax), fToY(fMax));
+        ctx.moveTo(zToX(-zMax), fToY(-p.gammaGz * zMax));
+        ctx.lineTo(zToX(zMax), fToY(p.gammaGz * zMax));
         ctx.stroke();
-        ctx.font = 'bold 10px Inter';
-        ctx.fillStyle = '#22d3ee';
-        ctx.textAlign = 'left';
-        ctx.fillText(`f(z) = γ̄·Gz·z  (${p.gammaGz.toFixed(0)} Hz/mm)`, margin.left + 6, plotTop + 14);
 
         // Ideal slab edges: project the band/line intersections down to the z axis
         const z1 = p.zc - p.dz / 2;
@@ -3603,6 +3613,11 @@ class SpatialEncodingSimulator {
             ctx.stroke();
         });
         ctx.setLineDash([]);
+        ctx.restore();
+        ctx.font = 'bold 10px Inter';
+        ctx.fillStyle = '#22d3ee';
+        ctx.textAlign = 'left';
+        ctx.fillText(`f(z) = γ̄·Gz·z  (${p.gammaGz.toFixed(0)} Hz/mm)`, margin.left + 6, plotTop + 14);
 
         // Slice label
         ctx.font = 'bold 10px Inter';
@@ -3980,6 +3995,11 @@ class SpatialEncodingSimulator {
         return sigmaRef * Math.sqrt(p.bwHz / 32000);
     }
 
+    // Δx text with enough decimals below 1 mm (the smallest Δx is ≈ 0.05 mm)
+    formatFreqDx(dx) {
+        return dx.toFixed(dx < 1 ? 2 : (dx < 10 ? 1 : 0));
+    }
+
     // SNR ∝ voxel size × √(readout time), relative to 32 kHz, 5 mT/m, N = 64
     getFreqRelativeSNR(p) {
         const dxRef = 32000 / (GAMMA_BAR_HZ_PER_MT_M_MM * 5) / 64;
@@ -4044,12 +4064,16 @@ class SpatialEncodingSimulator {
         const kNow = p.gammaGx * p.tNow;  // cycles/mm at the cursor time
 
         document.getElementById('freq-fov-out').textContent = `${p.fov.toFixed(0)} mm`;
-        document.getElementById('freq-dx-out').textContent = `${p.dx.toFixed(p.dx < 10 ? 1 : 0)} mm`;
+        document.getElementById('freq-dx-out').textContent = `${this.formatFreqDx(p.dx)} mm`;
         document.getElementById('freq-tacq-out').textContent = `${(p.tacq * 1000).toFixed(2)} ms`;
         const snrOut = document.getElementById('freq-snr-out');
         if (snrOut) {
+            // Gx is clamped to the slider range (0.5–20 mT/m), so at extreme BW the locked FOV cannot be held
+            const lockHeld = Math.abs(p.fov - this.freq.fovLock) < 0.005 * this.freq.fovLock;
+            const lockText = lockHeld ? ` · FOV locked at ${this.freq.fovLock.toFixed(0)} mm`
+                : ` · FOV lock not held: G<sub>x</sub> at its ${this.freq.gx.toFixed(1)} mT/m limit, FOV ${p.fov.toFixed(0)} mm instead of ${this.freq.fovLock.toFixed(0)} mm`;
             snrOut.innerHTML = `Relative SNR <b>${this.getFreqRelativeSNR(p).toFixed(2)}×</b> (∝ Δx·√T<sub>acq</sub>; ref. 32 kHz, 5 mT/m, N = 64)` +
-                (this.freq.lockFov ? ` · FOV locked at ${this.freq.fovLock.toFixed(0)} mm` : ' · G<sub>x</sub> fixed');
+                (this.freq.lockFov ? lockText : ' · G<sub>x</sub> fixed');
         }
         const tLabel = document.getElementById('freq-time-val');
         if (tLabel) {
@@ -4439,7 +4463,7 @@ class SpatialEncodingSimulator {
                                 : `x (mm) — bars = |FFT| (noise = grass-like floor) · noise SD ≈ ${sd.toFixed(3)} · relative SNR ${this.getFreqRelativeSNR(p).toFixed(2)}×`,
                          margin.left + plotW / 2, h - 6);
         } else {
-            ctx.fillText(narrow ? `x (mm) — dashed: truth, bars: recon` : `x (mm)   — dashed: true object, bars: reconstruction (Δx = ${p.dx.toFixed(1)} mm)`,
+            ctx.fillText(narrow ? `x (mm) — dashed: truth, bars: recon` : `x (mm)   — dashed: true object, bars: reconstruction (Δx = ${this.formatFreqDx(p.dx)} mm)`,
                          margin.left + plotW / 2, h - 6);
         }
 
