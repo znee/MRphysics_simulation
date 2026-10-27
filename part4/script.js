@@ -380,18 +380,16 @@ function applyParallelImagingRecon(kspace, size) {
 
     const gFactor = getGFactor(R);
 
-    // g-factor noise penalty: target image noise σ_PI = g·√R·σ_ref, where
-    // σ_ref is the thermal noise per sample of the full acquisition. A full
-    // M×M acquisition with per-sample σ gives image noise σ·M/N² (see
-    // noiseLevelToSigma). The acquired lines (M/R of M) carry σ_acq; the
-    // recovered lines are noise-free, so white noise σ_add is added to every
-    // sample in the matrix:
-    //   M²·σ_acq²/R + M²·σ_add² = g²·R·σ_ref²·M²  →  σ_add² = g²·R·σ_ref² − σ_acq²/R
-    // σ_ref always includes the baseline, so the penalty stays visible with
-    // "Simulate SNR" off.
+    // g-factor noise penalty: target image noise σ_PI = g·√R·σ_acq, where
+    // σ_acq is the thermal noise per acquired sample (the same σ a full
+    // acquisition would have). A full M×M acquisition with per-sample σ gives
+    // image noise σ·M/N² (see noiseLevelToSigma). The acquired lines (M/R of M)
+    // carry σ_acq; the recovered lines are noise-free, so white noise σ_add is
+    // added to every sample in the matrix:
+    //   M²·σ_acq²/R + M²·σ_add² = g²·R·σ_acq²·M²  →  σ_add² = σ_acq²·(g²·R − 1/R)
+    // No acquired noise (noise 0, "Simulate SNR" off) → nothing is added.
     const sigmaAcq = noiseLevelToSigma(getEffectiveNoiseLevel());
-    const sigmaRef = noiseLevelToSigma(Math.hypot(noiseLevel, BASE_SIMULATED_NOISE));
-    const sigmaAdd = Math.sqrt(Math.max(0, R * gFactor * gFactor * sigmaRef * sigmaRef - sigmaAcq * sigmaAcq / R));
+    const sigmaAdd = sigmaAcq * Math.sqrt(Math.max(0, R * gFactor * gFactor - 1 / R));
 
     for (let y = 0; y < size; y++) {
         if (!isInMatrix(y, halfRes) || y >= filledEnd || !isLineInPartialFourier(y, halfRes)) continue;
@@ -473,14 +471,15 @@ function reconstructImage() {
             )
         );
 
-        // 1b. Apply Partial Fourier reconstruction if needed
-        if (partialFourierFraction < 1.0) {
-            temp = applyPartialFourierRecon(temp, N);
-        }
-
-        // 1c. Apply Parallel Imaging reconstruction if needed
+        // 1b. Apply Parallel Imaging reconstruction if needed
+        // (before partial Fourier, so conjugate synthesis sees the complete acquired band)
         if (numCoils > 1) {
             temp = applyParallelImagingRecon(temp, N);
+        }
+
+        // 1c. Apply Partial Fourier reconstruction if needed
+        if (partialFourierFraction < 1.0) {
+            temp = applyPartialFourierRecon(temp, N);
         }
 
         // Store displayed k-space (after PF/PI processing) for visualization
@@ -925,8 +924,7 @@ function updateResolutionInfo() {
     }
 }
 
-// Baseline thermal noise (noise-slider units) used by "Simulate SNR" and as the
-// reference noise of the parallel imaging demo.
+// Baseline thermal noise (noise-slider units) used by "Simulate SNR".
 // At 256×256 this gives image SNR ≈ 31 for a unit-intensity object.
 const BASE_SIMULATED_NOISE = 25;
 
